@@ -14,22 +14,29 @@ export function loadLogs(): ApplicationLog[] {
   }
 }
 
-export function saveLogs(logs: ApplicationLog[]): void {
-  localStorage.setItem(KEY, JSON.stringify(logs));
+export function saveLogs(logs: ApplicationLog[]): boolean {
+  try {
+    localStorage.setItem(KEY, JSON.stringify(logs));
+    return true;
+  } catch (err) {
+    console.error("jobber-pest-logger: could not save logs", err);
+    return false;
+  }
 }
 
-export function upsertLog(log: ApplicationLog): ApplicationLog[] {
+export function upsertLog(log: ApplicationLog): { logs: ApplicationLog[]; saved: boolean } {
   const logs = loadLogs();
   const idx = logs.findIndex((l) => l.id === log.id);
   const next = idx === -1 ? [log, ...logs] : logs.map((l) => (l.id === log.id ? log : l));
-  saveLogs(next);
-  return next;
+  const saved = saveLogs(next);
+  return { logs: saved ? next : logs, saved };
 }
 
-export function deleteLog(id: string): ApplicationLog[] {
-  const next = loadLogs().filter((l) => l.id !== id);
-  saveLogs(next);
-  return next;
+export function deleteLog(id: string): { logs: ApplicationLog[]; saved: boolean } {
+  const current = loadLogs();
+  const next = current.filter((l) => l.id !== id);
+  const saved = saveLogs(next);
+  return { logs: saved ? next : current, saved };
 }
 
 export function groupLogsByServiceAddress(

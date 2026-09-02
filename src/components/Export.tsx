@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { downloadCsv } from "../csv";
 import type { ApplicationLog } from "../types";
 
@@ -6,6 +7,19 @@ interface Props {
 }
 
 export function Export({ logs }: Props) {
+  const [pdfError, setPdfError] = useState<string | null>(null);
+
+  async function handlePdf() {
+    setPdfError(null);
+    try {
+      const mod = await import("../pdf");
+      mod.downloadPdf(logs);
+    } catch (err) {
+      console.error("jobber-pest-logger: PDF export failed", err);
+      setPdfError("Could not load the PDF exporter. Use Print this page, or try again.");
+    }
+  }
+
   return (
     <div>
       <h2>Office export</h2>
@@ -34,11 +48,16 @@ export function Export({ logs }: Props) {
           type="button"
           className="btn btn-secondary"
           disabled={logs.length === 0}
-          onClick={() => { void import("../pdf").then((m) => m.downloadPdf(logs)); }}
+          onClick={() => { void handlePdf(); }}
           style={{ width: "100%" }}
         >
           Download PDF (SAMPLE)
         </button>
+        {pdfError && (
+          <p className="hint" role="alert">
+            {pdfError}
+          </p>
+        )}
         <div style={{ height: "0.6rem" }} />
         <button type="button" className="btn btn-secondary no-print" onClick={() => window.print()} style={{ width: "100%" }}>
           Print this page

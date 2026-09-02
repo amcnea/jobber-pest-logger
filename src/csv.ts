@@ -30,11 +30,20 @@ export const TDA_CSV_COLUMNS = [
   "Jobber address paste (optional, not TDA-required)",
 ] as const;
 
-function csvEscape(value: string): string {
-  if (/[",\n\r]/.test(value)) {
-    return `"${value.replaceAll('"', '""')}"`;
+/** Prefix cells that Excel/Sheets would treat as formulas. */
+function neutralizeCsvFormula(value: string): string {
+  if (/^\s*[=+\-@]/.test(value)) {
+    return `'${value}`;
   }
   return value;
+}
+
+function csvEscape(value: string): string {
+  const safe = neutralizeCsvFormula(value);
+  if (/[",\n\r]/.test(safe) || safe.startsWith("'")) {
+    return `"${safe.replaceAll('"', '""')}"`;
+  }
+  return safe;
 }
 
 function joinLines(values: string[]): string {
@@ -105,6 +114,10 @@ export function downloadCsv(logs: ApplicationLog[]): void {
   const a = document.createElement("a");
   a.href = url;
   a.download = "texas-tda-application-logs-SAMPLE.csv";
+  a.rel = "noopener";
+  a.style.display = "none";
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
