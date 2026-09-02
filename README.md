@@ -43,7 +43,7 @@ The product picker is sample data only. It is not EPA data and is not scraped fr
 
 See package.json scripts. Install dependencies, then start the Vite "dev" script. Open the local URL it prints.
 
-Production: "build" then "preview". Requires Node 20 or newer. Data stays in the browser; nothing is uploaded.
+Production: "build" then "preview". Requires Node ^20.19 or Node >=22.12 (Vite 7). Data stays in the browser; nothing is uploaded.
 
 ## Stack
 

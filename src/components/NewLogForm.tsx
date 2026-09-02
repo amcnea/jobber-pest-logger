@@ -21,11 +21,13 @@ export function NewLogForm({ onSave }: Props) {
 
   function patch(partial: Partial<ApplicationLog>) {
     setSaved(false);
+    setErrors({});
     setLog((prev) => ({ ...prev, ...partial }));
   }
 
   function patchProduct(lineId: string, partial: Partial<AppliedProduct>) {
     setSaved(false);
+    setErrors({});
     setLog((prev) => ({
       ...prev,
       products: prev.products.map((p) => (p.lineId === lineId ? { ...p, ...partial } : p)),
@@ -36,6 +38,7 @@ export function NewLogForm({ onSave }: Props) {
     const line = productFromCatalog(id);
     if (!line) return;
     setSaved(false);
+    setErrors({});
     setLog((prev) => ({ ...prev, products: [...prev.products, line] }));
     setPicker("");
   }
