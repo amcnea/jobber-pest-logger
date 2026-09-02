@@ -11,15 +11,16 @@ export default function App() {
   const [logs, setLogs] = useState<ApplicationLog[]>(() => loadLogs());
   const [storageError, setStorageError] = useState<string | null>(null);
 
-  function handleSave(log: ApplicationLog) {
+  function handleSave(log: ApplicationLog): boolean {
     const result = upsertLog(log);
     setLogs(result.logs);
     if (!result.saved) {
       setStorageError("Could not save on this device (storage full or blocked).");
-      return;
+      return false;
     }
     setStorageError(null);
     setScreen("history");
+    return true;
   }
 
   function handleDelete(id: string) {

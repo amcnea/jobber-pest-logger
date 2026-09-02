@@ -4,7 +4,7 @@ import { emptyLog, productFromCatalog, validateLog, type FieldErrors } from "../
 import type { ApplicationLog, AppliedProduct } from "../types";
 
 interface Props {
-  onSave: (log: ApplicationLog) => void;
+  onSave: (log: ApplicationLog) => boolean;
 }
 
 export function NewLogForm({ onSave }: Props) {
@@ -45,7 +45,11 @@ export function NewLogForm({ onSave }: Props) {
     const nextErrors = validateLog(log);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
-    onSave({ ...log, createdAt: new Date().toISOString(), sampleData: true });
+    const savedOk = onSave({ ...log, createdAt: new Date().toISOString(), sampleData: true });
+    if (!savedOk) {
+      setSaved(false);
+      return;
+    }
     setSaved(true);
     setLog(emptyLog());
     setErrors({});

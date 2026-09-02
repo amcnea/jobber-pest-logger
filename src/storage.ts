@@ -44,13 +44,14 @@ export function groupLogsByServiceAddress(
 ): { address: string; logs: ApplicationLog[] }[] {
   const map = new Map<string, { address: string; logs: ApplicationLog[] }>();
   for (const log of logs) {
-    const key = log.serviceAddress.trim().toLowerCase() || "(no service address)";
+    const address = String(log.serviceAddress ?? "").trim();
+    const key = address.toLowerCase() || "(no service address)";
     const existing = map.get(key);
     if (existing) {
       existing.logs.push(log);
     } else {
       map.set(key, {
-        address: log.serviceAddress.trim() || "(no service address)",
+        address: address || "(no service address)",
         logs: [log],
       });
     }

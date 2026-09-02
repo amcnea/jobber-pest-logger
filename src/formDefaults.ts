@@ -36,8 +36,15 @@ export function productFromCatalog(catalogId: string): AppliedProduct | null {
   };
 }
 
+function localDateYmd(d = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 export function emptyLog(): ApplicationLog {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateYmd();
   return {
     id: crypto.randomUUID(),
     createdAt: new Date().toISOString(),
