@@ -4,13 +4,15 @@ export type ProductKind = "pesticide" | "device";
 
 export type ApplicationMethod = "rtu" | "mixed" | "device";
 
-export interface SampleProduct {
+export interface ShopProduct {
   id: string;
   name: string;
-  /** Placeholder EPA #, or null for 25(b) products that have none. */
+  /** Real EPA # when registered. Null for 25(b), devices, and example seeds. */
   epaRegNo: string | null;
   is25b: boolean;
   kind: ProductKind;
+  /** Example catalog seed — exports must not print this as a real EPA number. */
+  isExample: boolean;
 }
 
 export interface AppliedProduct {
@@ -19,6 +21,7 @@ export interface AppliedProduct {
   name: string;
   epaRegNo: string | null;
   is25b: boolean;
+  isExample: boolean;
   method: ApplicationMethod;
   /** Total amount of RTU pesticide (AI % unchanged). */
   rtuAmount: string;
@@ -46,9 +49,9 @@ export interface TermiteExtras {
   /** Area treated in sq ft. Not required for baits. */
   areaTreatedSqFt: string;
   isBait: boolean;
-  /** Physical-barrier measurement (v1 text stub). */
+  /** Physical-barrier measurement. */
   physicalBarrierMeasurement: string;
-  /** Diagram placeholder — v1 does not capture a drawing. */
+  /** Text note standing in for a diagram — v1 does not capture a drawing. */
   diagramNote: string;
   isCommercialPretreat: boolean;
   tankCount: string;
@@ -60,7 +63,8 @@ export interface TermiteExtras {
 export interface ApplicationLog {
   id: string;
   createdAt: string;
-  sampleData: true;
+  /** True when this log used example catalog seeds (not a global SAMPLE watermark). */
+  sampleData: boolean;
   /** Optional paste-on to link the Jobber stop. Not a TDA field. */
   jobberJobNumber: string;
   jobberAddress: string;
@@ -79,4 +83,4 @@ export interface ApplicationLog {
   termite: TermiteExtras;
 }
 
-export type Screen = "new" | "history" | "export";
+export type Screen = "new" | "history" | "products" | "export";

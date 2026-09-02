@@ -37,7 +37,7 @@
 
 .tabs {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   border-bottom: 1px solid var(--line);
   background: #f6f4ea;
   position: sticky;
@@ -51,7 +51,7 @@
   background: transparent;
   padding: 0.6rem 0.4rem;
   font-weight: 600;
-  font-size: 0.92rem;
+  font-size: 0.82rem;
 }
 
 .tabs button.active {

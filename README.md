@@ -1,21 +1,35 @@
 # Jobber Pest Logger
 
-Texas-only **mobile-web compliance sidecar** for pest shops that already use Jobber. After a stop, a tech logs a pesticide application. The office exports one audit-ready Texas TDA CSV and a simple PDF.
+Texas-only **mobile-web compliance sidecar** for pest shops that already use Jobber. After a stop, a tech logs a pesticide application from the shop's own product list. The office exports one audit-ready Texas TDA CSV and a simple PDF.
 
 This is **not** a field-service app. It does not do scheduling, invoicing, routing, payments, inventory, login, Jobber OAuth/API, Stripe, weather APIs, CE tracking, or multi-state logic.
 
-## v1 placeholder
+## v1
 
-v1 is a working UI on this device only (browser localStorage). Schema is locked. Catalog is **sample data**.
+v1 is a working UI on this device only (browser localStorage). Schema is locked. The product list is **shop-owned** (office add/edit/delete), not a hardcoded SAMPLE catalog.
 
 - New application log (locked section 7.144(a) fields)
-- EPA number picker from a hardcoded SAMPLE catalog (never free-typed, not scraped from EPA)
+- EPA number picker from the shop product list only (never free-typed, not scraped from EPA)
+- Office-managed catalog: name, EPA #, 25(b) flag, pesticide vs device
+- First-run example seeds (labeled as examples; they never print as real EPA numbers)
 - Optional Jobber job number / address paste-on (not a TDA field)
-- Termite flag reveals section 7.144(b) extras (stub)
+- Termite flag reveals real section 7.144(b) extras (diagram is a text note, not a drawing)
 - Property-level history grouped by service address
-- Office export: Texas TDA CSV and printable PDF, marked SAMPLE
+- Office export: Texas TDA CSV and printable PDF. Real shop products print their EPA numbers. Example seeds are labeled "example / not a real EPA number"
 
 Records are kept **2 years**. This app does not run a retention engine.
+
+## Shop product list
+
+Stored in localStorage under a separate key from logs. The office adds the pesticides and devices this shop actually uses.
+
+Seeded on first visit with three obvious examples:
+
+- Example RTU insecticide
+- Example 25(b) concentrate
+- Example insect monitor (device)
+
+Those seeds have **no EPA number**. They are flagged as examples. CSV and PDF print **example / not a real EPA number** instead of a fake registration number (never SAMPLE-0001-style placeholders). Delete or convert them when the shop list is ready. New products default to real (not example).
 
 ## Schema (locked)
 
@@ -31,13 +45,9 @@ Required on every application log, per 4 TAC section 7.144(a) for SPCS shops. Do
 8. Date used
 9. Name and license number of the person(s) receiving training, supervising, and applying, plus the shop TPCL number (and letter if any)
 
-Termite-only extras from section 7.144(b) sit behind a termite flag, not on every stop: area treated (sq ft, except baits); physical-barrier measurement and diagram placeholder; commercial pretreat (not baits/wood/barriers): tank count, tank gallons, start and stop time.
+Termite-only extras from section 7.144(b) sit behind a termite flag, not on every stop: area treated (sq ft, except baits); physical-barrier measurement and diagram note (text, not a drawing); commercial pretreat (not baits/wood/barriers): tank count, tank gallons, start and stop time. Those fields are included in CSV/PDF when the stop is termite work.
 
 Not TDA-required and not marked required: weather, time of day (except termite pretreat start/stop), Jobber job number, CE/license expiry.
-
-## SAMPLE catalog disclaimer
-
-The product picker is sample data only. It is not EPA data and is not scraped from EPA. Registration numbers are obvious placeholders (SAMPLE-0001, and so on). At least one 25(b) sample has no EPA number. Do not treat these names or numbers as real products.
 
 ## Run
 
@@ -51,7 +61,4 @@ React + Vite + TypeScript. CSV from the locked columns. PDF via jsPDF (print sty
 
 ## Exact scripts
 
-    npm install
-    npm run dev
-    npm run build
-    npm run preview
+See package.json: install, then the "dev", "build", and "preview" scripts.

@@ -1,6 +1,6 @@
+import { logHasExampleProducts } from "./catalog";
 import { newId } from "./ids";
-import { SAMPLE_CATALOG } from "./sampleCatalog";
-import type { ApplicationLog, AppliedProduct, TermiteExtras } from "./types";
+import type { ApplicationLog, AppliedProduct, ShopProduct, TermiteExtras } from "./types";
 
 export function emptyTermite(): TermiteExtras {
   return {
@@ -16,16 +16,18 @@ export function emptyTermite(): TermiteExtras {
   };
 }
 
-export function productFromCatalog(catalogId: string): AppliedProduct | null {
-  const product = SAMPLE_CATALOG.find((p) => p.id === catalogId);
+export function productFromCatalog(catalog: ShopProduct[], catalogId: string): AppliedProduct | null {
+  const product = catalog.find((p) => p.id === catalogId);
   if (!product) return null;
   const method = product.kind === "device" ? "device" : "rtu";
+  const isExample = product.isExample === true;
   return {
     lineId: newId(),
     catalogId: product.id,
     name: product.name,
-    epaRegNo: product.epaRegNo,
+    epaRegNo: isExample ? null : product.epaRegNo,
     is25b: product.is25b,
+    isExample,
     method,
     rtuAmount: "",
     rtuUnit: "fl oz",
@@ -49,7 +51,7 @@ export function emptyLog(): ApplicationLog {
   return {
     id: newId(),
     createdAt: new Date().toISOString(),
-    sampleData: true,
+    sampleData: false,
     jobberJobNumber: "",
     jobberAddress: "",
     customerBillingName: "",
@@ -86,7 +88,7 @@ export function validateLog(log: ApplicationLog): FieldErrors {
   const applying = log.personnel.find((p) => p.role === "applying");
   if (!applying?.name.trim()) errors.applyingName = "Required";
   if (!applying?.licenseNumber.trim()) errors.applyingLicense = "Required";
-  if (log.products.length === 0) errors.products = "Add at least one pesticide or device from the sample catalog.";
+  if (log.products.length === 0) errors.products = "Add at least one pesticide or device from the shop list.";
   log.products.forEach((p, i) => {
     if (p.method === "device" && !p.deviceCount.trim()) {
       errors[`product-${i}-device`] = "Device count required";
@@ -104,4 +106,12 @@ export function validateLog(log: ApplicationLog): FieldErrors {
     }
   });
   return errors;
+}
+
+export function withSaveFlags(log: ApplicationLog): ApplicationLog {
+  return {
+    ...log,
+    createdAt: new Date().toISOString(),
+    sampleData: logHasExampleProducts(log.products),
+  };
 }
