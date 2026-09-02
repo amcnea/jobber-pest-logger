@@ -2,13 +2,27 @@ import type { ApplicationLog } from "./types";
 
 const KEY = "jobber-pest-logger:logs:v1";
 
+function isLog(value: unknown): value is ApplicationLog {
+  if (!value || typeof value !== "object") return false;
+  const o = value as Record<string, unknown>;
+  return (
+    typeof o.id === "string" &&
+    typeof o.createdAt === "string" &&
+    typeof o.serviceAddress === "string" &&
+    typeof o.dateUsed === "string" &&
+    typeof o.customerBillingName === "string" &&
+    Array.isArray(o.products) &&
+    Array.isArray(o.personnel)
+  );
+}
+
 export function loadLogs(): ApplicationLog[] {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed as ApplicationLog[];
+    return parsed.filter(isLog);
   } catch {
     return [];
   }

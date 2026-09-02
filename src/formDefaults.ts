@@ -1,3 +1,4 @@
+import { newId } from "./ids";
 import { SAMPLE_CATALOG } from "./sampleCatalog";
 import type { ApplicationLog, AppliedProduct, TermiteExtras } from "./types";
 
@@ -20,7 +21,7 @@ export function productFromCatalog(catalogId: string): AppliedProduct | null {
   if (!product) return null;
   const method = product.kind === "device" ? "device" : "rtu";
   return {
-    lineId: crypto.randomUUID(),
+    lineId: newId(),
     catalogId: product.id,
     name: product.name,
     epaRegNo: product.epaRegNo,
@@ -46,7 +47,7 @@ function localDateYmd(d = new Date()): string {
 export function emptyLog(): ApplicationLog {
   const today = localDateYmd();
   return {
-    id: crypto.randomUUID(),
+    id: newId(),
     createdAt: new Date().toISOString(),
     sampleData: true,
     jobberJobNumber: "",
