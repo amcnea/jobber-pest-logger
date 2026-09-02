@@ -37,7 +37,7 @@ export function History({ logs, onDelete }: Props) {
             .slice()
             .sort((a, b) => b.dateUsed.localeCompare(a.dateUsed) || b.createdAt.localeCompare(a.createdAt))
             .map((log) => {
-              const hasExample = log.products.some((p) => p.isExample);
+              const hasExample = log.sampleData;
               return (
                 <article className="card" key={log.id}>
                   <div className="card-head">

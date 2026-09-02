@@ -72,7 +72,7 @@ export function Export({ logs }: Props) {
           <article className="card" key={log.id}>
             <strong>
               {log.dateUsed} — {log.serviceAddress}
-              {log.products.some((p) => p.isExample) && <span className="chip sample"> example items</span>}
+              {log.sampleData && <span className="chip sample"> example items</span>}
               {log.isTermite && <span className="chip"> termite</span>}
             </strong>
             <p className="log-meta">

@@ -1,5 +1,5 @@
 import { jsPDF } from "jspdf";
-import { epaExportText, EXAMPLE_EPA_LABEL, logHasExampleProducts } from "./catalog";
+import { epaExportText, EXAMPLE_EPA_LABEL, inferIsExample, logHasExampleProducts } from "./catalog";
 import type { ApplicationLog } from "./types";
 
 function person(log: ApplicationLog, role: ApplicationLog["personnel"][number]["role"]) {
@@ -22,7 +22,8 @@ function wrappedHeight(doc: jsPDF, text: string, maxWidth: number): number {
 
 function productLine(p: ApplicationLog["products"][number]): string {
   const epa = epaExportText(p);
-  const epaBit = p.isExample
+  const isEx = inferIsExample(p);
+  const epaBit = isEx
     ? `(${EXAMPLE_EPA_LABEL})`
     : p.method === "device"
       ? ""
@@ -30,7 +31,7 @@ function productLine(p: ApplicationLog["products"][number]): string {
         ? `(EPA ${epa})`
         : "(25(b) / unregistered — no EPA #)";
   if (p.method === "device") {
-    const extra = p.isExample ? ` ${epaBit}` : "";
+    const extra = isEx ? ` ${epaBit}` : "";
     return `Device: ${p.name}${extra} × ${p.deviceCount || "?"}`;
   }
   if (p.method === "mixed") {

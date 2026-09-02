@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { EXAMPLE_EPA_LABEL, productEpaCaption } from "../catalog";
+import { EXAMPLE_EPA_LABEL, looksLikeSampleEpa, productEpaCaption } from "../catalog";
 import { emptyShopProduct } from "../storage";
 import type { ShopProduct } from "../types";
 
@@ -57,6 +57,10 @@ export function Products({ catalog, onUpsert, onDelete }: Props) {
       !String(product.epaRegNo ?? "").trim()
     ) {
       next.epaRegNo = "EPA # required for registered pesticides (leave blank for 25(b) or examples)";
+    }
+    if (looksLikeSampleEpa(product.epaRegNo)) {
+      next.epaRegNo =
+        "SAMPLE-* looks like a placeholder; mark as Example seed or enter a real EPA #";
     }
     return next;
   }
