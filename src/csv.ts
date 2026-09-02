@@ -1,4 +1,4 @@
-import { epaExportText, EXAMPLE_EPA_LABEL } from "./catalog";
+import { epaExportText, EXAMPLE_EPA_LABEL, inferIsExample } from "./catalog";
 import type { ApplicationLog } from "./types";
 
 /** Texas TDA CSV columns matching 4 TAC § 7.144(a)/(b). Optional Jobber link is last and labeled not-TDA. */
@@ -78,7 +78,7 @@ export function logsToCsv(logs: ApplicationLog[]): string {
     const supervising = person(log, "supervising");
     const training = person(log, "receiving_training");
     const t = log.termite;
-    const exampleNames = log.products.filter((p) => p.isExample).map((p) => p.name);
+    const exampleNames = log.products.filter((p) => inferIsExample(p)).map((p) => p.name);
     const cells = [
       log.customerBillingName,
       log.customerBillingAddress,
@@ -86,14 +86,14 @@ export function logsToCsv(logs: ApplicationLog[]): string {
       log.poleLocation,
       joinLines(pesticides.map((p) => p.name)),
       joinLines(pesticides.map((p) => epaExportText(p))),
-      joinLines(pesticides.filter((p) => p.is25b || !p.epaRegNo || p.isExample).map((p) => p.name)),
+      joinLines(pesticides.filter((p) => !inferIsExample(p) && (p.is25b || !p.epaRegNo)).map((p) => p.name)),
       joinLines(
-        devices.map((p) => (p.isExample ? `${p.name} (${EXAMPLE_EPA_LABEL})` : p.name)),
+        devices.map((p) => (inferIsExample(p) ? `${p.name} (${EXAMPLE_EPA_LABEL})` : p.name)),
       ),
       joinLines(
         devices.map((p) => {
           const count = p.deviceCount ? `${p.name}: ${p.deviceCount}` : p.name;
-          return p.isExample ? `${count} (${EXAMPLE_EPA_LABEL})` : count;
+          return inferIsExample(p) ? `${count} (${EXAMPLE_EPA_LABEL})` : count;
         }),
       ),
       joinLines(

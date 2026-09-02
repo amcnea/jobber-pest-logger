@@ -52,8 +52,10 @@ export function inferIsExample(product: {
 }
 
 /** EPA cell for CSV/PDF. Example seeds never emit a registration number. */
-export function epaExportText(product: Pick<AppliedProduct, "isExample" | "epaRegNo" | "is25b">): string {
-  if (product.isExample || looksLikeSampleEpa(product.epaRegNo)) return EXAMPLE_EPA_LABEL;
+export function epaExportText(
+  product: Pick<AppliedProduct, "isExample" | "epaRegNo" | "is25b" | "catalogId">,
+): string {
+  if (inferIsExample(product)) return EXAMPLE_EPA_LABEL;
   return product.epaRegNo ?? "";
 }
 
