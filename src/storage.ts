@@ -2,17 +2,33 @@ import type { ApplicationLog } from "./types";
 
 const KEY = "jobber-pest-logger:logs:v1";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object";
+}
+
+function isProduct(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return typeof value.name === "string" && typeof value.method === "string";
+}
+
+function isPersonnel(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return typeof value.role === "string" && typeof value.name === "string";
+}
+
 function isLog(value: unknown): value is ApplicationLog {
-  if (!value || typeof value !== "object") return false;
-  const o = value as Record<string, unknown>;
+  if (!isRecord(value)) return false;
   return (
-    typeof o.id === "string" &&
-    typeof o.createdAt === "string" &&
-    typeof o.serviceAddress === "string" &&
-    typeof o.dateUsed === "string" &&
-    typeof o.customerBillingName === "string" &&
-    Array.isArray(o.products) &&
-    Array.isArray(o.personnel)
+    typeof value.id === "string" &&
+    typeof value.createdAt === "string" &&
+    typeof value.serviceAddress === "string" &&
+    typeof value.dateUsed === "string" &&
+    typeof value.customerBillingName === "string" &&
+    Array.isArray(value.products) &&
+    value.products.every(isProduct) &&
+    Array.isArray(value.personnel) &&
+    value.personnel.every(isPersonnel) &&
+    isRecord(value.termite)
   );
 }
 

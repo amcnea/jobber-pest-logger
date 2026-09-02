@@ -16,7 +16,7 @@ export function Export({ logs }: Props) {
       mod.downloadPdf(logs);
     } catch (err) {
       console.error("jobber-pest-logger: PDF export failed", err);
-      setPdfError("Could not load the PDF exporter. Use Print this page, or try again.");
+      setPdfError("Could not load the PDF exporter. Download the Texas TDA CSV, or try again. Print is a summary, not the audit export.");
     }
   }
 
