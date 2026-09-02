@@ -10,7 +10,6 @@ interface Props {
 export function NewLogForm({ onSave }: Props) {
   const [log, setLog] = useState<ApplicationLog>(() => emptyLog());
   const [errors, setErrors] = useState<FieldErrors>({});
-  const [saved, setSaved] = useState(false);
   const [picker, setPicker] = useState("");
 
   const pesticides = useMemo(
@@ -20,13 +19,11 @@ export function NewLogForm({ onSave }: Props) {
   const devices = useMemo(() => SAMPLE_CATALOG.filter((p) => p.kind === "device"), []);
 
   function patch(partial: Partial<ApplicationLog>) {
-    setSaved(false);
     setErrors({});
     setLog((prev) => ({ ...prev, ...partial }));
   }
 
   function patchProduct(lineId: string, partial: Partial<AppliedProduct>) {
-    setSaved(false);
     setErrors({});
     setLog((prev) => ({
       ...prev,
@@ -37,7 +34,6 @@ export function NewLogForm({ onSave }: Props) {
   function addFromCatalog(id: string) {
     const line = productFromCatalog(id);
     if (!line) return;
-    setSaved(false);
     setErrors({});
     setLog((prev) => ({ ...prev, products: [...prev.products, line] }));
     setPicker("");
@@ -49,13 +45,8 @@ export function NewLogForm({ onSave }: Props) {
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
     const savedOk = onSave({ ...log, createdAt: new Date().toISOString(), sampleData: true });
-    if (!savedOk) {
-      setSaved(false);
-      return;
-    }
-    setSaved(true);
-    setLog(emptyLog());
-    setErrors({});
+    if (!savedOk) return;
+    // App navigates to History on success and unmounts this form.
   }
 
   return (
@@ -390,6 +381,8 @@ export function NewLogForm({ onSave }: Props) {
                   );
                   patch({ personnel });
                 }}
+                required={person.role === "applying"}
+                aria-required={person.role === "applying"}
               />
               {person.role === "applying" && errors.applyingLicense && (
                 <span className="error">{errors.applyingLicense}</span>
@@ -520,7 +513,6 @@ export function NewLogForm({ onSave }: Props) {
       </section>
 
       <p className="hint">Records are kept 2 years. This placeholder does not run a retention engine.</p>
-      {saved && <p className="ok">Saved on this device.</p>}
       <div className="sticky-save">
         <button className="btn btn-primary" type="submit">
           Save application log
