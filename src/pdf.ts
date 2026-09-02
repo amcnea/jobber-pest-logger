@@ -5,10 +5,18 @@ function person(log: ApplicationLog, role: ApplicationLog["personnel"][number]["
   return log.personnel.find((p) => p.role === role);
 }
 
+const LINE_H = 5;
+
 function wrap(doc: jsPDF, text: string, x: number, y: number, maxWidth: number): number {
   const lines = doc.splitTextToSize(text, maxWidth) as string[];
   doc.text(lines, x, y);
-  return y + lines.length * 5;
+  return y + lines.length * LINE_H;
+}
+
+/** Measure wrapped height (mm) without drawing. */
+function wrappedHeight(doc: jsPDF, text: string, maxWidth: number): number {
+  const lines = doc.splitTextToSize(text, maxWidth) as string[];
+  return lines.length * LINE_H;
 }
 
 export function downloadPdf(logs: ApplicationLog[]): void {
@@ -113,7 +121,8 @@ export function downloadPdf(logs: ApplicationLog[]): void {
     }
 
     for (const line of lines) {
-      addPageIfNeeded(8);
+      const h = wrappedHeight(doc, line, maxWidth);
+      addPageIfNeeded(h + 1);
       y = wrap(doc, line, margin, y, maxWidth);
       y += 1;
     }

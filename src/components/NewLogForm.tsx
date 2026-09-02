@@ -90,6 +90,8 @@ export function NewLogForm({ onSave }: Props) {
             value={log.customerBillingName}
             onChange={(e) => patch({ customerBillingName: e.target.value })}
             autoComplete="organization"
+            required
+            aria-required={true}
           />
           {errors.customerBillingName && <span className="error">{errors.customerBillingName}</span>}
         </label>
@@ -99,6 +101,8 @@ export function NewLogForm({ onSave }: Props) {
             value={log.customerBillingAddress}
             onChange={(e) => patch({ customerBillingAddress: e.target.value })}
             placeholder="Street, city, TX ZIP"
+            required
+            aria-required={true}
           />
           {errors.customerBillingAddress && <span className="error">{errors.customerBillingAddress}</span>}
         </label>
@@ -112,6 +116,8 @@ export function NewLogForm({ onSave }: Props) {
             value={log.serviceAddress}
             onChange={(e) => patch({ serviceAddress: e.target.value })}
             placeholder="Where the application was made"
+            required
+            aria-required={true}
           />
           {errors.serviceAddress && <span className="error">{errors.serviceAddress}</span>}
         </label>
@@ -129,7 +135,13 @@ export function NewLogForm({ onSave }: Props) {
         <h2>Date, pest, shop</h2>
         <label className="field">
           Date used <span className="req">*</span>
-          <input type="date" value={log.dateUsed} onChange={(e) => patch({ dateUsed: e.target.value })} />
+          <input
+            type="date"
+            value={log.dateUsed}
+            onChange={(e) => patch({ dateUsed: e.target.value })}
+            required
+            aria-required={true}
+          />
           {errors.dateUsed && <span className="error">{errors.dateUsed}</span>}
         </label>
         <label className="field">
@@ -138,6 +150,8 @@ export function NewLogForm({ onSave }: Props) {
             value={log.targetPestOrPurpose}
             onChange={(e) => patch({ targetPestOrPurpose: e.target.value })}
             placeholder="e.g. German cockroaches"
+            required
+            aria-required={true}
           />
           {errors.targetPestOrPurpose && <span className="error">{errors.targetPestOrPurpose}</span>}
         </label>
@@ -148,6 +162,8 @@ export function NewLogForm({ onSave }: Props) {
               value={log.shopTpclNumber}
               onChange={(e) => patch({ shopTpclNumber: e.target.value })}
               placeholder="TPCL"
+              required
+              aria-required={true}
             />
             {errors.shopTpclNumber && <span className="error">{errors.shopTpclNumber}</span>}
           </label>
@@ -240,6 +256,8 @@ export function NewLogForm({ onSave }: Props) {
                     value={p.rtuAmount}
                     onChange={(e) => patchProduct(p.lineId, { rtuAmount: e.target.value })}
                     inputMode="decimal"
+                    required
+                    aria-required={true}
                   />
                   {errors[`product-${i}-rtu`] && <span className="error">{errors[`product-${i}-rtu`]}</span>}
                 </label>
@@ -287,6 +305,8 @@ export function NewLogForm({ onSave }: Props) {
                       value={p.mixedTotal}
                       onChange={(e) => patchProduct(p.lineId, { mixedTotal: e.target.value })}
                       inputMode="decimal"
+                      required
+                      aria-required={true}
                     />
                     {errors[`product-${i}-total`] && (
                       <span className="error">{errors[`product-${i}-total`]}</span>
@@ -316,6 +336,8 @@ export function NewLogForm({ onSave }: Props) {
                   value={p.deviceCount}
                   onChange={(e) => patchProduct(p.lineId, { deviceCount: e.target.value })}
                   inputMode="numeric"
+                  required
+                  aria-required={true}
                 />
                 {errors[`product-${i}-device`] && (
                   <span className="error">{errors[`product-${i}-device`]}</span>
@@ -351,6 +373,8 @@ export function NewLogForm({ onSave }: Props) {
                   );
                   patch({ personnel });
                 }}
+                required={person.role === "applying"}
+                aria-required={person.role === "applying"}
               />
               {person.role === "applying" && errors.applyingName && (
                 <span className="error">{errors.applyingName}</span>
