@@ -36,14 +36,17 @@ function normalizeProduct(value: unknown): AppliedProduct | null {
     catalogId: typeof value.catalogId === "string" ? value.catalogId : undefined,
     epaRegNo: typeof value.epaRegNo === "string" || value.epaRegNo === null ? value.epaRegNo : undefined,
   });
+  const method = value.method as AppliedProduct["method"];
+  const is25b = value.is25b as boolean;
+  const dropEpa = isExample || method === "device" || is25b;
   return {
     lineId: value.lineId as string,
     catalogId: value.catalogId as string,
     name: value.name as string,
-    epaRegNo: isExample ? null : ((value.epaRegNo as string | null) ?? null),
-    is25b: value.is25b as boolean,
+    epaRegNo: dropEpa ? null : ((value.epaRegNo as string | null) ?? null),
+    is25b,
     isExample,
-    method: value.method as AppliedProduct["method"],
+    method,
     rtuAmount: value.rtuAmount as string,
     rtuUnit: value.rtuUnit as string,
     mixingRate: value.mixingRate as string,

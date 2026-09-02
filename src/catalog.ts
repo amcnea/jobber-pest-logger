@@ -45,9 +45,10 @@ export function inferIsExample(product: {
   catalogId?: string;
   epaRegNo?: string | null;
 }): boolean {
-  if (typeof product.isExample === "boolean") return product.isExample;
-  if (typeof product.catalogId === "string" && product.catalogId.startsWith("sample-")) return true;
+  // SAMPLE markers win over an explicit false — audit exports must never print SAMPLE-* as real EPA #s.
   if (looksLikeSampleEpa(product.epaRegNo)) return true;
+  if (typeof product.catalogId === "string" && product.catalogId.startsWith("sample-")) return true;
+  if (typeof product.isExample === "boolean") return product.isExample;
   return false;
 }
 
