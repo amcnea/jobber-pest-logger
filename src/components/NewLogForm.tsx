@@ -1,22 +1,20 @@
 import { useMemo, useState, type FormEvent } from "react";
-import { AMOUNT_UNITS, SAMPLE_CATALOG } from "../sampleCatalog";
-import { emptyLog, productFromCatalog, validateLog, type FieldErrors } from "../formDefaults";
-import type { ApplicationLog, AppliedProduct } from "../types";
+import { AMOUNT_UNITS, catalogPickerLabel, productEpaCaption } from "../catalog";
+import { emptyLog, productFromCatalog, validateLog, withSaveFlags, type FieldErrors } from "../formDefaults";
+import type { ApplicationLog, AppliedProduct, ShopProduct } from "../types";
 
 interface Props {
+  catalog: ShopProduct[];
   onSave: (log: ApplicationLog) => boolean;
 }
 
-export function NewLogForm({ onSave }: Props) {
+export function NewLogForm({ catalog, onSave }: Props) {
   const [log, setLog] = useState<ApplicationLog>(() => emptyLog());
   const [errors, setErrors] = useState<FieldErrors>({});
   const [picker, setPicker] = useState("");
 
-  const pesticides = useMemo(
-    () => SAMPLE_CATALOG.filter((p) => p.kind === "pesticide"),
-    [],
-  );
-  const devices = useMemo(() => SAMPLE_CATALOG.filter((p) => p.kind === "device"), []);
+  const pesticides = useMemo(() => catalog.filter((p) => p.kind === "pesticide"), [catalog]);
+  const devices = useMemo(() => catalog.filter((p) => p.kind === "device"), [catalog]);
 
   function patch(partial: Partial<ApplicationLog>) {
     setErrors({});
@@ -32,7 +30,7 @@ export function NewLogForm({ onSave }: Props) {
   }
 
   function addFromCatalog(id: string) {
-    const line = productFromCatalog(id);
+    const line = productFromCatalog(catalog, id);
     if (!line) return;
     setErrors({});
     setLog((prev) => ({ ...prev, products: [...prev.products, line] }));
@@ -44,7 +42,7 @@ export function NewLogForm({ onSave }: Props) {
     const nextErrors = validateLog(log);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
-    const savedOk = onSave({ ...log, createdAt: new Date().toISOString(), sampleData: true });
+    const savedOk = onSave(withSaveFlags(log));
     if (!savedOk) return;
     // App navigates to History on success and unmounts this form.
   }
@@ -172,24 +170,28 @@ export function NewLogForm({ onSave }: Props) {
       <section className="section">
         <h2>Pesticides and devices</h2>
         <p className="hint">
-          EPA # is a picker from the <strong>SAMPLE</strong> catalog — never type a registration number.
-          25(b) products are recorded even with no EPA #. Not EPA data.
+          Pick from the shop product list only — never type an EPA number on this form. Selecting a product
+          fills the name and EPA # (blank for 25(b) and example seeds). Example seeds export as
+          &quot;example / not a real EPA number&quot;.
         </p>
+        {catalog.length === 0 && (
+          <p className="error">The shop list is empty. Add products in the Products tab, then come back.</p>
+        )}
         <label className="field">
-          Add from SAMPLE catalog
-          <select value={picker} onChange={(e) => setPicker(e.target.value)}>
-            <option value="">Select a sample product…</option>
-            <optgroup label="Sample pesticides">
+          Add from shop list
+          <select value={picker} onChange={(e) => setPicker(e.target.value)} disabled={catalog.length === 0}>
+            <option value="">Select a product…</option>
+            <optgroup label="Pesticides">
               {pesticides.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.name} {p.is25b ? "(25(b) — no EPA #)" : `(${p.epaRegNo})`}
+                  {catalogPickerLabel(p)}
                 </option>
               ))}
             </optgroup>
-            <optgroup label="Sample devices">
+            <optgroup label="Devices">
               {devices.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.name} (device)
+                  {catalogPickerLabel(p)}
                 </option>
               ))}
             </optgroup>
@@ -212,14 +214,8 @@ export function NewLogForm({ onSave }: Props) {
               <div>
                 <strong>{p.name}</strong>
                 <div>
-                  <span className="chip sample">SAMPLE</span>{" "}
-                  {p.is25b ? (
-                    <span className="chip">25(b) · no EPA #</span>
-                  ) : p.method === "device" ? (
-                    <span className="chip">device</span>
-                  ) : (
-                    <span className="chip">EPA {p.epaRegNo}</span>
-                  )}
+                  {p.isExample && <span className="chip sample">example</span>}{" "}
+                  <span className="chip">{productEpaCaption(p)}</span>
                 </div>
               </div>
               <button
@@ -403,7 +399,10 @@ export function NewLogForm({ onSave }: Props) {
 
       <section className="section">
         <h2>Termite extras</h2>
-        <p className="hint">§ 7.144(b) fields stay hidden unless this stop is termite work. Stub is enough for v1.</p>
+        <p className="hint">
+          § 7.144(b) fields stay hidden unless this stop is termite work. Diagram is a text note, not a
+          drawing.
+        </p>
         <label className="toggle">
           <input
             type="checkbox"
@@ -419,7 +418,13 @@ export function NewLogForm({ onSave }: Props) {
                 type="checkbox"
                 checked={log.termite.isBait}
                 onChange={(e) =>
-                  patch({ termite: { ...log.termite, isBait: e.target.checked } })
+                  patch({
+                    termite: {
+                      ...log.termite,
+                      isBait: e.target.checked,
+                      isCommercialPretreat: e.target.checked ? false : log.termite.isCommercialPretreat,
+                    },
+                  })
                 }
               />
               Bait system (area treated N/A)
@@ -445,83 +450,88 @@ export function NewLogForm({ onSave }: Props) {
                     termite: { ...log.termite, physicalBarrierMeasurement: e.target.value },
                   })
                 }
+                placeholder="Linear feet or other measurement"
               />
             </label>
             <label className="field">
-              Diagram placeholder
+              Diagram note
               <textarea
                 value={log.termite.diagramNote}
                 onChange={(e) =>
                   patch({ termite: { ...log.termite, diagramNote: e.target.value } })
                 }
-                placeholder="v1 stub — no drawing capture. Note where a diagram would attach."
+                placeholder="Text note describing the diagram (no drawing capture)."
               />
             </label>
-            <label className="toggle">
-              <input
-                type="checkbox"
-                checked={log.termite.isCommercialPretreat}
-                onChange={(e) =>
-                  patch({
-                    termite: { ...log.termite, isCommercialPretreat: e.target.checked },
-                  })
-                }
-              />
-              Commercial pretreat (not baits / wood / barriers)
-            </label>
-            {log.termite.isCommercialPretreat && (
+            {!log.termite.isBait && (
               <>
-                <div className="row">
-                  <label className="field">
-                    Tank count
-                    <input
-                      value={log.termite.tankCount}
-                      onChange={(e) =>
-                        patch({ termite: { ...log.termite, tankCount: e.target.value } })
-                      }
-                      inputMode="numeric"
-                    />
-                  </label>
-                  <label className="field">
-                    Tank gallons
-                    <input
-                      value={log.termite.tankGallons}
-                      onChange={(e) =>
-                        patch({ termite: { ...log.termite, tankGallons: e.target.value } })
-                      }
-                      inputMode="decimal"
-                    />
-                  </label>
-                </div>
-                <div className="row">
-                  <label className="field">
-                    Start time
-                    <input
-                      type="time"
-                      value={log.termite.startTime}
-                      onChange={(e) =>
-                        patch({ termite: { ...log.termite, startTime: e.target.value } })
-                      }
-                    />
-                  </label>
-                  <label className="field">
-                    Stop time
-                    <input
-                      type="time"
-                      value={log.termite.stopTime}
-                      onChange={(e) =>
-                        patch({ termite: { ...log.termite, stopTime: e.target.value } })
-                      }
-                    />
-                  </label>
-                </div>
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={log.termite.isCommercialPretreat}
+                    onChange={(e) =>
+                      patch({
+                        termite: { ...log.termite, isCommercialPretreat: e.target.checked },
+                      })
+                    }
+                  />
+                  Commercial pretreat (not baits / wood / barriers)
+                </label>
+                {log.termite.isCommercialPretreat && (
+                  <>
+                    <div className="row">
+                      <label className="field">
+                        Tank count
+                        <input
+                          value={log.termite.tankCount}
+                          onChange={(e) =>
+                            patch({ termite: { ...log.termite, tankCount: e.target.value } })
+                          }
+                          inputMode="numeric"
+                        />
+                      </label>
+                      <label className="field">
+                        Tank gallons
+                        <input
+                          value={log.termite.tankGallons}
+                          onChange={(e) =>
+                            patch({ termite: { ...log.termite, tankGallons: e.target.value } })
+                          }
+                          inputMode="decimal"
+                        />
+                      </label>
+                    </div>
+                    <div className="row">
+                      <label className="field">
+                        Start time
+                        <input
+                          type="time"
+                          value={log.termite.startTime}
+                          onChange={(e) =>
+                            patch({ termite: { ...log.termite, startTime: e.target.value } })
+                          }
+                        />
+                      </label>
+                      <label className="field">
+                        Stop time
+                        <input
+                          type="time"
+                          value={log.termite.stopTime}
+                          onChange={(e) =>
+                            patch({ termite: { ...log.termite, stopTime: e.target.value } })
+                          }
+                        />
+                      </label>
+                    </div>
+                  </>
+                )}
               </>
             )}
           </div>
         )}
       </section>
 
-      <p className="hint">Records are kept 2 years. This placeholder does not run a retention engine.</p>
+      <p className="hint">Records are kept 2 years. This app does not run a retention engine.</p>
       <div className="sticky-save">
         <button className="btn btn-primary" type="submit">
           Save application log
