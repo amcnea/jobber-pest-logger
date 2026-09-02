@@ -25,7 +25,7 @@ export function productFromCatalog(catalog: ShopProduct[], catalogId: string): A
     lineId: newId(),
     catalogId: product.id,
     name: product.name,
-    epaRegNo: isExample ? null : product.epaRegNo,
+    epaRegNo: isExample || product.is25b || product.kind === "device" ? null : product.epaRegNo,
     is25b: product.is25b,
     isExample,
     method,

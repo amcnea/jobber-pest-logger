@@ -203,11 +203,13 @@ function isShopProduct(value: unknown): value is ShopProduct {
 function normalizeShopProduct(value: unknown): ShopProduct | null {
   if (!isShopProduct(value)) return null;
   const isExample = value.isExample === true;
+  const isDevice = value.kind === "device";
+  const is25b = isDevice ? false : value.is25b;
   return {
     id: value.id,
     name: value.name,
-    epaRegNo: isExample ? null : value.epaRegNo,
-    is25b: value.kind === "device" ? false : value.is25b,
+    epaRegNo: isExample || isDevice || is25b ? null : value.epaRegNo,
+    is25b,
     kind: value.kind,
     isExample,
   };

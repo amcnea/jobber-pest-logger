@@ -68,7 +68,7 @@ export function Products({ catalog, onUpsert, onDelete }: Props) {
     if (Object.keys(nextErrors).length > 0) return;
     const isExample = draft.isExample === true;
     const isDevice = draft.kind === "device";
-    const epa = isExample || isDevice ? null : String(draft.epaRegNo ?? "").trim() || null;
+    const epa = isExample || isDevice || draft.is25b ? null : String(draft.epaRegNo ?? "").trim() || null;
     const saved = onUpsert({
       ...draft,
       name: draft.name.trim(),
