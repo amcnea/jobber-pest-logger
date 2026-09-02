@@ -177,7 +177,7 @@ export function NewLogForm({ onSave }: Props) {
         </p>
         <label className="field">
           Add from SAMPLE catalog
-          <select value={picker} onChange={(e) => addFromCatalog(e.target.value)}>
+          <select value={picker} onChange={(e) => setPicker(e.target.value)}>
             <option value="">Select a sample product…</option>
             <optgroup label="Sample pesticides">
               {pesticides.map((p) => (
@@ -195,6 +195,15 @@ export function NewLogForm({ onSave }: Props) {
             </optgroup>
           </select>
         </label>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          disabled={!picker}
+          onClick={() => addFromCatalog(picker)}
+          style={{ width: "100%", marginBottom: "0.75rem" }}
+        >
+          Add selected product
+        </button>
         {errors.products && <p className="error">{errors.products}</p>}
 
         {log.products.map((p, i) => (
