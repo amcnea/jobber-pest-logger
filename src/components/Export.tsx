@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { productEpaCaption } from "../catalog";
 import { downloadCsv } from "../csv";
 import type { ApplicationLog } from "../types";
 
@@ -24,9 +25,11 @@ export function Export({ logs }: Props) {
     <div>
       <h2>Office export</h2>
       <p className="hint">
-        One audit-ready Texas TDA CSV whose columns match 4 TAC § 7.144(a), plus a simple printable PDF.
-        Sample catalog rows are marked SAMPLE. Weather, time of day (except termite pretreat), and CE are not
-        TDA-required and are omitted.
+        One audit-ready Texas TDA CSV whose columns match 4 TAC § 7.144(a), plus termite extras from
+        § 7.144(b) when the stop is termite work, and a simple printable PDF. Real shop products print
+        their EPA numbers. Example catalog seeds are labeled &quot;example / not a real EPA number&quot; —
+        never as a fake registration number. Weather, time of day (except termite pretreat), and CE are
+        not TDA-required and are omitted. Texas only.
       </p>
       <p className="hint">Records are kept 2 years. This app does not enforce retention.</p>
 
@@ -41,7 +44,7 @@ export function Export({ logs }: Props) {
           disabled={logs.length === 0}
           onClick={() => downloadCsv(logs)}
         >
-          Download Texas TDA CSV (SAMPLE)
+          Download Texas TDA CSV
         </button>
         <div style={{ height: "0.6rem" }} />
         <button
@@ -51,7 +54,7 @@ export function Export({ logs }: Props) {
           onClick={() => { void handlePdf(); }}
           style={{ width: "100%" }}
         >
-          Download PDF (SAMPLE)
+          Download PDF
         </button>
         {pdfError && (
           <p className="hint" role="alert">
@@ -68,7 +71,9 @@ export function Export({ logs }: Props) {
         {logs.map((log) => (
           <article className="card" key={log.id}>
             <strong>
-              {log.dateUsed} — {log.serviceAddress} <span className="chip sample">SAMPLE</span>
+              {log.dateUsed} — {log.serviceAddress}
+              {log.sampleData && <span className="chip sample"> example items</span>}
+              {log.isTermite && <span className="chip"> termite</span>}
             </strong>
             <p className="log-meta">
               Billing: {log.customerBillingName}, {log.customerBillingAddress}
@@ -79,18 +84,34 @@ export function Export({ logs }: Props) {
               {log.shopTpclLetter} · applying{" "}
               {log.personnel.find((p) => p.role === "applying")?.name}
             </p>
+            {log.jobberJobNumber && (
+              <p className="log-meta">Jobber #{log.jobberJobNumber} (not TDA)</p>
+            )}
             <ul>
               {log.products.map((p) => (
                 <li key={p.lineId}>
                   {p.name}{" "}
                   {p.method === "device"
-                    ? `device × ${p.deviceCount}`
-                    : p.epaRegNo
-                      ? `EPA ${p.epaRegNo}`
-                      : "25(b) no EPA #"}
+                    ? `device × ${p.deviceCount}${p.isExample ? ` · ${productEpaCaption(p)}` : ""}`
+                    : productEpaCaption(p)}
                 </li>
               ))}
             </ul>
+            {log.isTermite && (
+              <p className="log-meta">
+                Termite:{" "}
+                {log.termite.isBait
+                  ? "bait — area N/A"
+                  : `area ${log.termite.areaTreatedSqFt || "—"} sq ft`}
+                {log.termite.physicalBarrierMeasurement
+                  ? ` · barrier ${log.termite.physicalBarrierMeasurement}`
+                  : ""}
+                {log.termite.diagramNote ? ` · diagram note: ${log.termite.diagramNote}` : ""}
+                {log.termite.isCommercialPretreat
+                  ? ` · pretreat tanks ${log.termite.tankCount || "—"} / ${log.termite.tankGallons || "—"} gal ${log.termite.startTime || "—"}–${log.termite.stopTime || "—"}`
+                  : ""}
+              </p>
+            )}
           </article>
         ))}
       </section>

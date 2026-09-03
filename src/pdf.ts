@@ -1,4 +1,5 @@
 import { jsPDF } from "jspdf";
+import { epaExportText, EXAMPLE_EPA_LABEL, inferIsExample, logHasExampleProducts } from "./catalog";
 import type { ApplicationLog } from "./types";
 
 function person(log: ApplicationLog, role: ApplicationLog["personnel"][number]["role"]) {
@@ -19,6 +20,33 @@ function wrappedHeight(doc: jsPDF, text: string, maxWidth: number): number {
   return lines.length * LINE_H;
 }
 
+function productLine(p: ApplicationLog["products"][number]): string {
+  const epa = epaExportText(p);
+  const isEx = inferIsExample(p);
+  const epaBit = isEx
+    ? `(${EXAMPLE_EPA_LABEL})`
+    : p.method === "device"
+      ? ""
+      : epa
+        ? `(EPA ${epa})`
+        : "(25(b) / unregistered — no EPA #)";
+  if (p.method === "device") {
+    const extra = isEx ? ` ${epaBit}` : "";
+    return `Device: ${p.name}${extra} × ${p.deviceCount || "?"}`;
+  }
+  if (p.method === "mixed") {
+    const mix = [
+      p.mixingRate && `rate ${p.mixingRate}`,
+      p.percentAi && `${p.percentAi}% AI`,
+      p.mixedTotal && `total ${p.mixedTotal} ${p.mixedUnit}`,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    return `Mixed: ${p.name} ${epaBit} ${mix}`.trim();
+  }
+  return `RTU: ${p.name} ${epaBit} ${p.rtuAmount} ${p.rtuUnit}`.trim();
+}
+
 export function downloadPdf(logs: ApplicationLog[]): void {
   const doc = new jsPDF({ unit: "mm", format: "letter" });
   const margin = 14;
@@ -32,19 +60,31 @@ export function downloadPdf(logs: ApplicationLog[]): void {
     }
   };
 
+  const hasExamples = logHasExampleProducts(logs.flatMap((l) => l.products));
+
   doc.setFont("helvetica", "bold");
   doc.setFontSize(14);
-  doc.text("Texas TDA pesticide application log (SAMPLE)", margin, y);
+  doc.text("Texas TDA pesticide application log", margin, y);
   y += 7;
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
   y = wrap(
     doc,
-    "Placeholder export for Jobber Pest Logger v1. Columns follow 4 TAC § 7.144(a) for SPCS shops. Catalog EPA numbers are SAMPLE placeholders, not EPA data. Keep records 2 years. Not a substitute for TDA counsel.",
+    "Jobber Pest Logger v1. Columns follow 4 TAC § 7.144(a) for Texas SPCS shops. Termite extras follow § 7.144(b) when the stop is termite work. Keep records 2 years. Not a substitute for TDA counsel.",
     margin,
     y,
     maxWidth,
   );
+  if (hasExamples) {
+    y += 2;
+    y = wrap(
+      doc,
+      `Some products are example catalog seeds. Those rows are labeled "${EXAMPLE_EPA_LABEL}" and are not EPA registration numbers.`,
+      margin,
+      y,
+      maxWidth,
+    );
+  }
   y += 4;
 
   if (logs.length === 0) {
@@ -58,7 +98,8 @@ export function downloadPdf(logs: ApplicationLog[]): void {
     y += 6;
     doc.setFont("helvetica", "bold");
     doc.setFontSize(11);
-    doc.text(`Log ${i + 1} — ${log.dateUsed || "(no date)"}  [SAMPLE]`, margin, y);
+    const exampleMark = logHasExampleProducts(log.products) ? "  [includes example catalog items]" : "";
+    doc.text(`Log ${i + 1} — ${log.dateUsed || "(no date)"}${exampleMark}`, margin, y);
     y += 6;
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
@@ -86,33 +127,16 @@ export function downloadPdf(logs: ApplicationLog[]): void {
     );
 
     for (const p of log.products) {
-      if (p.method === "device") {
-        lines.push(`Device: ${p.name} × ${p.deviceCount || "?"}`);
-      } else if (p.method === "mixed") {
-        const mix = [
-          p.mixingRate && `rate ${p.mixingRate}`,
-          p.percentAi && `${p.percentAi}% AI`,
-          p.mixedTotal && `total ${p.mixedTotal} ${p.mixedUnit}`,
-        ]
-          .filter(Boolean)
-          .join(", ");
-        lines.push(
-          `Mixed: ${p.name} (EPA ${p.epaRegNo ?? "none — 25(b)/unregistered"}) ${mix}`.trim(),
-        );
-      } else {
-        lines.push(
-          `RTU: ${p.name} (EPA ${p.epaRegNo ?? "none — 25(b)/unregistered"}) ${p.rtuAmount} ${p.rtuUnit}`.trim(),
-        );
-      }
+      lines.push(productLine(p));
     }
 
     if (log.isTermite) {
       const t = log.termite;
-      lines.push("Termite extras (§ 7.144(b) stub):");
+      lines.push("Termite extras (§ 7.144(b)):");
       if (!t.isBait) lines.push(`  Area treated: ${t.areaTreatedSqFt || "—"} sq ft`);
       else lines.push("  Bait — area treated N/A");
-      if (t.physicalBarrierMeasurement) lines.push(`  Barrier: ${t.physicalBarrierMeasurement}`);
-      lines.push(`  Diagram: ${t.diagramNote || "(placeholder — not captured in v1)"}`);
+      if (t.physicalBarrierMeasurement) lines.push(`  Physical-barrier measurement: ${t.physicalBarrierMeasurement}`);
+      lines.push(`  Diagram note (text, not a drawing): ${t.diagramNote || "—"}`);
       if (t.isCommercialPretreat) {
         lines.push(
           `  Commercial pretreat: tanks ${t.tankCount || "—"}, gal ${t.tankGallons || "—"}, ${t.startTime || "—"}–${t.stopTime || "—"}`,
@@ -129,5 +153,5 @@ export function downloadPdf(logs: ApplicationLog[]): void {
     y += 3;
   });
 
-  doc.save("texas-tda-application-logs-SAMPLE.pdf");
+  doc.save("texas-tda-application-logs.pdf");
 }
