@@ -251,7 +251,9 @@ export function loadCatalog(): ShopProduct[] {
     }
     return parsed.map(normalizeShopProduct).filter((p): p is ShopProduct => p !== null);
   } catch {
-    return EXAMPLE_SEEDS.map((p) => ({ ...p }));
+    const seed = EXAMPLE_SEEDS.map((p) => ({ ...p }));
+    saveCatalog(seed);
+    return seed;
   }
 }
 
