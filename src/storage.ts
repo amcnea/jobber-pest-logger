@@ -191,7 +191,7 @@ export function groupLogsByServiceAddress(
   return [...map.values()].sort((a, b) => a.address.localeCompare(b.address));
 }
 
-function isShopProduct(value: unknown): value is ShopProduct {
+function isShopProductShape(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return (
     typeof value.id === "string" &&
@@ -199,21 +199,28 @@ function isShopProduct(value: unknown): value is ShopProduct {
     (typeof value.epaRegNo === "string" || value.epaRegNo === null) &&
     typeof value.is25b === "boolean" &&
     (value.kind === "pesticide" || value.kind === "device") &&
-    typeof value.isExample === "boolean"
+    (typeof value.isExample === "boolean" || value.isExample === undefined)
   );
 }
 
 function normalizeShopProduct(value: unknown): ShopProduct | null {
-  if (!isShopProduct(value)) return null;
-  const isExample = value.isExample === true;
+  if (!isShopProductShape(value) || !isRecord(value)) return null;
+  const isExample = inferIsExample({
+    isExample: typeof value.isExample === "boolean" ? value.isExample : undefined,
+    catalogId: typeof value.id === "string" ? value.id : undefined,
+    epaRegNo:
+      typeof value.epaRegNo === "string" || value.epaRegNo === null
+        ? value.epaRegNo
+        : undefined,
+  });
   const isDevice = value.kind === "device";
-  const is25b = isDevice ? false : value.is25b;
+  const is25b = isDevice ? false : (value.is25b as boolean);
   return {
-    id: value.id,
-    name: value.name,
-    epaRegNo: isExample || isDevice || is25b ? null : value.epaRegNo,
+    id: value.id as string,
+    name: value.name as string,
+    epaRegNo: isExample || isDevice || is25b ? null : ((value.epaRegNo as string | null) ?? null),
     is25b,
-    kind: value.kind,
+    kind: value.kind as ShopProduct["kind"],
     isExample,
   };
 }
