@@ -481,8 +481,12 @@ export function parseBackup(raw: unknown): RestoreResult {
       error: `Unsupported backup version "${raw.version.trim()}". This app expects ${BACKUP_VERSION}.`,
     };
   }
-  if (typeof raw.exportedAt !== "string") {
+  if (typeof raw.exportedAt !== "string" || !raw.exportedAt.trim()) {
     return { ok: false, error: "Backup is missing exportedAt." };
+  }
+  const exportedAt = raw.exportedAt.trim();
+  if (Number.isNaN(Date.parse(exportedAt))) {
+    return { ok: false, error: "Backup exportedAt is not a valid date." };
   }
   if (!Array.isArray(raw.logs)) {
     return { ok: false, error: "Backup logs must be an array." };
@@ -527,7 +531,7 @@ export function parseBackup(raw: unknown): RestoreResult {
     ok: true,
     backup: {
       version: raw.version.trim(),
-      exportedAt: raw.exportedAt as string,
+      exportedAt,
       logs,
       catalog,
       people,
