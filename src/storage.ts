@@ -398,9 +398,9 @@ function isShopSettingsShape(value: unknown): boolean {
 function normalizeSettings(value: unknown): ShopSettings | null {
   if (!isShopSettingsShape(value) || !isRecord(value)) return null;
   return {
-    shopName: value.shopName as string,
-    shopTpclNumber: value.shopTpclNumber as string,
-    shopTpclLetter: value.shopTpclLetter as string,
+    shopName: (value.shopName as string).trim(),
+    shopTpclNumber: (value.shopTpclNumber as string).trim(),
+    shopTpclLetter: (value.shopTpclLetter as string).trim(),
   };
 }
 
@@ -526,7 +526,7 @@ export function parseBackup(raw: unknown): RestoreResult {
   return {
     ok: true,
     backup: {
-      version: raw.version as string,
+      version: raw.version.trim(),
       exportedAt: raw.exportedAt as string,
       logs,
       catalog,

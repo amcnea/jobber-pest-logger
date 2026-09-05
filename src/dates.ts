@@ -95,21 +95,24 @@ export function monthRangeLocal(d = new Date()): { from: string; to: string } {
 
 /**
  * Filter logs by dateUsed with device-local YYYY-MM-DD string comparison.
- * Empty from/to means unbounded on that side. Invalid dateUsed strings are excluded when a bound is set.
+ * Empty or invalid from/to means unbounded on that side. Invalid dateUsed strings are excluded when a bound is set.
  */
 export function filterLogsByDateUsed<T extends { dateUsed: string }>(
   logs: T[],
   from: string,
   to: string,
 ): T[] {
+  const ymd = /^\d{4}-\d{2}-\d{2}$/;
   const fromTrim = from.trim();
   const toTrim = to.trim();
-  if (!fromTrim && !toTrim) return logs;
+  const fromBound = ymd.test(fromTrim) ? fromTrim : "";
+  const toBound = ymd.test(toTrim) ? toTrim : "";
+  if (!fromBound && !toBound) return logs;
   return logs.filter((log) => {
     const d = String(log.dateUsed ?? "").trim();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
-    if (fromTrim && d < fromTrim) return false;
-    if (toTrim && d > toTrim) return false;
+    if (!ymd.test(d)) return false;
+    if (fromBound && d < fromBound) return false;
+    if (toBound && d > toBound) return false;
     return true;
   });
 }
