@@ -20,7 +20,8 @@ export function Export({ logs, settings }: Props) {
   );
 
   const shopName = settings.shopName.trim();
-  const rangeActive = Boolean(dateFrom.trim() || dateTo.trim());
+  const ymd = /^\d{4}-\d{2}-\d{2}$/;
+  const rangeActive = ymd.test(dateFrom.trim()) || ymd.test(dateTo.trim());
 
   function applyThisMonth() {
     const { from, to } = monthRangeLocal();

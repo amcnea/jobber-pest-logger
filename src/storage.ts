@@ -538,6 +538,12 @@ export function parseBackup(raw: unknown): RestoreResult {
 
 /** Replace all device localStorage keys with validated backup contents. */
 export function applyBackup(backup: DeviceBackup): boolean {
+  if (backup.version.trim() !== BACKUP_VERSION) {
+    console.error(
+      `jobber-pest-logger: applyBackup rejected unsupported version "${backup.version.trim()}" (expected ${BACKUP_VERSION})`,
+    );
+    return false;
+  }
   const keys = [LOGS_KEY, CATALOG_KEY, PEOPLE_KEY, SETTINGS_KEY] as const;
   const snapshot: Record<string, string | null> = {};
   try {
