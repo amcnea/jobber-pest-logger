@@ -2,7 +2,7 @@
 
 Texas-only **mobile-web compliance sidecar** for pest shops that already use Jobber. After a stop, a tech logs a pesticide application from the shop's own product list. The office exports one audit-ready Texas TDA CSV and a simple PDF.
 
-This is **not** a field-service app. It does not do scheduling, invoicing, routing, payments, inventory, login, Jobber OAuth/API, Stripe, weather APIs, CE tracking, or multi-state logic.
+This is **not** a field-service app. It does not do scheduling, invoicing, routing, payments, inventory, login, Jobber OAuth/API, Stripe, weather APIs, SMS reminders, or multi-state logic.
 
 ## v1
 
@@ -18,6 +18,18 @@ v1 is a working UI on this device only (browser localStorage). Schema is locked.
 - Office export: Texas TDA CSV and printable PDF. Real shop products print their EPA numbers. Example seeds are labeled "example / not a real EPA number"
 
 Records are kept **2 years**. This app does not run a retention engine.
+
+## v1.1 People / roster
+
+Office-managed tech roster stored under a **separate** localStorage key from logs and the product catalog (`jobber-pest-logger:people:v1`).
+
+- People screen: add / edit / delete techs — name, license number, default role tags (applying | supervising | receiving_training; multi-select), license expiry date, optional CE due date
+- New-log form: **three separate roster picks** (applying / supervising / receiving training) so they can diverge per stop. Role tags are **defaults only** (tagged names sort first; full roster still available). Picking fills name and license #; thin manual override remains
+- In-app warnings (banner in the app shell + on the People list). Device-local calendar dates (not UTC-only, not Central-pinned). **No SMS**
+  - **License:** past due or within **30 days** (shop convenience — not a TDA-required window)
+  - **CE:** separate from the license window. CEUs are calendar-year, so a year-end reminder surfaces in **Nov/Dec** when a CE due date falls in the current local year; overdue CE always warns. Not a TDA-required window
+
+Does not invent or change locked 4 TAC § 7.144 schema fields. Does not touch Jobber OAuth, Stripe, login, inventory, or multi-state.
 
 ## Shop product list
 
@@ -47,7 +59,7 @@ Required on every application log, per 4 TAC section 7.144(a) for SPCS shops. Do
 
 Termite-only extras from section 7.144(b) sit behind a termite flag, not on every stop: area treated (sq ft, except baits); physical-barrier measurement and diagram note (text, not a drawing); commercial pretreat (not baits/wood/barriers): tank count, tank gallons, start and stop time. Those fields are included in CSV/PDF when the stop is termite work.
 
-Not TDA-required and not marked required: weather, time of day (except termite pretreat start/stop), Jobber job number, CE/license expiry.
+Not TDA-required and not marked required: weather, time of day (except termite pretreat start/stop), Jobber job number, CE/license expiry reminder windows.
 
 ## Run
 

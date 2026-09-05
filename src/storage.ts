@@ -1,6 +1,6 @@
 import { EXAMPLE_SEEDS, inferIsExample } from "./catalog";
 import { newId } from "./ids";
-import type { ApplicationLog, AppliedProduct, ShopProduct } from "./types";
+import type { ApplicationLog, AppliedProduct, Person, PersonnelRole, ShopProduct } from "./types";
 
 const LOGS_KEY = "jobber-pest-logger:logs:v1";
 const CATALOG_KEY = "jobber-pest-logger:catalog:v1";
@@ -283,4 +283,92 @@ export function emptyShopProduct(): ShopProduct {
     kind: "pesticide",
     isExample: false,
   };
+}
+
+const PEOPLE_KEY = "jobber-pest-logger:people:v1";
+
+function isPersonnelRole(value: unknown): value is PersonnelRole {
+  return value === "applying" || value === "supervising" || value === "receiving_training";
+}
+
+function isPersonShape(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    typeof value.licenseNumber === "string" &&
+    Array.isArray(value.roleTags) &&
+    value.roleTags.every(isPersonnelRole) &&
+    typeof value.licenseExpiry === "string" &&
+    (typeof value.ceDueDate === "string" || value.ceDueDate === undefined || value.ceDueDate === null)
+  );
+}
+
+function normalizePerson(value: unknown): Person | null {
+  if (!isPersonShape(value) || !isRecord(value)) return null;
+  const tags = (value.roleTags as unknown[]).filter(isPersonnelRole);
+  const unique = [...new Set(tags)];
+  return {
+    id: value.id as string,
+    name: value.name as string,
+    licenseNumber: value.licenseNumber as string,
+    roleTags: unique,
+    licenseExpiry: value.licenseExpiry as string,
+    ceDueDate: typeof value.ceDueDate === "string" ? value.ceDueDate : "",
+  };
+}
+
+export function savePeople(people: Person[]): boolean {
+  try {
+    localStorage.setItem(PEOPLE_KEY, JSON.stringify(people));
+    return true;
+  } catch (err) {
+    console.error("jobber-pest-logger: could not save people", err);
+    return false;
+  }
+}
+
+export function loadPeople(): Person[] {
+  try {
+    const raw = localStorage.getItem(PEOPLE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(normalizePerson).filter((p): p is Person => p !== null);
+  } catch {
+    return [];
+  }
+}
+
+export function upsertPerson(person: Person): { people: Person[]; saved: boolean } {
+  const people = loadPeople();
+  const idx = people.findIndex((p) => p.id === person.id);
+  const next = idx === -1 ? [person, ...people] : people.map((p) => (p.id === person.id ? person : p));
+  const saved = savePeople(next);
+  return { people: saved ? next : people, saved };
+}
+
+export function deletePerson(id: string): { people: Person[]; saved: boolean } {
+  const current = loadPeople();
+  const next = current.filter((p) => p.id !== id);
+  const saved = savePeople(next);
+  return { people: saved ? next : current, saved };
+}
+
+export function emptyPerson(): Person {
+  return {
+    id: newId(),
+    name: "",
+    licenseNumber: "",
+    roleTags: ["applying"],
+    licenseExpiry: "",
+    ceDueDate: "",
+  };
+}
+
+/** Role tags are defaults only: tagged people first, then the rest (full roster). */
+export function peopleForRole(people: Person[], role: PersonnelRole): Person[] {
+  const tagged = people.filter((p) => p.roleTags.includes(role));
+  const rest = people.filter((p) => !p.roleTags.includes(role));
+  return [...tagged, ...rest];
 }
