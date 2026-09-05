@@ -54,7 +54,7 @@ export interface Person {
   roleTags: PersonnelRole[];
   /** License expiry as device-local YYYY-MM-DD. */
   licenseExpiry: string;
-  /** Optional CE due date as device-local YYYY-MM-DD. */
+  /** CE due date as device-local YYYY-MM-DD; empty string when not set. */
   ceDueDate: string;
 }
 

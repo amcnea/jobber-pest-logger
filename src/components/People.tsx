@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { personHasWarning, personWarningTone, warningsForPerson } from "../peopleWarnings";
+import { personWarningTone, warningsForPerson } from "../peopleWarnings";
 import { emptyPerson } from "../storage";
 import type { Person, PersonnelRole } from "../types";
 
@@ -222,7 +222,7 @@ export function People({ people, onUpsert, onDelete }: Props) {
                     License expires {person.licenseExpiry || "—"}
                     {person.ceDueDate ? ` · CE due ${person.ceDueDate}` : ""}
                   </div>
-                  {personHasWarning(person) && (
+                  {warns.length > 0 && (
                     <ul className="warn-list">
                       {warns.map((m) => (
                         <li key={m}>{m}</li>
