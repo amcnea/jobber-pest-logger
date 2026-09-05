@@ -141,9 +141,14 @@ export function logsToCsv(logs: ApplicationLog[]): string {
   return [header, ...rows].join("\r\n") + "\r\n";
 }
 
-export function downloadCsv(logs: ApplicationLog[]): void {
-  const csv = logsToCsv(logs);
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+export function downloadCsv(logs: ApplicationLog[], shopName?: string): void {
+  let body = logsToCsv(logs);
+  const name = shopName?.trim();
+  if (name) {
+    // Preamble line (not a TDA data column). Office can see which shop exported.
+    body = csvEscape(`Shop: ${name}`) + "\r\n" + body;
+  }
+  const blob = new Blob([body], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;

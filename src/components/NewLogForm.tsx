@@ -2,11 +2,12 @@ import { useMemo, useState, type FormEvent } from "react";
 import { AMOUNT_UNITS, catalogPickerLabel, productEpaCaption } from "../catalog";
 import { emptyLog, productFromCatalog, validateLog, withSaveFlags, type FieldErrors } from "../formDefaults";
 import { peopleForRole } from "../storage";
-import type { ApplicationLog, AppliedProduct, Person, PersonnelRole, ShopProduct } from "../types";
+import type { ApplicationLog, AppliedProduct, Person, PersonnelRole, ShopProduct, ShopSettings } from "../types";
 
 interface Props {
   catalog: ShopProduct[];
   people: Person[];
+  settings: ShopSettings;
   onSave: (log: ApplicationLog) => boolean;
 }
 
@@ -16,8 +17,8 @@ const ROLE_TITLE: Record<PersonnelRole, string> = {
   receiving_training: "Receiving training",
 };
 
-export function NewLogForm({ catalog, people, onSave }: Props) {
-  const [log, setLog] = useState<ApplicationLog>(() => emptyLog());
+export function NewLogForm({ catalog, people, settings, onSave }: Props) {
+  const [log, setLog] = useState<ApplicationLog>(() => emptyLog(settings));
   const [errors, setErrors] = useState<FieldErrors>({});
   const [picker, setPicker] = useState("");
   /** Roster pick id per personnel role (empty = manual / cleared). */

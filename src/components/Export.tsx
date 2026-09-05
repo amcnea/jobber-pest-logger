@@ -1,23 +1,48 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { productEpaCaption } from "../catalog";
 import { downloadCsv } from "../csv";
-import type { ApplicationLog } from "../types";
+import { filterLogsByDateUsed, monthRangeLocal } from "../dates";
+import type { ApplicationLog, ShopSettings } from "../types";
 
 interface Props {
   logs: ApplicationLog[];
+  settings: ShopSettings;
 }
 
-export function Export({ logs }: Props) {
+export function Export({ logs, settings }: Props) {
   const [pdfError, setPdfError] = useState<string | null>(null);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+
+  const filtered = useMemo(
+    () => filterLogsByDateUsed(logs, dateFrom, dateTo) as ApplicationLog[],
+    [logs, dateFrom, dateTo],
+  );
+
+  const shopName = settings.shopName.trim();
+  const rangeActive = Boolean(dateFrom.trim() || dateTo.trim());
+
+  function applyThisMonth() {
+    const { from, to } = monthRangeLocal();
+    setDateFrom(from);
+    setDateTo(to);
+  }
+
+  function clearDates() {
+    setDateFrom("");
+    setDateTo("");
+  }
 
   async function handlePdf() {
     setPdfError(null);
     try {
       const mod = await import("../pdf");
-      mod.downloadPdf(logs);
+      mod.downloadPdf(filtered, shopName || undefined);
     } catch (err) {
       console.error("jobber-pest-logger: PDF export failed", err);
-      setPdfError("Could not load the PDF exporter. Download the Texas TDA CSV, or try again. Print is a summary, not the audit export.");
+      setPdfError(
+        "Could not load the PDF exporter. Download the Texas TDA CSV, or try again. Print is a summary, not the audit export.",
+      );
     }
   }
 
@@ -34,15 +59,60 @@ export function Export({ logs }: Props) {
       <p className="hint">Records are kept 2 years. This app does not enforce retention.</p>
 
       <div className="card">
+        <h3>Date range</h3>
+        <p className="hint">
+          Filter by <strong>date used</strong> (device-local YYYY-MM-DD). CSV and PDF use the filtered
+          set. Leave both blank for all logs on this device.
+        </p>
+        <div className="row">
+          <label className="field">
+            From
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            To
+            <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          </label>
+        </div>
+        <div className="row">
+          <button type="button" className="btn btn-secondary" onClick={applyThisMonth}>
+            This month
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={clearDates}
+            disabled={!rangeActive}
+          >
+            Clear dates
+          </button>
+        </div>
+      </div>
+
+      <div className="card">
+        {shopName && (
+          <p>
+            <strong>{shopName}</strong>
+          </p>
+        )}
         <p>
-          <strong>{logs.length}</strong> log{logs.length === 1 ? "" : "s"} on this device.
+          <strong>{filtered.length}</strong> log{filtered.length === 1 ? "" : "s"}
+          {rangeActive ? " in range" : " on this device"}
+          {rangeActive && logs.length !== filtered.length
+            ? ` (${logs.length} total on device)`
+            : ""}
+          .
         </p>
         <p className="hint">Exports stay on your machine. Nothing is uploaded.</p>
         <button
           type="button"
           className="btn btn-primary"
-          disabled={logs.length === 0}
-          onClick={() => downloadCsv(logs)}
+          disabled={filtered.length === 0}
+          onClick={() => downloadCsv(filtered, shopName || undefined)}
         >
           Download Texas TDA CSV
         </button>
@@ -50,8 +120,10 @@ export function Export({ logs }: Props) {
         <button
           type="button"
           className="btn btn-secondary"
-          disabled={logs.length === 0}
-          onClick={() => { void handlePdf(); }}
+          disabled={filtered.length === 0}
+          onClick={() => {
+            void handlePdf();
+          }}
           style={{ width: "100%" }}
         >
           Download PDF
@@ -62,13 +134,26 @@ export function Export({ logs }: Props) {
           </p>
         )}
         <div style={{ height: "0.6rem" }} />
-        <button type="button" className="btn btn-secondary no-print" onClick={() => window.print()} style={{ width: "100%" }}>
+        <button
+          type="button"
+          className="btn btn-secondary no-print"
+          onClick={() => window.print()}
+          style={{ width: "100%" }}
+        >
           Print this page
         </button>
       </div>
 
       <section className="print-logs">
-        {logs.map((log) => (
+        {shopName && (
+          <p className="hint">
+            <strong>{shopName}</strong>
+            {settings.shopTpclNumber
+              ? ` · TPCL ${settings.shopTpclNumber}${settings.shopTpclLetter}`
+              : ""}
+          </p>
+        )}
+        {filtered.map((log) => (
           <article className="card" key={log.id}>
             <strong>
               {log.dateUsed} — {log.serviceAddress}

@@ -47,7 +47,7 @@ function productLine(p: ApplicationLog["products"][number]): string {
   return `RTU: ${p.name} ${epaBit} ${p.rtuAmount} ${p.rtuUnit}`.trim();
 }
 
-export function downloadPdf(logs: ApplicationLog[]): void {
+export function downloadPdf(logs: ApplicationLog[], shopName?: string): void {
   const doc = new jsPDF({ unit: "mm", format: "letter" });
   const margin = 14;
   const maxWidth = 186;
@@ -66,11 +66,17 @@ export function downloadPdf(logs: ApplicationLog[]): void {
   doc.setFontSize(14);
   doc.text("Texas TDA pesticide application log", margin, y);
   y += 7;
+  const name = shopName?.trim();
+  if (name) {
+    doc.setFontSize(11);
+    y = wrap(doc, name, margin, y, maxWidth);
+    y += 2;
+  }
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
   y = wrap(
     doc,
-    "Jobber Pest Logger v1. Columns follow 4 TAC § 7.144(a) for Texas SPCS shops. Termite extras follow § 7.144(b) when the stop is termite work. Keep records 2 years. Not a substitute for TDA counsel.",
+    "Jobber Pest Logger v1.2. Columns follow 4 TAC § 7.144(a) for Texas SPCS shops. Termite extras follow § 7.144(b) when the stop is termite work. Keep records 2 years. Not a substitute for TDA counsel.",
     margin,
     y,
     maxWidth,

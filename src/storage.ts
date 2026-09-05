@@ -1,6 +1,6 @@
 import { EXAMPLE_SEEDS, inferIsExample } from "./catalog";
 import { newId } from "./ids";
-import type { ApplicationLog, AppliedProduct, Person, PersonnelRole, ShopProduct } from "./types";
+import type { ApplicationLog, AppliedProduct, Person, PersonnelRole, ShopProduct, ShopSettings } from "./types";
 
 const LOGS_KEY = "jobber-pest-logger:logs:v1";
 const CATALOG_KEY = "jobber-pest-logger:catalog:v1";
@@ -371,4 +371,170 @@ export function peopleForRole(people: Person[], role: PersonnelRole): Person[] {
   const tagged = people.filter((p) => p.roleTags.includes(role));
   const rest = people.filter((p) => !p.roleTags.includes(role));
   return [...tagged, ...rest];
+}
+
+
+const SETTINGS_KEY = "jobber-pest-logger:settings:v1";
+
+export const BACKUP_VERSION = "1.2";
+
+export function emptySettings(): ShopSettings {
+  return {
+    shopName: "",
+    shopTpclNumber: "",
+    shopTpclLetter: "",
+  };
+}
+
+function isShopSettingsShape(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.shopName === "string" &&
+    typeof value.shopTpclNumber === "string" &&
+    typeof value.shopTpclLetter === "string"
+  );
+}
+
+function normalizeSettings(value: unknown): ShopSettings | null {
+  if (!isShopSettingsShape(value) || !isRecord(value)) return null;
+  return {
+    shopName: value.shopName as string,
+    shopTpclNumber: value.shopTpclNumber as string,
+    shopTpclLetter: value.shopTpclLetter as string,
+  };
+}
+
+export function loadSettings(): ShopSettings {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return emptySettings();
+    const parsed = JSON.parse(raw) as unknown;
+    return normalizeSettings(parsed) ?? emptySettings();
+  } catch {
+    return emptySettings();
+  }
+}
+
+export function saveSettings(settings: ShopSettings): boolean {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    return true;
+  } catch (err) {
+    console.error("jobber-pest-logger: could not save settings", err);
+    return false;
+  }
+}
+
+export interface DeviceBackup {
+  version: string;
+  exportedAt: string;
+  logs: ApplicationLog[];
+  catalog: ShopProduct[];
+  people: Person[];
+  settings: ShopSettings;
+}
+
+export function buildBackup(): DeviceBackup {
+  return {
+    version: BACKUP_VERSION,
+    exportedAt: new Date().toISOString(),
+    logs: loadLogs(),
+    catalog: loadCatalog(),
+    people: loadPeople(),
+    settings: loadSettings(),
+  };
+}
+
+export function downloadBackup(): void {
+  const backup = buildBackup();
+  const blob = new Blob([JSON.stringify(backup, null, 2)], {
+    type: "application/json;charset=utf-8",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  const stamp = backup.exportedAt.slice(0, 10);
+  a.download = `jobber-pest-logger-backup-${stamp}.json`;
+  a.rel = "noopener";
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export type RestoreResult =
+  | { ok: true; backup: DeviceBackup }
+  | { ok: false; error: string };
+
+/** Validate backup JSON shape; reject garbage. Does not write storage. */
+export function parseBackup(raw: unknown): RestoreResult {
+  if (!isRecord(raw)) {
+    return { ok: false, error: "Backup must be a JSON object." };
+  }
+  if (typeof raw.version !== "string" || !raw.version.trim()) {
+    return { ok: false, error: "Backup is missing a version stamp." };
+  }
+  if (typeof raw.exportedAt !== "string") {
+    return { ok: false, error: "Backup is missing exportedAt." };
+  }
+  if (!Array.isArray(raw.logs)) {
+    return { ok: false, error: "Backup logs must be an array." };
+  }
+  if (!Array.isArray(raw.catalog)) {
+    return { ok: false, error: "Backup catalog must be an array." };
+  }
+  if (!Array.isArray(raw.people)) {
+    return { ok: false, error: "Backup people must be an array." };
+  }
+  if (!isRecord(raw.settings)) {
+    return { ok: false, error: "Backup settings must be an object." };
+  }
+
+  const logs = (raw.logs as unknown[])
+    .map(normalizeLog)
+    .filter((l): l is ApplicationLog => l !== null);
+  if (logs.length !== (raw.logs as unknown[]).length) {
+    return { ok: false, error: "Backup contains invalid application log(s)." };
+  }
+
+  const catalog = (raw.catalog as unknown[])
+    .map(normalizeShopProduct)
+    .filter((p): p is ShopProduct => p !== null);
+  if (catalog.length !== (raw.catalog as unknown[]).length) {
+    return { ok: false, error: "Backup contains invalid catalog product(s)." };
+  }
+
+  const people = (raw.people as unknown[])
+    .map(normalizePerson)
+    .filter((p): p is Person => p !== null);
+  if (people.length !== (raw.people as unknown[]).length) {
+    return { ok: false, error: "Backup contains invalid people row(s)." };
+  }
+
+  const settings = normalizeSettings(raw.settings);
+  if (!settings) {
+    return { ok: false, error: "Backup settings are invalid." };
+  }
+
+  return {
+    ok: true,
+    backup: {
+      version: raw.version as string,
+      exportedAt: raw.exportedAt as string,
+      logs,
+      catalog,
+      people,
+      settings,
+    },
+  };
+}
+
+/** Replace all device localStorage keys with validated backup contents. */
+export function applyBackup(backup: DeviceBackup): boolean {
+  const logsOk = saveLogs(backup.logs);
+  const catalogOk = saveCatalog(backup.catalog);
+  const peopleOk = savePeople(backup.people);
+  const settingsOk = saveSettings(backup.settings);
+  return logsOk && catalogOk && peopleOk && settingsOk;
 }

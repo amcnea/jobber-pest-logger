@@ -31,6 +31,16 @@ Office-managed tech roster stored under a **separate** localStorage key from log
 
 Does not invent or change locked 4 TAC § 7.144 schema fields. Does not touch Jobber OAuth, Stripe, login, inventory, or multi-state.
 
+## v1.2 Shop settings, export range, backup
+
+Device-local shop settings under a **separate** localStorage key (`jobber-pest-logger:settings:v1`) from logs, catalog, and people.
+
+- **Settings screen:** shop name, TPCL number, TPCL letter. New logs prefill `shopTpclNumber` / `shopTpclLetter` from settings (still editable per log). Shop name appears on PDF/print export headers (and a CSV preamble line) when set
+- **Export screen:** date from / to filters on `dateUsed` (device-local YYYY-MM-DD string compare) plus a **This month** preset. CSV and PDF use the filtered set; count in range is shown
+- **Backup:** download one JSON with logs, catalog, people, settings, and a version stamp. Restore from file after confirm replaces device data. Shape is validated (same style as existing storage validators); garbage is rejected
+
+Does not add Jobber OAuth, SMS, Stripe, login, multi-state, or new TDA-required fields.
+
 ## Shop product list
 
 Stored in localStorage under a separate key from logs. The office adds the pesticides and devices this shop actually uses.

@@ -96,4 +96,10 @@ export interface ApplicationLog {
   termite: TermiteExtras;
 }
 
-export type Screen = "new" | "history" | "products" | "people" | "export";
+export interface ShopSettings {
+  shopName: string;
+  shopTpclNumber: string;
+  shopTpclLetter: string;
+}
+
+export type Screen = "new" | "history" | "products" | "people" | "settings" | "export";

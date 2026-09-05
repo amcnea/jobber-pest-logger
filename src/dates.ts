@@ -82,3 +82,34 @@ export function formatCeDueLabel(ymd: string, today = new Date()): string | null
   }
   return `CE due this calendar year (${ymd}) — year-end reminder`;
 }
+
+
+/** First and last YYYY-MM-DD of the device-local calendar month containing `d`. */
+export function monthRangeLocal(d = new Date()): { from: string; to: string } {
+  const y = d.getFullYear();
+  const m = d.getMonth();
+  const from = localDateYmd(new Date(y, m, 1, 12, 0, 0, 0));
+  const to = localDateYmd(new Date(y, m + 1, 0, 12, 0, 0, 0));
+  return { from, to };
+}
+
+/**
+ * Filter logs by dateUsed with device-local YYYY-MM-DD string comparison.
+ * Empty from/to means unbounded on that side. Invalid dateUsed strings are excluded when a bound is set.
+ */
+export function filterLogsByDateUsed(
+  logs: { dateUsed: string }[],
+  from: string,
+  to: string,
+): typeof logs {
+  const fromTrim = from.trim();
+  const toTrim = to.trim();
+  if (!fromTrim && !toTrim) return logs;
+  return logs.filter((log) => {
+    const d = String(log.dateUsed ?? "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
+    if (fromTrim && d < fromTrim) return false;
+    if (toTrim && d > toTrim) return false;
+    return true;
+  });
+}
