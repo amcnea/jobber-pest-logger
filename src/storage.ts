@@ -475,6 +475,12 @@ export function parseBackup(raw: unknown): RestoreResult {
   if (typeof raw.version !== "string" || !raw.version.trim()) {
     return { ok: false, error: "Backup is missing a version stamp." };
   }
+  if (raw.version.trim() !== BACKUP_VERSION) {
+    return {
+      ok: false,
+      error: `Unsupported backup version "${raw.version.trim()}". This app expects ${BACKUP_VERSION}.`,
+    };
+  }
   if (typeof raw.exportedAt !== "string") {
     return { ok: false, error: "Backup is missing exportedAt." };
   }

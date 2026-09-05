@@ -35,7 +35,7 @@ Does not invent or change locked 4 TAC § 7.144 schema fields. Does not touch Jo
 
 Device-local shop settings under a **separate** localStorage key (`jobber-pest-logger:settings:v1`) from logs, catalog, and people.
 
-- **Settings screen:** shop name, TPCL number, TPCL letter. New logs prefill `shopTpclNumber` / `shopTpclLetter` from settings (still editable per log). Shop name appears on PDF/print export headers (and a CSV preamble line) when set
+- **Settings screen:** shop name, TPCL number, TPCL letter. New logs prefill `shopTpclNumber` / `shopTpclLetter` from settings (still editable per log). Shop name appears on PDF/print export headers when set; CSV keeps the TDA header on line 1 and puts the shop name in the download filename instead
 - **Export screen:** date from / to filters on `dateUsed` (device-local YYYY-MM-DD string compare) plus a **This month** preset. CSV and PDF use the filtered set; count in range is shown
 - **Backup:** download one JSON with logs, catalog, people, settings, and a version stamp. Restore from file after confirm replaces device data. Shape is validated (same style as existing storage validators); garbage is rejected
 
