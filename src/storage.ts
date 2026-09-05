@@ -532,9 +532,31 @@ export function parseBackup(raw: unknown): RestoreResult {
 
 /** Replace all device localStorage keys with validated backup contents. */
 export function applyBackup(backup: DeviceBackup): boolean {
+  const keys = [LOGS_KEY, CATALOG_KEY, PEOPLE_KEY, SETTINGS_KEY] as const;
+  const snapshot: Record<string, string | null> = {};
+  try {
+    for (const key of keys) {
+      snapshot[key] = localStorage.getItem(key);
+    }
+  } catch (err) {
+    console.error("jobber-pest-logger: could not snapshot storage before backup restore", err);
+    return false;
+  }
+
   const logsOk = saveLogs(backup.logs);
   const catalogOk = saveCatalog(backup.catalog);
   const peopleOk = savePeople(backup.people);
   const settingsOk = saveSettings(backup.settings);
-  return logsOk && catalogOk && peopleOk && settingsOk;
+  if (logsOk && catalogOk && peopleOk && settingsOk) return true;
+
+  try {
+    for (const key of keys) {
+      const prev = snapshot[key];
+      if (prev === null) localStorage.removeItem(key);
+      else localStorage.setItem(key, prev);
+    }
+  } catch (err) {
+    console.error("jobber-pest-logger: could not roll back failed backup restore", err);
+  }
+  return false;
 }

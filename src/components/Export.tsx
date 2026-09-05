@@ -15,7 +15,7 @@ export function Export({ logs, settings }: Props) {
   const [dateTo, setDateTo] = useState("");
 
   const filtered = useMemo(
-    () => filterLogsByDateUsed(logs, dateFrom, dateTo) as ApplicationLog[],
+    () => filterLogsByDateUsed(logs, dateFrom, dateTo),
     [logs, dateFrom, dateTo],
   );
 
