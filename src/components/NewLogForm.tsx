@@ -1,17 +1,31 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { AMOUNT_UNITS, catalogPickerLabel, productEpaCaption } from "../catalog";
 import { emptyLog, productFromCatalog, validateLog, withSaveFlags, type FieldErrors } from "../formDefaults";
-import type { ApplicationLog, AppliedProduct, ShopProduct } from "../types";
+import { peopleForRole } from "../storage";
+import type { ApplicationLog, AppliedProduct, Person, PersonnelRole, ShopProduct } from "../types";
 
 interface Props {
   catalog: ShopProduct[];
+  people: Person[];
   onSave: (log: ApplicationLog) => boolean;
 }
 
-export function NewLogForm({ catalog, onSave }: Props) {
+const ROLE_TITLE: Record<PersonnelRole, string> = {
+  applying: "Applying",
+  supervising: "Supervising",
+  receiving_training: "Receiving training",
+};
+
+export function NewLogForm({ catalog, people, onSave }: Props) {
   const [log, setLog] = useState<ApplicationLog>(() => emptyLog());
   const [errors, setErrors] = useState<FieldErrors>({});
   const [picker, setPicker] = useState("");
+  /** Roster pick id per personnel role (empty = manual / cleared). */
+  const [rosterPick, setRosterPick] = useState<Record<PersonnelRole, string>>({
+    applying: "",
+    supervising: "",
+    receiving_training: "",
+  });
 
   const pesticides = useMemo(() => catalog.filter((p) => p.kind === "pesticide"), [catalog]);
   const devices = useMemo(() => catalog.filter((p) => p.kind === "device"), [catalog]);
@@ -35,6 +49,22 @@ export function NewLogForm({ catalog, onSave }: Props) {
     setErrors({});
     setLog((prev) => ({ ...prev, products: [...prev.products, line] }));
     setPicker("");
+  }
+
+  function pickFromRoster(role: PersonnelRole, personId: string) {
+    setRosterPick((prev) => ({ ...prev, [role]: personId }));
+    if (!personId) return;
+    const person = people.find((p) => p.id === personId);
+    if (!person) return;
+    setErrors({});
+    setLog((prev) => ({
+      ...prev,
+      personnel: prev.personnel.map((row) =>
+        row.role === role
+          ? { ...row, name: person.name, licenseNumber: person.licenseNumber }
+          : row,
+      ),
+    }));
   }
 
   function submit(e: FormEvent) {
@@ -347,54 +377,90 @@ export function NewLogForm({ catalog, onSave }: Props) {
       <section className="section">
         <h2>People and licenses</h2>
         <p className="hint">
-          Name and license number of the person(s) applying, supervising, and receiving training.
+          Three separate roster picks (applying / supervising / receiving training) so they can diverge
+          per stop. Role tags on the People list are defaults only (tagged names sort first). Picking
+          fills name and license #; thin manual override stays available.
         </p>
-        {log.personnel.map((person, idx) => (
-          <div className="card" key={person.role}>
-            <strong>
-              {person.role === "applying"
-                ? "Applying"
-                : person.role === "supervising"
-                  ? "Supervising"
-                  : "Receiving training"}
-              {person.role === "applying" ? <span className="req"> *</span> : " (if any)"}
-            </strong>
-            <label className="field">
-              Name
-              <input
-                value={person.name}
-                onChange={(e) => {
-                  const personnel = log.personnel.map((x, i) =>
-                    i === idx ? { ...x, name: e.target.value } : x,
-                  );
-                  patch({ personnel });
-                }}
-                required={person.role === "applying"}
-                aria-required={person.role === "applying"}
-              />
-              {person.role === "applying" && errors.applyingName && (
-                <span className="error">{errors.applyingName}</span>
-              )}
-            </label>
-            <label className="field">
-              License number
-              <input
-                value={person.licenseNumber}
-                onChange={(e) => {
-                  const personnel = log.personnel.map((x, i) =>
-                    i === idx ? { ...x, licenseNumber: e.target.value } : x,
-                  );
-                  patch({ personnel });
-                }}
-                required={person.role === "applying"}
-                aria-required={person.role === "applying"}
-              />
-              {person.role === "applying" && errors.applyingLicense && (
-                <span className="error">{errors.applyingLicense}</span>
-              )}
-            </label>
-          </div>
-        ))}
+        {people.length === 0 && (
+          <p className="hint">Roster is empty — add techs in the People tab, or type name and license below.</p>
+        )}
+        {log.personnel.map((person, idx) => {
+          const suggestions = peopleForRole(people, person.role);
+          const tagged = suggestions.filter((p) => p.roleTags.includes(person.role));
+          const rest = suggestions.filter((p) => !p.roleTags.includes(person.role));
+          return (
+            <div className="card" key={person.role}>
+              <strong>
+                {ROLE_TITLE[person.role]}
+                {person.role === "applying" ? <span className="req"> *</span> : " (if any)"}
+              </strong>
+              <label className="field">
+                Pick from roster
+                <select
+                  value={rosterPick[person.role]}
+                  onChange={(e) => pickFromRoster(person.role, e.target.value)}
+                  disabled={people.length === 0}
+                >
+                  <option value="">{people.length === 0 ? "No roster yet…" : "Select a tech…"}</option>
+                  {tagged.length > 0 && (
+                    <optgroup label={`Default ${ROLE_TITLE[person.role].toLowerCase()}`}>
+                      {tagged.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} · {p.licenseNumber}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {rest.length > 0 && (
+                    <optgroup label="Other roster">
+                      {rest.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} · {p.licenseNumber}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+              </label>
+              <label className="field">
+                Name
+                <input
+                  value={person.name}
+                  onChange={(e) => {
+                    setRosterPick((prev) => ({ ...prev, [person.role]: "" }));
+                    const personnel = log.personnel.map((x, i) =>
+                      i === idx ? { ...x, name: e.target.value } : x,
+                    );
+                    patch({ personnel });
+                  }}
+                  required={person.role === "applying"}
+                  aria-required={person.role === "applying"}
+                />
+                {person.role === "applying" && errors.applyingName && (
+                  <span className="error">{errors.applyingName}</span>
+                )}
+              </label>
+              <label className="field">
+                License number
+                <input
+                  value={person.licenseNumber}
+                  onChange={(e) => {
+                    setRosterPick((prev) => ({ ...prev, [person.role]: "" }));
+                    const personnel = log.personnel.map((x, i) =>
+                      i === idx ? { ...x, licenseNumber: e.target.value } : x,
+                    );
+                    patch({ personnel });
+                  }}
+                  required={person.role === "applying"}
+                  aria-required={person.role === "applying"}
+                />
+                {person.role === "applying" && errors.applyingLicense && (
+                  <span className="error">{errors.applyingLicense}</span>
+                )}
+              </label>
+            </div>
+          );
+        })}
       </section>
 
       <section className="section">

@@ -37,7 +37,7 @@
 
 .tabs {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   border-bottom: 1px solid var(--line);
   background: #f6f4ea;
   position: sticky;
@@ -49,9 +49,9 @@
   min-height: var(--tap);
   border: 0;
   background: transparent;
-  padding: 0.6rem 0.4rem;
+  padding: 0.6rem 0.25rem;
   font-weight: 600;
-  font-size: 0.82rem;
+  font-size: 0.72rem;
 }
 
 .tabs button.active {
@@ -218,3 +218,56 @@ label.field {
   .app { box-shadow: none; max-width: none; }
   .main { padding: 0; }
 }
+
+.banner-due {
+  background: #f8e4e0;
+  color: #5c2a22;
+  border-bottom-color: #e0b6ae;
+}
+
+.banner-due strong { display: block; margin-bottom: 0.25rem; }
+
+.warn-list {
+  margin: 0.35rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.8rem;
+}
+
+.warn-list li { margin-bottom: 0.2rem; }
+
+.card-warn-soon {
+  border-color: #d4b86a;
+  background: #fffbf0;
+}
+
+.card-warn-overdue {
+  border-color: #c97a70;
+  background: #fff6f4;
+}
+
+.fieldset {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.55rem 0.7rem 0.35rem;
+  margin: 0 0 0.7rem;
+}
+
+.fieldset legend {
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 0 0.25rem;
+}
+
+.linkish {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--brand-2);
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+  min-height: auto;
+  font-size: inherit;
+}
+
+.chip + .chip { margin-left: 0.2rem; }

@@ -45,6 +45,19 @@ export interface Personnel {
   licenseNumber: string;
 }
 
+/** Office-managed tech roster (v1.1). Separate from application-log personnel rows. */
+export interface Person {
+  id: string;
+  name: string;
+  licenseNumber: string;
+  /** Default role tags only (multi-select). Each log still has three separate picks. */
+  roleTags: PersonnelRole[];
+  /** License expiry as device-local YYYY-MM-DD. */
+  licenseExpiry: string;
+  /** Optional CE due date as device-local YYYY-MM-DD. */
+  ceDueDate: string;
+}
+
 export interface TermiteExtras {
   /** Area treated in sq ft. Not required for baits. */
   areaTreatedSqFt: string;
@@ -83,4 +96,4 @@ export interface ApplicationLog {
   termite: TermiteExtras;
 }
 
-export type Screen = "new" | "history" | "products" | "export";
+export type Screen = "new" | "history" | "products" | "people" | "export";

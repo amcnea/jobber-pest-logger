@@ -1,4 +1,5 @@
 import { logHasExampleProducts } from "./catalog";
+import { localDateYmd } from "./dates";
 import { newId } from "./ids";
 import type { ApplicationLog, AppliedProduct, ShopProduct, TermiteExtras } from "./types";
 
@@ -37,13 +38,6 @@ export function productFromCatalog(catalog: ShopProduct[], catalogId: string): A
     mixedUnit: "gal",
     deviceCount: product.kind === "device" ? "1" : "",
   };
-}
-
-function localDateYmd(d = new Date()): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
 }
 
 export function emptyLog(): ApplicationLog {
