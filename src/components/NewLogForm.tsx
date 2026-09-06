@@ -1,6 +1,13 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { AMOUNT_UNITS, catalogPickerLabel, productEpaCaption } from "../catalog";
-import { emptyLog, productFromCatalog, validateLog, withSaveFlags, type FieldErrors } from "../formDefaults";
+import {
+  emptyLog,
+  productFromCatalog,
+  rosterPicksForPersonnel,
+  validateLog,
+  withSaveFlags,
+  type FieldErrors,
+} from "../formDefaults";
 import { peopleForRole } from "../storage";
 import type { ApplicationLog, AppliedProduct, Person, PersonnelRole, ShopProduct, ShopSettings } from "../types";
 
@@ -8,6 +15,8 @@ interface Props {
   catalog: ShopProduct[];
   people: Person[];
   settings: ShopSettings;
+  /** Prefill from History ("Log again here" / "Duplicate last stop"). */
+  initialDraft?: ApplicationLog | null;
   onSave: (log: ApplicationLog) => boolean;
 }
 
@@ -17,16 +26,14 @@ const ROLE_TITLE: Record<PersonnelRole, string> = {
   receiving_training: "Receiving training",
 };
 
-export function NewLogForm({ catalog, people, settings, onSave }: Props) {
-  const [log, setLog] = useState<ApplicationLog>(() => emptyLog(settings));
+export function NewLogForm({ catalog, people, settings, initialDraft = null, onSave }: Props) {
+  const [log, setLog] = useState<ApplicationLog>(() => initialDraft ?? emptyLog(settings));
   const [errors, setErrors] = useState<FieldErrors>({});
   const [picker, setPicker] = useState("");
   /** Roster pick id per personnel role (empty = manual / cleared). */
-  const [rosterPick, setRosterPick] = useState<Record<PersonnelRole, string>>({
-    applying: "",
-    supervising: "",
-    receiving_training: "",
-  });
+  const [rosterPick, setRosterPick] = useState<Record<PersonnelRole, string>>(() =>
+    rosterPicksForPersonnel((initialDraft ?? emptyLog(settings)).personnel, people),
+  );
 
   const pesticides = useMemo(() => catalog.filter((p) => p.kind === "pesticide"), [catalog]);
   const devices = useMemo(() => catalog.filter((p) => p.kind === "device"), [catalog]);

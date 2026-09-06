@@ -1,7 +1,16 @@
 import { logHasExampleProducts } from "./catalog";
 import { localDateYmd } from "./dates";
 import { newId } from "./ids";
-import type { ApplicationLog, AppliedProduct, ShopProduct, ShopSettings, TermiteExtras } from "./types";
+import type {
+  ApplicationLog,
+  AppliedProduct,
+  Person,
+  Personnel,
+  PersonnelRole,
+  ShopProduct,
+  ShopSettings,
+  TermiteExtras,
+} from "./types";
 
 export function emptyTermite(): TermiteExtras {
   return {
@@ -107,5 +116,104 @@ export function withSaveFlags(log: ApplicationLog): ApplicationLog {
     ...log,
     createdAt: new Date().toISOString(),
     sampleData: logHasExampleProducts(log.products),
+  };
+}
+
+
+/** First roster person tagged for each role; empty rows when no default. Does not invent people. */
+export function personnelFromRosterDefaults(people: Person[]): Personnel[] {
+  const roles: PersonnelRole[] = ["applying", "supervising", "receiving_training"];
+  return roles.map((role) => {
+    const tagged = people.find((p) => p.roleTags.includes(role));
+    if (tagged) {
+      return { role, name: tagged.name, licenseNumber: tagged.licenseNumber };
+    }
+    return { role, name: "", licenseNumber: "" };
+  });
+}
+
+/** Match filled personnel rows back to roster ids for the New log pickers. */
+export function rosterPicksForPersonnel(
+  personnel: Personnel[],
+  people: Person[],
+): Record<PersonnelRole, string> {
+  const picks: Record<PersonnelRole, string> = {
+    applying: "",
+    supervising: "",
+    receiving_training: "",
+  };
+  for (const row of personnel) {
+    if (!row.name.trim() && !row.licenseNumber.trim()) continue;
+    const match = people.find(
+      (p) => p.name === row.name && p.licenseNumber === row.licenseNumber,
+    );
+    if (match) picks[row.role] = match.id;
+  }
+  return picks;
+}
+
+/**
+ * "Log again here" — property fields only. New id/createdAt, dateUsed = today.
+ * Does not invent products, pest, termite, or people.
+ */
+export type PropertyPrefill = {
+  serviceAddress: string;
+  customerBillingName: string;
+  customerBillingAddress: string;
+  poleLocation: string;
+  jobberAddress: string;
+};
+
+export function draftLogAgainHere(
+  property: PropertyPrefill,
+  settings?: ShopSettings | null,
+): ApplicationLog {
+  const base = emptyLog(settings);
+  return {
+    ...base,
+    serviceAddress: property.serviceAddress === "(no service address)" ? "" : property.serviceAddress,
+    customerBillingName: property.customerBillingName,
+    customerBillingAddress: property.customerBillingAddress,
+    poleLocation: property.poleLocation,
+    jobberAddress: property.jobberAddress,
+    jobberJobNumber: "",
+    products: [],
+    targetPestOrPurpose: "",
+    isTermite: false,
+    termite: emptyTermite(),
+    personnel: [
+      { role: "applying", name: "", licenseNumber: "" },
+      { role: "supervising", name: "", licenseNumber: "" },
+      { role: "receiving_training", name: "", licenseNumber: "" },
+    ],
+  };
+}
+
+/**
+ * "Duplicate last stop" — copy products, pest, termite from most recent log at the address.
+ * New id/createdAt/dateUsed (today). Personnel from roster defaults or empty.
+ * Clears jobberJobNumber so the tech re-attaches; keeps jobberAddress when present.
+ */
+export function draftDuplicateLastStop(
+  last: ApplicationLog,
+  people: Person[],
+  settings?: ShopSettings | null,
+): ApplicationLog {
+  const base = emptyLog(settings);
+  const products = last.products.map((p) => ({ ...p, lineId: newId() }));
+  return {
+    ...base,
+    serviceAddress: last.serviceAddress,
+    customerBillingName: last.customerBillingName,
+    customerBillingAddress: last.customerBillingAddress,
+    poleLocation: last.poleLocation,
+    jobberAddress: last.jobberAddress,
+    jobberJobNumber: "",
+    products,
+    targetPestOrPurpose: last.targetPestOrPurpose,
+    isTermite: last.isTermite,
+    termite: { ...last.termite },
+    personnel: personnelFromRosterDefaults(people),
+    sampleData: false,
   };
 }
