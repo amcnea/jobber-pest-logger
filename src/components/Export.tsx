@@ -153,7 +153,7 @@ export function Export({
           Filter by <strong>date used</strong> (device-local YYYY-MM-DD). CSV and PDF use the filtered
           set. Leave both blank for all logs on this device.
         </p>
-        <div className="row">
+        <div className="row export-date-row">
           <label className="field">
             From
             <input
@@ -167,7 +167,7 @@ export function Export({
             <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
           </label>
         </div>
-        <div className="row">
+        <div className="row export-date-row">
           <button type="button" className="btn btn-secondary" onClick={applyThisMonth}>
             This month
           </button>
@@ -197,43 +197,41 @@ export function Export({
           .
         </p>
         <p className="hint">Exports stay on your machine. Nothing is uploaded.</p>
-        <button
-          type="button"
-          className="btn btn-primary"
-          disabled={filtered.length === 0 || exportBlocked}
-          onClick={() => {
-            if (exportBlocked) return;
-            downloadCsv(filtered, shopName || undefined);
-          }}
-        >
-          Download Texas TDA CSV
-        </button>
-        <div style={{ height: "0.6rem" }} />
-        <button
-          type="button"
-          className="btn btn-secondary"
-          disabled={filtered.length === 0 || exportBlocked}
-          onClick={() => {
-            void handlePdf();
-          }}
-          style={{ width: "100%" }}
-        >
-          Download PDF
-        </button>
-        {pdfError && (
-          <p className="hint" role="alert">
-            {pdfError}
-          </p>
-        )}
-        <div style={{ height: "0.6rem" }} />
-        <button
-          type="button"
-          className="btn btn-secondary no-print"
-          onClick={() => window.print()}
-          style={{ width: "100%" }}
-        >
-          Print this page
-        </button>
+        <div className="export-actions">
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={filtered.length === 0 || exportBlocked}
+            onClick={() => {
+              if (exportBlocked) return;
+              downloadCsv(filtered, shopName || undefined);
+            }}
+          >
+            Download Texas TDA CSV
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={filtered.length === 0 || exportBlocked}
+            onClick={() => {
+              void handlePdf();
+            }}
+          >
+            Download PDF
+          </button>
+          {pdfError && (
+            <p className="hint" role="alert">
+              {pdfError}
+            </p>
+          )}
+          <button
+            type="button"
+            className="btn btn-secondary no-print"
+            onClick={() => window.print()}
+          >
+            Print this page
+          </button>
+        </div>
       </div>
 
       <section className="print-logs">

@@ -376,3 +376,32 @@ label.field {
 .nag-block .btn {
   margin-top: 0.45rem;
 }
+
+.export-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.export-actions .btn {
+  width: 100%;
+  min-height: var(--tap);
+  touch-action: manipulation;
+}
+
+.export-actions .btn-secondary {
+  width: 100%;
+}
+
+.export-date-row .btn {
+  width: 100%;
+  min-height: var(--tap);
+  touch-action: manipulation;
+}
+
+/* Phone viewport: stack export date filters / presets */
+@media (max-width: 480px) {
+  .export-date-row {
+    grid-template-columns: 1fr;
+  }
+}
