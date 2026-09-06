@@ -1,7 +1,11 @@
 import { useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { LAWGICAL_DISCLAIMER } from "../disclaimer";
 import {
   applyBackup,
+  backupNagMessage,
   downloadBackup,
+  formatLastBackupLabel,
+  loadLastBackupAt,
   parseBackup,
 } from "../storage";
 import type { ApplicationLog, Person, ShopProduct, ShopSettings } from "../types";
@@ -22,7 +26,11 @@ export function Settings({ settings, onSave, onRestored }: Props) {
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [backupMsg, setBackupMsg] = useState<string | null>(null);
   const [backupError, setBackupError] = useState<string | null>(null);
+  const [lastBackupAt, setLastBackupAt] = useState<string | null>(() => loadLastBackupAt());
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const lastBackupLabel = formatLastBackupLabel(lastBackupAt);
+  const nag = backupNagMessage(lastBackupAt);
 
   function submit(e: FormEvent) {
     e.preventDefault();
@@ -147,6 +155,14 @@ export function Settings({ settings, onSave, onRestored }: Props) {
         Download one JSON file with logs, catalog, people, settings, and a version stamp. Restore
         replaces everything on this device after you confirm. Invalid or garbage files are rejected.
       </p>
+      <p className="hint" role="status">
+        {lastBackupLabel}
+      </p>
+      {nag && (
+        <p className="nag" role="status">
+          {nag}
+        </p>
+      )}
       <div className="card">
         <button
           type="button"
@@ -154,6 +170,7 @@ export function Settings({ settings, onSave, onRestored }: Props) {
           onClick={() => {
             setBackupError(null);
             downloadBackup();
+            setLastBackupAt(loadLastBackupAt());
             setBackupMsg("Backup downloaded.");
           }}
         >
@@ -188,6 +205,8 @@ export function Settings({ settings, onSave, onRestored }: Props) {
           </p>
         )}
       </div>
+
+      <p className="disclaimer">{LAWGICAL_DISCLAIMER}</p>
     </div>
   );
 }

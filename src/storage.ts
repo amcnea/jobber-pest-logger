@@ -420,6 +420,10 @@ export function peopleForRole(people: Person[], role: PersonnelRole): Person[] {
 
 
 const SETTINGS_KEY = "jobber-pest-logger:settings:v1";
+const LAST_BACKUP_KEY = "jobber-pest-logger:last-backup:v1";
+
+/** Soft nag when never backed up or last backup older than this many days. */
+export const BACKUP_NAG_DAYS = 7;
 
 export const BACKUP_VERSION = "1.2";
 
@@ -490,6 +494,68 @@ export function buildBackup(): DeviceBackup {
   };
 }
 
+/** ISO timestamp of last successful backup download, or null if never. */
+export function loadLastBackupAt(): string | null {
+  try {
+    const raw = localStorage.getItem(LAST_BACKUP_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed === "string" && parsed.trim() && !Number.isNaN(Date.parse(parsed.trim()))) {
+      return parsed.trim();
+    }
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed) &&
+      typeof (parsed as { at?: unknown }).at === "string"
+    ) {
+      const at = (parsed as { at: string }).at.trim();
+      if (at && !Number.isNaN(Date.parse(at))) return at;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Record a successful backup download timestamp (device-local clock → ISO). */
+export function markLastBackupNow(now = new Date()): boolean {
+  try {
+    localStorage.setItem(LAST_BACKUP_KEY, JSON.stringify({ at: now.toISOString() }));
+    return true;
+  } catch (err) {
+    console.error("jobber-pest-logger: could not save last-backup stamp", err);
+    return false;
+  }
+}
+
+/** Device-local friendly label, e.g. "Last backup: Sep 5, 2026, 3:45 PM". */
+export function formatLastBackupLabel(iso: string | null): string {
+  if (!iso) return "Last backup: never";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "Last backup: unknown";
+  return `Last backup: ${d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`;
+}
+
+/**
+ * Soft nag copy when never backed up or older than BACKUP_NAG_DAYS.
+ * Returns null when backup is recent enough (no nag).
+ */
+export function backupNagMessage(iso: string | null, now = new Date()): string | null {
+  if (!iso) {
+    return "No backup on this device yet. Download a backup JSON when you can — soft reminder only, not blocking.";
+  }
+  const then = new Date(iso);
+  if (Number.isNaN(then.getTime())) {
+    return "Backup stamp looks invalid. Download a fresh backup when you can — soft reminder only.";
+  }
+  const ageDays = (now.getTime() - then.getTime()) / 86_400_000;
+  if (ageDays > BACKUP_NAG_DAYS) {
+    return `Last backup was more than ${BACKUP_NAG_DAYS} days ago. Consider downloading a fresh backup — soft reminder only, not blocking.`;
+  }
+  return null;
+}
+
 export function downloadBackup(): void {
   const backup = buildBackup();
   const blob = new Blob([JSON.stringify(backup, null, 2)], {
@@ -506,6 +572,7 @@ export function downloadBackup(): void {
   a.click();
   a.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  markLastBackupNow();
 }
 
 export type RestoreResult =

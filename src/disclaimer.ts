@@ -1,0 +1,3 @@
+/** Lawgical / compliance disclaimer — paste-as-is; do not shorten. */
+export const LAWGICAL_DISCLAIMER =
+  "This export is a Texas Structural Pest Control Service (SPCS) pesticide/device use-record aid based on 4 TAC § 7.144. The licensed shop and its responsible certified applicator are responsible for the accuracy of each record and for keeping records for at least two years on the business premises (or employer premises for noncommercial applicators) and producing them to the Texas Department of Agriculture on request. This tool is not legal advice, is not affiliated with or approved by TDA, and is not an official TDA form.";
