@@ -58,7 +58,7 @@ Does not add Jobber OAuth, SMS, Stripe, login, multi-state, or new TDA-required 
 
 - **Last backup stamp:** after a successful backup JSON download, the app stores a device-local timestamp under its own localStorage key (`jobber-pest-logger:last-backup:v1`). Settings and Export show **Last backup: …** in a device-local friendly format (or **never**).
 - **Soft nag:** if there is no backup yet, or the last backup is older than **7 days**, Settings and Export show a non-blocking reminder (banner/hint). Restore does not update the stamp — only a successful download does.
-- **Lawgical disclaimer (short):** Texas SPCS structural use-record aid; shop/applicator responsible for accuracy and 2-year on-premises retention; not legal advice; not TDA-approved. Shown on the Export screen (and Settings) and on PDF header/footer.
+- **Lawgical disclaimer (exact paste-as-is):** Texas SPCS pesticide/device use-record aid based on 4 TAC § 7.144; licensed shop and responsible certified applicator accountable for accuracy and at least 2-year on-premises retention (or employer premises for noncommercial); produce to TDA on request; not legal advice; not affiliated with or approved by TDA; not an official TDA form. Shown on Export (and Settings) and on PDF header/footer — full block, not shortened.
 
 Does not add Jobber OAuth, SMS, Stripe, login, sync, multi-state, GitHub Pages/workflow work, or new TDA-required fields.
 

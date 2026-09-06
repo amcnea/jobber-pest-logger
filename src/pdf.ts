@@ -1,6 +1,6 @@
 import { jsPDF } from "jspdf";
 import { epaExportText, EXAMPLE_EPA_LABEL, inferIsExample, logHasExampleProducts } from "./catalog";
-import { LAWGICAL_DISCLAIMER, LAWGICAL_DISCLAIMER_FOOTER } from "./disclaimer";
+import { LAWGICAL_DISCLAIMER } from "./disclaimer";
 import type { ApplicationLog } from "./types";
 
 function person(log: ApplicationLog, role: ApplicationLog["personnel"][number]["role"]) {
@@ -55,7 +55,7 @@ export function downloadPdf(logs: ApplicationLog[], shopName?: string): void {
   let y = 18;
 
   const addPageIfNeeded = (needed: number) => {
-    if (y + needed > 265) {
+    if (y + needed > 245) {
       doc.addPage();
       y = 18;
     }
@@ -158,14 +158,17 @@ export function downloadPdf(logs: ApplicationLog[], shopName?: string): void {
     y += 3;
   });
 
+  // Full Lawgical block also as a small footer on every page (exact text, not shortened).
   const pageCount = doc.getNumberOfPages();
   for (let i = 1; i <= pageCount; i++) {
     doc.setPage(i);
     doc.setFont("helvetica", "normal");
-    doc.setFontSize(7);
+    doc.setFontSize(6);
     doc.setTextColor(90);
-    const footerLines = doc.splitTextToSize(LAWGICAL_DISCLAIMER_FOOTER, maxWidth) as string[];
-    doc.text(footerLines, margin, 272);
+    const footerLines = doc.splitTextToSize(LAWGICAL_DISCLAIMER, maxWidth) as string[];
+    const footerH = footerLines.length * 3.2;
+    const footerY = 279 - 8 - footerH;
+    doc.text(footerLines, margin, Math.max(248, footerY), { lineHeightFactor: 1.15 });
     doc.setTextColor(0);
   }
 
