@@ -12,6 +12,7 @@ import type { ApplicationLog, Person, ShopProduct, ShopSettings } from "../types
 
 interface Props {
   settings: ShopSettings;
+  lastBackupAt: string | null;
   onSave: (settings: ShopSettings) => boolean;
   onRestored: (data: {
     logs: ApplicationLog[];
@@ -19,14 +20,20 @@ interface Props {
     people: Person[];
     settings: ShopSettings;
   }) => void;
+  onBackupStampChange: (iso: string | null) => void;
 }
 
-export function Settings({ settings, onSave, onRestored }: Props) {
+export function Settings({
+  settings,
+  lastBackupAt,
+  onSave,
+  onRestored,
+  onBackupStampChange,
+}: Props) {
   const [draft, setDraft] = useState<ShopSettings>(settings);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [backupMsg, setBackupMsg] = useState<string | null>(null);
   const [backupError, setBackupError] = useState<string | null>(null);
-  const [lastBackupAt, setLastBackupAt] = useState<string | null>(() => loadLastBackupAt());
   const fileRef = useRef<HTMLInputElement>(null);
 
   const lastBackupLabel = formatLastBackupLabel(lastBackupAt);
@@ -170,7 +177,7 @@ export function Settings({ settings, onSave, onRestored }: Props) {
           onClick={() => {
             setBackupError(null);
             downloadBackup();
-            setLastBackupAt(loadLastBackupAt());
+            onBackupStampChange(loadLastBackupAt());
             setBackupMsg("Backup downloaded.");
           }}
         >

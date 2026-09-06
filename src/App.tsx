@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Export } from "./components/Export";
+import { FirstRunChecklist } from "./components/FirstRunChecklist";
 import { History } from "./components/History";
 import { NewLogForm } from "./components/NewLogForm";
 import { People } from "./components/People";
@@ -14,10 +15,13 @@ import {
   deleteLog,
   deletePerson,
   deleteProduct,
+  getFirstRunSteps,
   loadCatalog,
+  loadLastBackupAt,
   loadLogs,
   loadPeople,
   loadSettings,
+  removeExampleProductsFromCatalog,
   saveSettings,
   upsertLog,
   upsertPerson,
@@ -33,12 +37,17 @@ export default function App() {
   const [catalog, setCatalog] = useState<ShopProduct[]>(() => loadCatalog());
   const [people, setPeople] = useState<Person[]>(() => loadPeople());
   const [settings, setSettings] = useState<ShopSettings>(() => loadSettings());
+  const [lastBackupAt, setLastBackupAt] = useState<string | null>(() => loadLastBackupAt());
   const [storageError, setStorageError] = useState<string | null>(null);
   /** Prefill for New log (from History). Remount via draftKey when set. */
   const [draftSeed, setDraftSeed] = useState<ApplicationLog | null>(null);
   const [draftKey, setDraftKey] = useState(0);
 
   const peopleWarnings = useMemo(() => collectPeopleWarnings(people), [people]);
+  const firstRunSteps = useMemo(
+    () => getFirstRunSteps({ settings, people, catalog, lastBackupAt }),
+    [settings, people, catalog, lastBackupAt],
+  );
   const isEditing =
     draftSeed !== null && logs.some((l) => l.id === draftSeed.id);
 
@@ -98,6 +107,17 @@ export default function App() {
     setStorageError(result.saved ? null : "Could not update the shop list on this device.");
   }
 
+  function handleRemoveExampleProducts(): boolean {
+    const result = removeExampleProductsFromCatalog();
+    setCatalog(result.catalog);
+    if (!result.saved) {
+      setStorageError("Could not update the shop list on this device.");
+      return false;
+    }
+    setStorageError(null);
+    return true;
+  }
+
   function handleUpsertPerson(person: Person): boolean {
     const result = upsertPerson(person);
     setPeople(result.people);
@@ -146,9 +166,11 @@ export default function App() {
         <h1>Jobber Pest Logger</h1>
       </header>
       <div className="banner">
-        v1.3. Property book + edit saved log / log-again / duplicate-last-stop from History. Schema locked
-        to 4 TAC § 7.144. Texas SPCS shops. Example seeds export as &quot;example / not a real EPA number&quot;.
+        v1.4. First-run checklist + example-seed export gate. Property book + edit saved log. Schema
+        locked to 4 TAC § 7.144. Texas SPCS shops. Example seeds must be cleared before real CSV/PDF
+        export.
       </div>
+      <FirstRunChecklist steps={firstRunSteps} onGo={setScreen} />
       {peopleWarnings.length > 0 && (
         <div className="banner banner-due" role="status">
           <strong>License / CE reminders</strong> (in-app only; not TDA-required; no SMS). License:
@@ -236,15 +258,35 @@ export default function App() {
           />
         )}
         {screen === "products" && (
-          <Products catalog={catalog} onUpsert={handleUpsertProduct} onDelete={handleDeleteProduct} />
+          <Products
+            catalog={catalog}
+            onUpsert={handleUpsertProduct}
+            onDelete={handleDeleteProduct}
+            onRemoveExamples={handleRemoveExampleProducts}
+          />
         )}
         {screen === "people" && (
           <People people={people} onUpsert={handleUpsertPerson} onDelete={handleDeletePerson} />
         )}
         {screen === "settings" && (
-          <Settings settings={settings} onSave={handleSaveSettings} onRestored={handleRestored} />
+          <Settings
+            settings={settings}
+            lastBackupAt={lastBackupAt}
+            onSave={handleSaveSettings}
+            onRestored={handleRestored}
+            onBackupStampChange={setLastBackupAt}
+          />
         )}
-        {screen === "export" && <Export logs={logs} settings={settings} />}
+        {screen === "export" && (
+          <Export
+            logs={logs}
+            catalog={catalog}
+            settings={settings}
+            lastBackupAt={lastBackupAt}
+            onRemoveExamples={handleRemoveExampleProducts}
+            onGo={(s) => setScreen(s)}
+          />
+        )}
       </main>
     </div>
   );

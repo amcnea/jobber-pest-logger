@@ -63,6 +63,21 @@ Does not add Jobber OAuth, SMS, Stripe, login, multi-state, or new TDA-required 
 
 Does not add Jobber OAuth, SMS, Stripe, login, sync, multi-state, GitHub Pages/workflow work, or new TDA-required fields.
 
+## First-run checklist + example-seed export gate
+
+Soft in-app **first-run checklist** (banner above the tabs) marks setup steps from existing device data — not a hard gate on logging:
+
+1. **Set shop** — Settings has a shop name and/or TPCL number
+2. **Add people** — roster length &gt; 0
+3. **Add products** — catalog has at least one non-example product
+4. **Backup** — last-backup stamp present (after a successful backup JSON download)
+
+Incomplete steps link into Settings / People / Products. When every step is done, the banner hides.
+
+**Example seeds before real export:** CSV and PDF stay disabled while any example / SAMPLE product remains on the shop catalog **or** any saved log still references an example product. Products and Export offer **Remove example products from catalog** (logs are not auto-stripped — edit or delete those History rows). Logging stays allowed throughout.
+
+Keeps the Lawgical / SPCS disclaimer. Does not add Jobber OAuth, SMS, Stripe, login, sync, multi-state, or GitHub Pages work.
+
 ## Shop product list
 
 Stored in localStorage under a separate key from logs. The office adds the pesticides and devices this shop actually uses.

@@ -1,4 +1,4 @@
-import { EXAMPLE_SEEDS, inferIsExample } from "./catalog";
+import { EXAMPLE_SEEDS, inferIsExample, isExampleShopProduct } from "./catalog";
 import { newId } from "./ids";
 import type { ApplicationLog, AppliedProduct, Person, PersonnelRole, ShopProduct, ShopSettings } from "./types";
 
@@ -317,6 +317,16 @@ export function deleteProduct(id: string): { catalog: ShopProduct[]; saved: bool
   const next = current.filter((p) => p.id !== id);
   const saved = saveCatalog(next);
   return { catalog: saved ? next : current, saved };
+}
+
+/** Remove all example / SAMPLE seeds from the shop catalog (logs untouched). */
+export function removeExampleProductsFromCatalog(): { catalog: ShopProduct[]; saved: boolean; removed: number } {
+  const current = loadCatalog();
+  const next = current.filter((p) => !isExampleShopProduct(p));
+  const removed = current.length - next.length;
+  if (removed === 0) return { catalog: current, saved: true, removed: 0 };
+  const saved = saveCatalog(next);
+  return { catalog: saved ? next : current, saved, removed: saved ? removed : 0 };
 }
 
 export function emptyShopProduct(): ShopProduct {
@@ -687,4 +697,41 @@ export function applyBackup(backup: DeviceBackup): boolean {
     console.error("jobber-pest-logger: could not roll back failed backup restore", err);
   }
   return false;
+}
+
+/** Soft first-run setup steps (not a hard gate on logging). */
+export interface FirstRunStep {
+  id: "shop" | "people" | "products" | "backup";
+  label: string;
+  done: boolean;
+  screen: "settings" | "people" | "products" | "settings";
+}
+
+/**
+ * Mark first-run checklist steps from existing localStorage-backed state.
+ * Shop: settings has name and/or TPCL. People: roster length > 0.
+ * Products: at least one non-example catalog row. Backup: last-backup stamp present.
+ */
+export function getFirstRunSteps(input: {
+  settings: ShopSettings;
+  people: Person[];
+  catalog: ShopProduct[];
+  lastBackupAt: string | null;
+}): FirstRunStep[] {
+  const shopDone =
+    input.settings.shopName.trim().length > 0 || input.settings.shopTpclNumber.trim().length > 0;
+  const peopleDone = input.people.length > 0;
+  const productsDone = input.catalog.some((p) => !isExampleShopProduct(p));
+  const backupDone = typeof input.lastBackupAt === "string" && input.lastBackupAt.trim().length > 0;
+
+  return [
+    { id: "shop", label: "Set shop name / TPCL", done: shopDone, screen: "settings" },
+    { id: "people", label: "Add people to the roster", done: peopleDone, screen: "people" },
+    { id: "products", label: "Add real (non-example) products", done: productsDone, screen: "products" },
+    { id: "backup", label: "Download a backup", done: backupDone, screen: "settings" },
+  ];
+}
+
+export function firstRunIncomplete(steps: FirstRunStep[]): boolean {
+  return steps.some((s) => !s.done);
 }
