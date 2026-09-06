@@ -2,6 +2,12 @@ import { useMemo, useState } from "react";
 import { productEpaCaption } from "../catalog";
 import { downloadCsv } from "../csv";
 import { filterLogsByDateUsed, monthRangeLocal } from "../dates";
+import { LAWGICAL_DISCLAIMER } from "../disclaimer";
+import {
+  backupNagMessage,
+  formatLastBackupLabel,
+  loadLastBackupAt,
+} from "../storage";
 import type { ApplicationLog, ShopSettings } from "../types";
 
 interface Props {
@@ -13,6 +19,9 @@ export function Export({ logs, settings }: Props) {
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const lastBackupAt = useMemo(() => loadLastBackupAt(), []);
+  const lastBackupLabel = formatLastBackupLabel(lastBackupAt);
+  const nag = backupNagMessage(lastBackupAt);
 
   const filtered = useMemo(
     () => filterLogsByDateUsed(logs, dateFrom, dateTo),
@@ -58,6 +67,15 @@ export function Export({ logs, settings }: Props) {
         not TDA-required and are omitted. Texas only.
       </p>
       <p className="hint">Records are kept 2 years. This app does not enforce retention.</p>
+      <p className="disclaimer">{LAWGICAL_DISCLAIMER}</p>
+      <p className="hint" role="status">
+        {lastBackupLabel}
+      </p>
+      {nag && (
+        <p className="nag" role="status">
+          {nag} Use Settings → Download backup JSON.
+        </p>
+      )}
 
       <div className="card">
         <h3>Date range</h3>

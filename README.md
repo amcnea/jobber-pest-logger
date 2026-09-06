@@ -54,6 +54,14 @@ App lifts an optional draft into `NewLogForm` (remount via key) so History actio
 
 Does not add Jobber OAuth, SMS, Stripe, login, multi-state, or new TDA-required fields.
 
+## Backup nag + Lawgical disclaimer
+
+- **Last backup stamp:** after a successful backup JSON download, the app stores a device-local timestamp under its own localStorage key (`jobber-pest-logger:last-backup:v1`). Settings and Export show **Last backup: …** in a device-local friendly format (or **never**).
+- **Soft nag:** if there is no backup yet, or the last backup is older than **7 days**, Settings and Export show a non-blocking reminder (banner/hint). Restore does not update the stamp — only a successful download does.
+- **Lawgical disclaimer (short):** Texas SPCS structural use-record aid; shop/applicator responsible for accuracy and 2-year on-premises retention; not legal advice; not TDA-approved. Shown on the Export screen (and Settings) and on PDF header/footer.
+
+Does not add Jobber OAuth, SMS, Stripe, login, sync, multi-state, GitHub Pages/workflow work, or new TDA-required fields.
+
 ## Shop product list
 
 Stored in localStorage under a separate key from logs. The office adds the pesticides and devices this shop actually uses.

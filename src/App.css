@@ -288,3 +288,23 @@ label.field {
 .property-meta {
   margin-bottom: 0.35rem;
 }
+
+
+.nag {
+  background: var(--warn-bg);
+  color: #5c4a1f;
+  font-size: 0.82rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: var(--radius);
+  border: 1px solid #e2d3a8;
+  margin-bottom: 0.7rem;
+}
+
+.disclaimer {
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.35;
+  margin: 0.75rem 0 1rem;
+  padding: 0.55rem 0.7rem;
+  border-left: 3px solid var(--line);
+}

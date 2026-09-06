@@ -1,5 +1,6 @@
 import { jsPDF } from "jspdf";
 import { epaExportText, EXAMPLE_EPA_LABEL, inferIsExample, logHasExampleProducts } from "./catalog";
+import { LAWGICAL_DISCLAIMER, LAWGICAL_DISCLAIMER_FOOTER } from "./disclaimer";
 import type { ApplicationLog } from "./types";
 
 function person(log: ApplicationLog, role: ApplicationLog["personnel"][number]["role"]) {
@@ -54,7 +55,7 @@ export function downloadPdf(logs: ApplicationLog[], shopName?: string): void {
   let y = 18;
 
   const addPageIfNeeded = (needed: number) => {
-    if (y + needed > 270) {
+    if (y + needed > 265) {
       doc.addPage();
       y = 18;
     }
@@ -75,10 +76,14 @@ export function downloadPdf(logs: ApplicationLog[], shopName?: string): void {
   }
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
-  const disclaimer =
-    "Jobber Pest Logger v1.2. Columns follow 4 TAC § 7.144(a) for Texas SPCS shops. Termite extras follow § 7.144(b) when the stop is termite work. Keep records 2 years. Not a substitute for TDA counsel.";
+  const disclaimer = LAWGICAL_DISCLAIMER;
   addPageIfNeeded(wrappedHeight(doc, disclaimer, maxWidth));
   y = wrap(doc, disclaimer, margin, y, maxWidth);
+  y += 2;
+  const schemaNote =
+    "Columns follow 4 TAC § 7.144(a) for Texas SPCS shops. Termite extras follow § 7.144(b) when the stop is termite work.";
+  addPageIfNeeded(wrappedHeight(doc, schemaNote, maxWidth));
+  y = wrap(doc, schemaNote, margin, y, maxWidth);
   if (hasExamples) {
     const exampleNote = `Some products are example catalog seeds. Those rows are labeled "${EXAMPLE_EPA_LABEL}" and are not EPA registration numbers.`;
     y += 2;
@@ -152,6 +157,17 @@ export function downloadPdf(logs: ApplicationLog[], shopName?: string): void {
     }
     y += 3;
   });
+
+  const pageCount = doc.getNumberOfPages();
+  for (let i = 1; i <= pageCount; i++) {
+    doc.setPage(i);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7);
+    doc.setTextColor(90);
+    const footerLines = doc.splitTextToSize(LAWGICAL_DISCLAIMER_FOOTER, maxWidth) as string[];
+    doc.text(footerLines, margin, 272);
+    doc.setTextColor(0);
+  }
 
   doc.save("texas-tda-application-logs.pdf");
 }
