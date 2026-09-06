@@ -271,3 +271,20 @@ label.field {
 }
 
 .chip + .chip { margin-left: 0.2rem; }
+
+
+.property-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  margin: 0.35rem 0 0.75rem;
+}
+
+.property-actions .btn {
+  font-size: 0.78rem;
+  padding: 0.45rem 0.5rem;
+}
+
+.property-meta {
+  margin-bottom: 0.35rem;
+}

@@ -5,6 +5,10 @@ import { NewLogForm } from "./components/NewLogForm";
 import { People } from "./components/People";
 import { Products } from "./components/Products";
 import { Settings } from "./components/Settings";
+import {
+  draftDuplicateLastStop,
+  draftLogAgainHere,
+} from "./formDefaults";
 import { collectPeopleWarnings } from "./peopleWarnings";
 import {
   deleteLog,
@@ -18,6 +22,7 @@ import {
   upsertLog,
   upsertPerson,
   upsertProduct,
+  type PropertyBookEntry,
 } from "./storage";
 import type { ApplicationLog, Person, Screen, ShopProduct, ShopSettings } from "./types";
 import "./App.css";
@@ -29,8 +34,17 @@ export default function App() {
   const [people, setPeople] = useState<Person[]>(() => loadPeople());
   const [settings, setSettings] = useState<ShopSettings>(() => loadSettings());
   const [storageError, setStorageError] = useState<string | null>(null);
+  /** Prefill for New log (from History). Remount via draftKey when set. */
+  const [draftSeed, setDraftSeed] = useState<ApplicationLog | null>(null);
+  const [draftKey, setDraftKey] = useState(0);
 
   const peopleWarnings = useMemo(() => collectPeopleWarnings(people), [people]);
+
+  function openNewLog(draft: ApplicationLog | null) {
+    setDraftSeed(draft);
+    setDraftKey((k) => k + 1);
+    setScreen("new");
+  }
 
   function handleSave(log: ApplicationLog): boolean {
     const result = upsertLog(log);
@@ -40,6 +54,7 @@ export default function App() {
       return false;
     }
     setStorageError(null);
+    setDraftSeed(null);
     setScreen("history");
     return true;
   }
@@ -49,6 +64,14 @@ export default function App() {
     const result = deleteLog(id);
     setLogs(result.logs);
     setStorageError(result.saved ? null : "Could not update saved logs on this device.");
+  }
+
+  function handleLogAgainHere(property: PropertyBookEntry) {
+    openNewLog(draftLogAgainHere(property, settings));
+  }
+
+  function handleDuplicateLastStop(property: PropertyBookEntry) {
+    openNewLog(draftDuplicateLastStop(property.lastLog, people, settings));
   }
 
   function handleUpsertProduct(product: ShopProduct): boolean {
@@ -116,7 +139,7 @@ export default function App() {
         <h1>Jobber Pest Logger</h1>
       </header>
       <div className="banner">
-        v1.2. Shop settings + export date range + device backup. Schema locked to 4 TAC § 7.144.
+        v1.3. Property book + log-again / duplicate-last-stop from History. Schema locked to 4 TAC § 7.144.
         Texas SPCS shops. Example seeds export as &quot;example / not a real EPA number&quot;.
       </div>
       {peopleWarnings.length > 0 && (
@@ -141,7 +164,15 @@ export default function App() {
         </div>
       )}
       <nav className="tabs">
-        <button type="button" className={screen === "new" ? "active" : ""} onClick={() => setScreen("new")}>
+        <button
+          type="button"
+          className={screen === "new" ? "active" : ""}
+          onClick={() => {
+            // Fresh blank form when leaving History prefill; leave an in-progress blank alone.
+            if (screen === "new" && draftSeed === null) return;
+            openNewLog(null);
+          }}
+        >
           New log
         </button>
         <button
@@ -178,9 +209,23 @@ export default function App() {
       </nav>
       <main className="main">
         {screen === "new" && (
-          <NewLogForm catalog={catalog} people={people} settings={settings} onSave={handleSave} />
+          <NewLogForm
+            key={draftKey}
+            catalog={catalog}
+            people={people}
+            settings={settings}
+            initialDraft={draftSeed}
+            onSave={handleSave}
+          />
         )}
-        {screen === "history" && <History logs={logs} onDelete={handleDelete} />}
+        {screen === "history" && (
+          <History
+            logs={logs}
+            onDelete={handleDelete}
+            onLogAgainHere={handleLogAgainHere}
+            onDuplicateLastStop={handleDuplicateLastStop}
+          />
+        )}
         {screen === "products" && (
           <Products catalog={catalog} onUpsert={handleUpsertProduct} onDelete={handleDeleteProduct} />
         )}

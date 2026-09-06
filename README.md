@@ -41,6 +41,19 @@ Device-local shop settings under a **separate** localStorage key (`jobber-pest-l
 
 Does not add Jobber OAuth, SMS, Stripe, login, multi-state, or new TDA-required fields.
 
+## v1.3 Property book / log again
+
+Property book is **derived in memory** from saved logs (no separate localStorage key). Unique `serviceAddress` values are grouped with careful normalize (trim, collapse whitespace, case-fold). Each group keeps last-seen `customerBillingName`, `customerBillingAddress`, `poleLocation`, and `jobberAddress`.
+
+On each History property group:
+
+- **Log again here** — opens New log prefilled with those property fields only. `dateUsed` = today (device-local YYYY-MM-DD). New `id` / `createdAt`. Does **not** invent products, pest, or termite extras.
+- **Duplicate last stop** — copies `products`, `targetPestOrPurpose`, and `isTermite` / termite extras from the most recent log at that address. Resets `id` / `createdAt` / `dateUsed` (today). Personnel come from roster role-tag defaults or empty picks (not invented from the prior stop). Clears `jobberJobNumber` so the tech re-attaches; may keep `jobberAddress`.
+
+App lifts an optional draft into `NewLogForm` (remount via key) so History actions land on the New log tab with the same mobile-first tabs.
+
+Does not add Jobber OAuth, SMS, Stripe, login, multi-state, or new TDA-required fields.
+
 ## Shop product list
 
 Stored in localStorage under a separate key from logs. The office adds the pesticides and devices this shop actually uses.

@@ -171,24 +171,69 @@ export function deleteLog(id: string): { logs: ApplicationLog[]; saved: boolean 
   return { logs: saved ? next : current, saved };
 }
 
-export function groupLogsByServiceAddress(
-  logs: ApplicationLog[],
-): { address: string; logs: ApplicationLog[] }[] {
-  const map = new Map<string, { address: string; logs: ApplicationLog[] }>();
+/** Normalize service address for grouping: trim, collapse whitespace, case-fold. */
+export function normalizeServiceAddressKey(address: string): string {
+  const trimmed = String(address ?? "").trim().replace(/\s+/g, " ");
+  return trimmed.toLowerCase() || "(no service address)";
+}
+
+export function displayServiceAddress(address: string): string {
+  const trimmed = String(address ?? "").trim().replace(/\s+/g, " ");
+  return trimmed || "(no service address)";
+}
+
+function compareLogRecency(a: ApplicationLog, b: ApplicationLog): number {
+  return b.dateUsed.localeCompare(a.dateUsed) || b.createdAt.localeCompare(a.createdAt);
+}
+
+/** Property book entry derived in memory from saved logs (no separate storage). */
+export interface PropertyBookEntry {
+  /** Normalization key (trim + case-fold). */
+  key: string;
+  /** Last-seen display service address. */
+  serviceAddress: string;
+  customerBillingName: string;
+  customerBillingAddress: string;
+  poleLocation: string;
+  jobberAddress: string;
+  logs: ApplicationLog[];
+  /** Most recent log at this address (dateUsed, then createdAt). */
+  lastLog: ApplicationLog;
+}
+
+/**
+ * Group logs into a property book by normalized serviceAddress.
+ * Last-seen billing name/address, pole, and Jobber address come from the most recent log.
+ */
+export function groupLogsByServiceAddress(logs: ApplicationLog[]): PropertyBookEntry[] {
+  const map = new Map<string, ApplicationLog[]>();
   for (const log of logs) {
-    const address = String(log.serviceAddress ?? "").trim();
-    const key = address.toLowerCase() || "(no service address)";
+    const key = normalizeServiceAddressKey(log.serviceAddress);
     const existing = map.get(key);
-    if (existing) {
-      existing.logs.push(log);
-    } else {
-      map.set(key, {
-        address: address || "(no service address)",
-        logs: [log],
-      });
-    }
+    if (existing) existing.push(log);
+    else map.set(key, [log]);
   }
-  return [...map.values()].sort((a, b) => a.address.localeCompare(b.address));
+  const entries: PropertyBookEntry[] = [];
+  for (const [key, groupLogs] of map) {
+    const sorted = groupLogs.slice().sort(compareLogRecency);
+    const last = sorted[0]!;
+    entries.push({
+      key,
+      serviceAddress: displayServiceAddress(last.serviceAddress),
+      customerBillingName: last.customerBillingName,
+      customerBillingAddress: last.customerBillingAddress,
+      poleLocation: last.poleLocation,
+      jobberAddress: last.jobberAddress,
+      logs: sorted,
+      lastLog: last,
+    });
+  }
+  return entries.sort((a, b) => a.serviceAddress.localeCompare(b.serviceAddress));
+}
+
+/** Alias: derive property book in memory from loadLogs() / current logs. */
+export function derivePropertyBook(logs: ApplicationLog[]): PropertyBookEntry[] {
+  return groupLogsByServiceAddress(logs);
 }
 
 function isShopProductShape(value: unknown): boolean {
