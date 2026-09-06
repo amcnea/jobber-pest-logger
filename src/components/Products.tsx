@@ -1,5 +1,11 @@
 import { useState, type FormEvent } from "react";
-import { EXAMPLE_EPA_LABEL, looksLikeSampleEpa, productEpaCaption } from "../catalog";
+import {
+  EXAMPLE_EPA_LABEL,
+  catalogHasExampleProducts,
+  countExampleCatalogProducts,
+  looksLikeSampleEpa,
+  productEpaCaption,
+} from "../catalog";
 import { emptyShopProduct } from "../storage";
 import type { ShopProduct } from "../types";
 
@@ -7,6 +13,7 @@ interface Props {
   catalog: ShopProduct[];
   onUpsert: (product: ShopProduct) => boolean;
   onDelete: (id: string) => void;
+  onRemoveExamples: () => boolean;
 }
 
 interface DraftErrors {
@@ -21,7 +28,7 @@ function toDraft(product: ShopProduct): ShopProduct {
   };
 }
 
-export function Products({ catalog, onUpsert, onDelete }: Props) {
+export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState<ShopProduct>(() => emptyShopProduct());
@@ -176,13 +183,41 @@ export function Products({ catalog, onUpsert, onDelete }: Props) {
     </form>
   );
 
+  const exampleCount = countExampleCatalogProducts(catalog);
+  const hasExamples = catalogHasExampleProducts(catalog);
+
   return (
     <div>
       <h2>Shop product list</h2>
       <p className="hint">
         Office-managed list stored on this device (separate from logs). Techs can only pick from this
-        list. Seeded examples are labeled as examples and will not print as real EPA numbers.
+        list. Seeded examples are labeled as examples. Real CSV/PDF export stays disabled until
+        examples are removed from the catalog and from any saved logs that still reference them.
       </p>
+      {hasExamples && !adding && (
+        <div className="nag" role="status">
+          <p>
+            {exampleCount} example product{exampleCount === 1 ? "" : "s"} on this list. Remove them
+            before a real office export.
+          </p>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => {
+              if (
+                !confirm(
+                  `Remove ${exampleCount} example product${exampleCount === 1 ? "" : "s"} from the shop catalog? Saved logs are not changed.`,
+                )
+              ) {
+                return;
+              }
+              onRemoveExamples();
+            }}
+          >
+            Remove example products from catalog
+          </button>
+        </div>
+      )}
       {!adding && (
         <button type="button" className="btn btn-primary" onClick={startAdd} style={{ marginBottom: "0.85rem" }}>
           Add product

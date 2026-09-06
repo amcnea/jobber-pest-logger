@@ -84,5 +84,57 @@ export function catalogPickerLabel(product: ShopProduct): string {
 }
 
 export function logHasExampleProducts(products: AppliedProduct[]): boolean {
-  return products.some((p) => p.isExample || looksLikeSampleEpa(p.epaRegNo));
+  return products.some((p) =>
+    inferIsExample({ isExample: p.isExample, catalogId: p.catalogId, epaRegNo: p.epaRegNo }),
+  );
+}
+
+/** True when a shop-list row is an example / SAMPLE seed. */
+export function isExampleShopProduct(product: ShopProduct): boolean {
+  return inferIsExample({
+    isExample: product.isExample,
+    catalogId: product.id,
+    epaRegNo: product.epaRegNo,
+  });
+}
+
+/** True when the shop list still includes any example / SAMPLE seed. */
+export function catalogHasExampleProducts(catalog: ShopProduct[]): boolean {
+  return catalog.some(isExampleShopProduct);
+}
+
+/** Count example / SAMPLE products still on the shop list. */
+export function countExampleCatalogProducts(catalog: ShopProduct[]): number {
+  return catalog.filter(isExampleShopProduct).length;
+}
+
+/** True when any saved log still references an example / SAMPLE product line. */
+export function logsHaveExampleProducts(
+  logs: { products: AppliedProduct[]; sampleData?: boolean }[],
+): boolean {
+  return logs.some((log) => log.sampleData === true || logHasExampleProducts(log.products));
+}
+
+/** Count saved logs that still reference example / SAMPLE products. */
+export function countLogsWithExampleProducts(
+  logs: { products: AppliedProduct[]; sampleData?: boolean }[],
+): number {
+  return logs.filter((log) => log.sampleData === true || logHasExampleProducts(log.products)).length;
+}
+
+/**
+ * Soft gate for real CSV/PDF export: blocked while example seeds remain on the
+ * catalog or any saved log still references an example product.
+ */
+export function exportBlockedByExamples(
+  catalog: ShopProduct[],
+  logs: { products: AppliedProduct[]; sampleData?: boolean }[],
+): { blocked: boolean; catalogExamples: number; logExamples: number } {
+  const catalogExamples = countExampleCatalogProducts(catalog);
+  const logExamples = countLogsWithExampleProducts(logs);
+  return {
+    blocked: catalogExamples > 0 || logExamples > 0,
+    catalogExamples,
+    logExamples,
+  };
 }

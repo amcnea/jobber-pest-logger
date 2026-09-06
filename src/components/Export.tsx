@@ -1,25 +1,33 @@
 import { useMemo, useState } from "react";
-import { productEpaCaption } from "../catalog";
+import { exportBlockedByExamples, productEpaCaption } from "../catalog";
 import { downloadCsv } from "../csv";
 import { filterLogsByDateUsed, monthRangeLocal } from "../dates";
 import { LAWGICAL_DISCLAIMER } from "../disclaimer";
-import {
-  backupNagMessage,
-  formatLastBackupLabel,
-  loadLastBackupAt,
-} from "../storage";
-import type { ApplicationLog, ShopSettings } from "../types";
+import { backupNagMessage, formatLastBackupLabel } from "../storage";
+import type { ApplicationLog, Screen, ShopProduct, ShopSettings } from "../types";
 
 interface Props {
   logs: ApplicationLog[];
+  catalog: ShopProduct[];
   settings: ShopSettings;
+  lastBackupAt: string | null;
+  onRemoveExamples: () => boolean;
+  onGo: (screen: Screen) => void;
 }
 
-export function Export({ logs, settings }: Props) {
+export function Export({
+  logs,
+  catalog,
+  settings,
+  lastBackupAt,
+  onRemoveExamples,
+  onGo,
+}: Props) {
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const lastBackupAt = useMemo(() => loadLastBackupAt(), []);
+  const [exampleMsg, setExampleMsg] = useState<string | null>(null);
+
   const lastBackupLabel = formatLastBackupLabel(lastBackupAt);
   const nag = backupNagMessage(lastBackupAt);
 
@@ -27,6 +35,12 @@ export function Export({ logs, settings }: Props) {
     () => filterLogsByDateUsed(logs, dateFrom, dateTo),
     [logs, dateFrom, dateTo],
   );
+
+  const exampleGate = useMemo(
+    () => exportBlockedByExamples(catalog, logs),
+    [catalog, logs],
+  );
+  const exportBlocked = exampleGate.blocked;
 
   const shopName = settings.shopName.trim();
   const ymd = /^\d{4}-\d{2}-\d{2}$/;
@@ -44,6 +58,7 @@ export function Export({ logs, settings }: Props) {
   }
 
   async function handlePdf() {
+    if (exportBlocked) return;
     setPdfError(null);
     try {
       const mod = await import("../pdf");
@@ -56,14 +71,26 @@ export function Export({ logs, settings }: Props) {
     }
   }
 
+  function handleRemoveExamples() {
+    setExampleMsg(null);
+    const ok = onRemoveExamples();
+    if (!ok) {
+      setExampleMsg("Could not remove example products from the catalog on this device.");
+      return;
+    }
+    setExampleMsg(
+      "Example products removed from the catalog. If any saved logs still list example items, edit or delete those logs in History before exporting.",
+    );
+  }
+
   return (
     <div>
       <h2>Office export</h2>
       <p className="hint">
         One audit-ready Texas TDA CSV whose columns match 4 TAC § 7.144(a), plus termite extras from
         § 7.144(b) when the stop is termite work, and a simple printable PDF. Real shop products print
-        their EPA numbers. Example catalog seeds are labeled &quot;example / not a real EPA number&quot; —
-        never as a fake registration number. Weather, time of day (except termite pretreat), and CE are
+        their EPA numbers. Example catalog seeds are blocked from real export until removed — they
+        must never ship as audit records. Weather, time of day (except termite pretreat), and CE are
         not TDA-required and are omitted. Texas only.
       </p>
       <p className="hint">Records are kept 2 years. This app does not enforce retention.</p>
@@ -74,6 +101,49 @@ export function Export({ logs, settings }: Props) {
       {nag && (
         <p className="nag" role="status">
           {nag} Use Settings → Download backup JSON.
+        </p>
+      )}
+
+      {exportBlocked && (
+        <div className="nag nag-block" role="status">
+          <strong>Example seeds still present — CSV/PDF export disabled</strong>
+          <p>
+            Clear example / SAMPLE products before a real office export. Logging is still allowed;
+            this gate is only for CSV and PDF.
+          </p>
+          <ul className="warn-list">
+            {exampleGate.catalogExamples > 0 && (
+              <li>
+                {exampleGate.catalogExamples} example product
+                {exampleGate.catalogExamples === 1 ? "" : "s"} on the shop catalog
+              </li>
+            )}
+            {exampleGate.logExamples > 0 && (
+              <li>
+                {exampleGate.logExamples} saved log
+                {exampleGate.logExamples === 1 ? "" : "s"} still reference example products — edit
+                or delete them in{" "}
+                <button type="button" className="linkish" onClick={() => onGo("history")}>
+                  History
+                </button>
+              </li>
+            )}
+          </ul>
+          {exampleGate.catalogExamples > 0 && (
+            <button type="button" className="btn btn-primary" onClick={handleRemoveExamples}>
+              Remove example products from catalog
+            </button>
+          )}
+          {exampleMsg && (
+            <p className="hint" role="status">
+              {exampleMsg}
+            </p>
+          )}
+        </div>
+      )}
+      {!exportBlocked && exampleMsg && (
+        <p className="hint" role="status">
+          {exampleMsg}
         </p>
       )}
 
@@ -130,8 +200,11 @@ export function Export({ logs, settings }: Props) {
         <button
           type="button"
           className="btn btn-primary"
-          disabled={filtered.length === 0}
-          onClick={() => downloadCsv(filtered, shopName || undefined)}
+          disabled={filtered.length === 0 || exportBlocked}
+          onClick={() => {
+            if (exportBlocked) return;
+            downloadCsv(filtered, shopName || undefined);
+          }}
         >
           Download Texas TDA CSV
         </button>
@@ -139,7 +212,7 @@ export function Export({ logs, settings }: Props) {
         <button
           type="button"
           className="btn btn-secondary"
-          disabled={filtered.length === 0}
+          disabled={filtered.length === 0 || exportBlocked}
           onClick={() => {
             void handlePdf();
           }}
