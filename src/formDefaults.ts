@@ -111,10 +111,14 @@ export function validateLog(log: ApplicationLog): FieldErrors {
   return errors;
 }
 
-export function withSaveFlags(log: ApplicationLog): ApplicationLog {
+/** On edit, keep original createdAt; always refresh sampleData from products. */
+export function withSaveFlags(
+  log: ApplicationLog,
+  options?: { preserveCreatedAt?: boolean },
+): ApplicationLog {
   return {
     ...log,
-    createdAt: new Date().toISOString(),
+    createdAt: options?.preserveCreatedAt ? log.createdAt : new Date().toISOString(),
     sampleData: logHasExampleProducts(log.products),
   };
 }

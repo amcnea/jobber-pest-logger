@@ -39,11 +39,18 @@ export default function App() {
   const [draftKey, setDraftKey] = useState(0);
 
   const peopleWarnings = useMemo(() => collectPeopleWarnings(people), [people]);
+  const isEditing =
+    draftSeed !== null && logs.some((l) => l.id === draftSeed.id);
 
   function openNewLog(draft: ApplicationLog | null) {
     setDraftSeed(draft);
     setDraftKey((k) => k + 1);
     setScreen("new");
+  }
+
+  /** Open an existing saved log into New log form; upsert keeps the same id. */
+  function handleEdit(log: ApplicationLog) {
+    openNewLog(log);
   }
 
   function handleSave(log: ApplicationLog): boolean {
@@ -139,8 +146,8 @@ export default function App() {
         <h1>Jobber Pest Logger</h1>
       </header>
       <div className="banner">
-        v1.3. Property book + log-again / duplicate-last-stop from History. Schema locked to 4 TAC § 7.144.
-        Texas SPCS shops. Example seeds export as &quot;example / not a real EPA number&quot;.
+        v1.3. Property book + edit saved log / log-again / duplicate-last-stop from History. Schema locked
+        to 4 TAC § 7.144. Texas SPCS shops. Example seeds export as &quot;example / not a real EPA number&quot;.
       </div>
       {peopleWarnings.length > 0 && (
         <div className="banner banner-due" role="status">
@@ -215,6 +222,7 @@ export default function App() {
             people={people}
             settings={settings}
             initialDraft={draftSeed}
+            isEditing={isEditing}
             onSave={handleSave}
           />
         )}
@@ -222,6 +230,7 @@ export default function App() {
           <History
             logs={logs}
             onDelete={handleDelete}
+            onEdit={handleEdit}
             onLogAgainHere={handleLogAgainHere}
             onDuplicateLastStop={handleDuplicateLastStop}
           />

@@ -137,6 +137,20 @@ label.field {
   margin-bottom: 0.45rem;
 }
 
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: flex-end;
+}
+
+.card-actions .btn {
+  width: auto;
+  min-height: 2.25rem;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.85rem;
+}
+
 .chip {
   display: inline-block;
   font-size: 0.68rem;
