@@ -78,6 +78,31 @@ Incomplete steps link into Settings / People / Products. When every step is done
 
 Keeps the Lawgical / SPCS disclaimer. Does not add Jobber OAuth, SMS, Stripe, login, sync, multi-state, or GitHub Pages work.
 
+
+## Thin PWA + phone export smoke
+
+Installable **Add to Home Screen** shell for phone use at the shop desk. Still device-local only. No heavy offline cache (manifest + icons only; no service worker required for install on current Chrome / Safari).
+
+- **Manifest:** `public/manifest.webmanifest` — name **Jobber Pest Logger**, theme color `#163326`, `display: standalone`, relative `start_url` / `scope` so Vite `base` (`/jobber-pest-logger/` for GitHub Pages) keeps paths correct
+- **Icons:** `public/icons/` (192 / 512 PNG + apple-touch-icon + SVG mark)
+- **Export on phone:** Export CSV / PDF / Print buttons are full-width with 44px+ tap targets; date filters stack on narrow viewports
+
+### Install on phone (smoke)
+
+1. Open the hosted app over HTTPS (Pages project site when enabled), or use the Vite preview build on a reachable host.
+2. iOS Safari: Share, then Add to Home Screen. Android Chrome: browser menu, then Add to Home screen.
+3. Launch from the home-screen icon. Confirm the Lawgical disclaimer still shows on Export and Settings.
+
+### Phone export smoke
+
+1. Complete first-run setup and remove example catalog seeds so CSV and PDF unlock.
+2. Save one real application log, or clear example refs from History.
+3. On a phone viewport: Export, optional date range, tap Download Texas TDA CSV and Download PDF.
+4. Confirm the example-seed gate still blocks export when example products remain.
+
+Stays office-desk. Does not add Jobber API integration, Stripe, sync, multi-state, or new TDA-required fields.
+
+
 ## Shop product list
 
 Stored in localStorage under a separate key from logs. The office adds the pesticides and devices this shop actually uses.
