@@ -133,6 +133,12 @@ Termite-only extras from section 7.144(b) sit behind a termite flag, not on ever
 
 Not TDA-required and not marked required: weather, time of day (except termite pretreat start/stop), Jobber job number, CE/license expiry reminder windows.
 
+## Hosted demo
+
+Public URL: https://amcnea.github.io/jobber-pest-logger/
+
+Deploy is via GitHub Actions on `main` (workflow `.github/workflows/pages.yml`). Push to `main` or run **workflow_dispatch** to rebuild and publish. Vite `base` is `/jobber-pest-logger/` for project Pages.
+
 ## Run
 
 See package.json scripts. Install dependencies, then start the Vite "dev" script. Open the local URL it prints.
