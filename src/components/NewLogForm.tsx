@@ -15,8 +15,10 @@ interface Props {
   catalog: ShopProduct[];
   people: Person[];
   settings: ShopSettings;
-  /** Prefill from History ("Log again here" / "Duplicate last stop"). */
+  /** Prefill from History ("Log again here" / "Duplicate last stop" / Edit). */
   initialDraft?: ApplicationLog | null;
+  /** True when opening an existing saved log (same id; upsert in place). */
+  isEditing?: boolean;
   onSave: (log: ApplicationLog) => boolean;
 }
 
@@ -26,7 +28,14 @@ const ROLE_TITLE: Record<PersonnelRole, string> = {
   receiving_training: "Receiving training",
 };
 
-export function NewLogForm({ catalog, people, settings, initialDraft = null, onSave }: Props) {
+export function NewLogForm({
+  catalog,
+  people,
+  settings,
+  initialDraft = null,
+  isEditing = false,
+  onSave,
+}: Props) {
   const [log, setLog] = useState<ApplicationLog>(() => initialDraft ?? emptyLog(settings));
   const [errors, setErrors] = useState<FieldErrors>({});
   const [picker, setPicker] = useState("");
@@ -80,13 +89,22 @@ export function NewLogForm({ catalog, people, settings, initialDraft = null, onS
     const nextErrors = validateLog(log);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
-    const savedOk = onSave(withSaveFlags(log));
+    const savedOk = onSave(withSaveFlags(log, { preserveCreatedAt: isEditing }));
     if (!savedOk) return;
     // App navigates to History on success and unmounts this form.
   }
 
   return (
     <form onSubmit={submit} noValidate>
+      <section className="section">
+        <h2>{isEditing ? "Edit application log" : "New application log"}</h2>
+        <p className="hint">
+          {isEditing
+            ? "Updating a saved log in place (same id). Save returns you to History."
+            : "Fill the stop, then save. Records stay on this device until you export or back up."}
+        </p>
+      </section>
+
       <section className="section">
         <h2>Jobber link</h2>
         <p className="hint">Optional paste-on to tie this stop to Jobber. Not a TDA field.</p>
@@ -608,7 +626,7 @@ export function NewLogForm({ catalog, people, settings, initialDraft = null, onS
       <p className="hint">Records are kept 2 years. This app does not run a retention engine.</p>
       <div className="sticky-save">
         <button className="btn btn-primary" type="submit">
-          Save application log
+          {isEditing ? "Save changes" : "Save application log"}
         </button>
       </div>
     </form>
