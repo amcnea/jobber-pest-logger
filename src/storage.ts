@@ -224,7 +224,7 @@ export function groupLogsByServiceAddress(logs: ApplicationLog[]): PropertyBookE
       customerBillingAddress: last.customerBillingAddress,
       poleLocation: last.poleLocation,
       jobberAddress: last.jobberAddress,
-      logs: groupLogs,
+      logs: sorted,
       lastLog: last,
     });
   }

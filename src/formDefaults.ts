@@ -145,7 +145,9 @@ export function rosterPicksForPersonnel(
   for (const row of personnel) {
     if (!row.name.trim() && !row.licenseNumber.trim()) continue;
     const match = people.find(
-      (p) => p.name === row.name && p.licenseNumber === row.licenseNumber,
+      (p) =>
+        p.name.trim() === row.name.trim() &&
+        p.licenseNumber.trim() === row.licenseNumber.trim(),
     );
     if (match) picks[row.role] = match.id;
   }
@@ -214,6 +216,6 @@ export function draftDuplicateLastStop(
     isTermite: last.isTermite,
     termite: { ...last.termite },
     personnel: personnelFromRosterDefaults(people),
-    sampleData: false,
+    sampleData: logHasExampleProducts(products),
   };
 }
