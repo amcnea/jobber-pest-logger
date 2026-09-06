@@ -4,6 +4,7 @@ import { History } from "./components/History";
 import { NewLogForm } from "./components/NewLogForm";
 import { People } from "./components/People";
 import { Products } from "./components/Products";
+import { Settings } from "./components/Settings";
 import { collectPeopleWarnings } from "./peopleWarnings";
 import {
   deleteLog,
@@ -12,11 +13,13 @@ import {
   loadCatalog,
   loadLogs,
   loadPeople,
+  loadSettings,
+  saveSettings,
   upsertLog,
   upsertPerson,
   upsertProduct,
 } from "./storage";
-import type { ApplicationLog, Person, Screen, ShopProduct } from "./types";
+import type { ApplicationLog, Person, Screen, ShopProduct, ShopSettings } from "./types";
 import "./App.css";
 
 export default function App() {
@@ -24,6 +27,7 @@ export default function App() {
   const [logs, setLogs] = useState<ApplicationLog[]>(() => loadLogs());
   const [catalog, setCatalog] = useState<ShopProduct[]>(() => loadCatalog());
   const [people, setPeople] = useState<Person[]>(() => loadPeople());
+  const [settings, setSettings] = useState<ShopSettings>(() => loadSettings());
   const [storageError, setStorageError] = useState<string | null>(null);
 
   const peopleWarnings = useMemo(() => collectPeopleWarnings(people), [people]);
@@ -81,6 +85,30 @@ export default function App() {
     setStorageError(result.saved ? null : "Could not update the roster on this device.");
   }
 
+  function handleSaveSettings(next: ShopSettings): boolean {
+    const ok = saveSettings(next);
+    if (!ok) {
+      setStorageError("Could not save shop settings on this device (storage full or blocked).");
+      return false;
+    }
+    setSettings(next);
+    setStorageError(null);
+    return true;
+  }
+
+  function handleRestored(data: {
+    logs: ApplicationLog[];
+    catalog: ShopProduct[];
+    people: Person[];
+    settings: ShopSettings;
+  }) {
+    setLogs(data.logs);
+    setCatalog(data.catalog);
+    setPeople(data.people);
+    setSettings(data.settings);
+    setStorageError(null);
+  }
+
   return (
     <div className="app">
       <header className="topbar">
@@ -88,8 +116,8 @@ export default function App() {
         <h1>Jobber Pest Logger</h1>
       </header>
       <div className="banner">
-        v1.1. Shop-owned product list + People roster. Schema locked to 4 TAC § 7.144. Texas SPCS shops.
-        Example seeds export as &quot;example / not a real EPA number&quot;.
+        v1.2. Shop settings + export date range + device backup. Schema locked to 4 TAC § 7.144.
+        Texas SPCS shops. Example seeds export as &quot;example / not a real EPA number&quot;.
       </div>
       {peopleWarnings.length > 0 && (
         <div className="banner banner-due" role="status">
@@ -137,12 +165,21 @@ export default function App() {
         >
           People
         </button>
+        <button
+          type="button"
+          className={screen === "settings" ? "active" : ""}
+          onClick={() => setScreen("settings")}
+        >
+          Settings
+        </button>
         <button type="button" className={screen === "export" ? "active" : ""} onClick={() => setScreen("export")}>
           Export
         </button>
       </nav>
       <main className="main">
-        {screen === "new" && <NewLogForm catalog={catalog} people={people} onSave={handleSave} />}
+        {screen === "new" && (
+          <NewLogForm catalog={catalog} people={people} settings={settings} onSave={handleSave} />
+        )}
         {screen === "history" && <History logs={logs} onDelete={handleDelete} />}
         {screen === "products" && (
           <Products catalog={catalog} onUpsert={handleUpsertProduct} onDelete={handleDeleteProduct} />
@@ -150,7 +187,10 @@ export default function App() {
         {screen === "people" && (
           <People people={people} onUpsert={handleUpsertPerson} onDelete={handleDeletePerson} />
         )}
-        {screen === "export" && <Export logs={logs} />}
+        {screen === "settings" && (
+          <Settings settings={settings} onSave={handleSaveSettings} onRestored={handleRestored} />
+        )}
+        {screen === "export" && <Export logs={logs} settings={settings} />}
       </main>
     </div>
   );

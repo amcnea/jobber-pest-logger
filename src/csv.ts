@@ -141,13 +141,25 @@ export function logsToCsv(logs: ApplicationLog[]): string {
   return [header, ...rows].join("\r\n") + "\r\n";
 }
 
-export function downloadCsv(logs: ApplicationLog[]): void {
-  const csv = logsToCsv(logs);
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+function shopSlugForFilename(shopName: string): string {
+  return shopName
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+}
+
+export function downloadCsv(logs: ApplicationLog[], shopName?: string): void {
+  const body = logsToCsv(logs);
+  const blob = new Blob([body], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = "texas-tda-application-logs.csv";
+  const slug = shopName ? shopSlugForFilename(shopName) : "";
+  a.download = slug
+    ? `texas-tda-application-logs-${slug}.csv`
+    : "texas-tda-application-logs.csv";
   a.rel = "noopener";
   a.style.display = "none";
   document.body.appendChild(a);

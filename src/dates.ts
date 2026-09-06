@@ -82,3 +82,37 @@ export function formatCeDueLabel(ymd: string, today = new Date()): string | null
   }
   return `CE due this calendar year (${ymd}) — year-end reminder`;
 }
+
+
+/** First and last YYYY-MM-DD of the device-local calendar month containing `d`. */
+export function monthRangeLocal(d = new Date()): { from: string; to: string } {
+  const y = d.getFullYear();
+  const m = d.getMonth();
+  const from = localDateYmd(new Date(y, m, 1, 12, 0, 0, 0));
+  const to = localDateYmd(new Date(y, m + 1, 0, 12, 0, 0, 0));
+  return { from, to };
+}
+
+/**
+ * Filter logs by dateUsed with device-local YYYY-MM-DD string comparison.
+ * Empty or invalid from/to means unbounded on that side. Invalid dateUsed strings are excluded when a bound is set.
+ */
+export function filterLogsByDateUsed<T extends { dateUsed: string }>(
+  logs: T[],
+  from: string,
+  to: string,
+): T[] {
+  const ymd = /^\d{4}-\d{2}-\d{2}$/;
+  const fromTrim = from.trim();
+  const toTrim = to.trim();
+  const fromBound = ymd.test(fromTrim) ? fromTrim : "";
+  const toBound = ymd.test(toTrim) ? toTrim : "";
+  if (!fromBound && !toBound) return logs;
+  return logs.filter((log) => {
+    const d = String(log.dateUsed ?? "").trim();
+    if (!ymd.test(d)) return false;
+    if (fromBound && d < fromBound) return false;
+    if (toBound && d > toBound) return false;
+    return true;
+  });
+}

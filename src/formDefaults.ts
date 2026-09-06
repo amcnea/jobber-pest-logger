@@ -1,7 +1,7 @@
 import { logHasExampleProducts } from "./catalog";
 import { localDateYmd } from "./dates";
 import { newId } from "./ids";
-import type { ApplicationLog, AppliedProduct, ShopProduct, TermiteExtras } from "./types";
+import type { ApplicationLog, AppliedProduct, ShopProduct, ShopSettings, TermiteExtras } from "./types";
 
 export function emptyTermite(): TermiteExtras {
   return {
@@ -40,7 +40,7 @@ export function productFromCatalog(catalog: ShopProduct[], catalogId: string): A
   };
 }
 
-export function emptyLog(): ApplicationLog {
+export function emptyLog(settings?: ShopSettings | null): ApplicationLog {
   const today = localDateYmd();
   return {
     id: newId(),
@@ -60,8 +60,8 @@ export function emptyLog(): ApplicationLog {
       { role: "supervising", name: "", licenseNumber: "" },
       { role: "receiving_training", name: "", licenseNumber: "" },
     ],
-    shopTpclNumber: "",
-    shopTpclLetter: "",
+    shopTpclNumber: settings?.shopTpclNumber ?? "",
+    shopTpclLetter: settings?.shopTpclLetter ?? "",
     isTermite: false,
     termite: emptyTermite(),
   };
