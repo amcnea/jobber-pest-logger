@@ -6,7 +6,6 @@
   flex-direction: column;
   background: var(--paper);
   box-shadow: 0 0 0 1px var(--line);
-  overflow-x: clip;
 }
 
 .topbar {
@@ -143,8 +142,8 @@ label.field {
   padding: 0.75rem;
   margin-bottom: 0.7rem;
   background: #fff;
-  overflow-x: clip;
   max-width: 100%;
+  min-width: 0;
 }
 
 .card-head {

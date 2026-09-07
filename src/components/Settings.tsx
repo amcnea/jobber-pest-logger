@@ -193,6 +193,8 @@ export function Settings({
           type="file"
           accept="application/json,.json"
           className="visually-hidden"
+          aria-label="Restore backup JSON file"
+          tabIndex={-1}
           onChange={(ev) => {
             void handleRestoreFile(ev);
           }}
