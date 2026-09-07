@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import {
   EXAMPLE_EPA_LABEL,
   catalogHasExampleProducts,
@@ -21,10 +21,14 @@ interface DraftErrors {
   epaRegNo?: string;
 }
 
+type ListFilter = "active" | "archived" | "all";
+type KindFilter = "all" | "pesticide" | "device";
+
 function toDraft(product: ShopProduct): ShopProduct {
   return {
     ...product,
     epaRegNo: product.epaRegNo ?? "",
+    archived: product.archived === true,
   };
 }
 
@@ -33,6 +37,9 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState<ShopProduct>(() => emptyShopProduct());
   const [errors, setErrors] = useState<DraftErrors>({});
+  const [query, setQuery] = useState("");
+  const [listFilter, setListFilter] = useState<ListFilter>("active");
+  const [kindFilter, setKindFilter] = useState<KindFilter>("all");
 
   function startAdd() {
     setAdding(true);
@@ -86,9 +93,16 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
       epaRegNo: epa,
       is25b: isDevice ? false : draft.is25b,
       isExample,
+      archived: draft.archived === true,
     });
     if (!saved) return;
     cancel();
+  }
+
+  function setArchived(product: ShopProduct, archived: boolean) {
+    const saved = onUpsert({ ...product, archived });
+    if (!saved) return;
+    if (editingId === product.id) cancel();
   }
 
   const form = (adding || editingId) && (
@@ -185,14 +199,32 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
 
   const exampleCount = countExampleCatalogProducts(catalog);
   const hasExamples = catalogHasExampleProducts(catalog);
+  const archivedCount = catalog.filter((p) => p.archived).length;
+
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return catalog.filter((p) => {
+      // Keep the product being edited visible even if filters would hide it.
+      if (editingId && p.id === editingId) return true;
+      if (listFilter === "active" && p.archived) return false;
+      if (listFilter === "archived" && !p.archived) return false;
+      if (kindFilter !== "all" && p.kind !== kindFilter) return false;
+      if (!q) return true;
+      const hay = `${p.name} ${p.epaRegNo ?? ""} ${p.kind} ${p.is25b ? "25b" : ""} ${
+        p.isExample ? "example" : ""
+      }`.toLowerCase();
+      return hay.includes(q);
+    });
+  }, [catalog, query, listFilter, kindFilter, editingId]);
 
   return (
     <div>
       <h2>Shop product list</h2>
       <p className="hint">
         Office-managed list stored on this device (separate from logs). Techs can only pick from this
-        list. Seeded examples are labeled as examples. Real CSV/PDF export stays disabled until
-        examples are removed from the catalog and from any saved logs that still reference them.
+        list. Archive hides a product from New log without deleting it. Seeded examples are labeled as
+        examples. Real CSV/PDF export stays disabled until examples are removed from the catalog and
+        from any saved logs that still reference them.
       </p>
       {hasExamples && !adding && (
         <div className="nag" role="status">
@@ -224,11 +256,61 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
         </button>
       )}
       {adding && form}
+
+      {!adding && catalog.length > 0 && (
+        <div className="card catalog-filters">
+          <label className="field">
+            Search
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Name or EPA #"
+              autoComplete="off"
+              disabled={editingId !== null}
+            />
+          </label>
+          <div className="row">
+            <label className="field">
+              Show
+              <select
+                value={listFilter}
+                onChange={(e) => setListFilter(e.target.value as ListFilter)}
+                disabled={editingId !== null}
+              >
+                <option value="active">Active</option>
+                <option value="archived">Archived ({archivedCount})</option>
+                <option value="all">All</option>
+              </select>
+            </label>
+            <label className="field">
+              Kind
+              <select
+                value={kindFilter}
+                onChange={(e) => setKindFilter(e.target.value as KindFilter)}
+                disabled={editingId !== null}
+              >
+                <option value="all">All kinds</option>
+                <option value="pesticide">Pesticide</option>
+                <option value="device">Device</option>
+              </select>
+            </label>
+          </div>
+          <p className="hint" role="status">
+            Showing {visible.length} of {catalog.length}
+            {listFilter === "active" ? " (active)" : listFilter === "archived" ? " (archived)" : ""}.
+          </p>
+        </div>
+      )}
+
       {catalog.length === 0 && !adding && (
         <p className="hint">No products yet. Add the pesticides and devices this shop actually uses.</p>
       )}
-      {catalog.map((product) => (
-        <article className="card" key={product.id}>
+      {catalog.length > 0 && visible.length === 0 && !adding && (
+        <p className="hint">No products match this search/filter.</p>
+      )}
+      {visible.map((product) => (
+        <article className={`card${product.archived ? " card-archived" : ""}`} key={product.id}>
           {editingId === product.id ? (
             form
           ) : (
@@ -237,15 +319,25 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                 <div>
                   <strong>{product.name}</strong>
                   <div>
+                    {product.archived && <span className="chip">archived</span>}{" "}
                     {product.isExample && <span className="chip sample">example</span>}{" "}
                     <span className="chip">{product.kind}</span>{" "}
                     <span className="chip">{productEpaCaption(product)}</span>
                   </div>
                 </div>
-                <div>
+                <div className="card-actions">
                   <button type="button" className="btn btn-secondary" onClick={() => startEdit(product)}>
                     Edit
-                  </button>{" "}
+                  </button>
+                  {!product.isExample && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => setArchived(product, !product.archived)}
+                    >
+                      {product.archived ? "Unarchive" : "Archive"}
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="btn btn-ghost"

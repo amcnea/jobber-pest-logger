@@ -244,7 +244,8 @@ function isShopProductShape(value: unknown): boolean {
     (typeof value.epaRegNo === "string" || value.epaRegNo === null) &&
     typeof value.is25b === "boolean" &&
     (value.kind === "pesticide" || value.kind === "device") &&
-    (typeof value.isExample === "boolean" || value.isExample === undefined)
+    (typeof value.isExample === "boolean" || value.isExample === undefined) &&
+    (typeof value.archived === "boolean" || value.archived === undefined)
   );
 }
 
@@ -260,6 +261,7 @@ function normalizeShopProduct(value: unknown): ShopProduct | null {
   });
   const isDevice = value.kind === "device";
   const is25b = isDevice ? false : (value.is25b as boolean);
+  const archived = value.archived === true;
   return {
     id: value.id as string,
     name: value.name as string,
@@ -267,6 +269,7 @@ function normalizeShopProduct(value: unknown): ShopProduct | null {
     is25b,
     kind: value.kind as ShopProduct["kind"],
     isExample,
+    archived,
   };
 }
 
@@ -337,6 +340,7 @@ export function emptyShopProduct(): ShopProduct {
     is25b: false,
     kind: "pesticide",
     isExample: false,
+    archived: false,
   };
 }
 

@@ -13,6 +13,8 @@ export interface ShopProduct {
   kind: ProductKind;
   /** Example catalog seed — exports must not print this as a real EPA number. */
   isExample: boolean;
+  /** Hidden from New log picker; kept on device for history / unarchive. */
+  archived: boolean;
 }
 
 export interface AppliedProduct {
