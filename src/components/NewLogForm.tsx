@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { AMOUNT_UNITS, activeCatalogProducts, catalogPickerLabel, productEpaCaption } from "../catalog";
 import {
   emptyLog,
@@ -62,12 +62,19 @@ export function NewLogForm({
   }
 
   function addFromCatalog(id: string) {
-    const line = productFromCatalog(catalog, id);
+    // Active-only: picker can retain a stale id if catalog archives change mid-mount.
+    const line = productFromCatalog(activeCatalog, id);
     if (!line) return;
     setErrors({});
     setLog((prev) => ({ ...prev, products: [...prev.products, line] }));
     setPicker("");
   }
+
+  useEffect(() => {
+    if (picker && !activeCatalog.some((p) => p.id === picker)) {
+      setPicker("");
+    }
+  }, [activeCatalog, picker]);
 
   function pickFromRoster(role: PersonnelRole, personId: string) {
     setRosterPick((prev) => ({ ...prev, [role]: personId }));
