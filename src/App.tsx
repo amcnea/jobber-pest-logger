@@ -321,7 +321,7 @@ export default function App() {
         )}
         {screen === "settings" && (
           <Settings
-            formKey={settingsFormKey}
+            key={settingsFormKey}
             settings={settings}
             lastBackupAt={lastBackupAt}
             onSave={handleSaveSettings}

@@ -11,8 +11,6 @@ import {
 import type { ApplicationLog, Person, ShopProduct, ShopSettings } from "../types";
 
 interface Props {
-  /** Bump after wipe/restore so the shop form remounts with fresh draft. */
-  formKey: number;
   settings: ShopSettings;
   lastBackupAt: string | null;
   onSave: (settings: ShopSettings) => boolean;
@@ -28,7 +26,6 @@ interface Props {
 }
 
 export function Settings({
-  formKey,
   settings,
   lastBackupAt,
   onSave,
@@ -116,7 +113,7 @@ export function Settings({
         TPCL already sits on each application log.
       </p>
 
-      <form className="card" key={formKey} onSubmit={submit} noValidate>
+      <form className="card" onSubmit={submit} noValidate>
         <label className="field">
           Shop name
           <input
@@ -265,13 +262,8 @@ export function Settings({
               return;
             }
             const result = onWipeAll();
+            // App remounts Settings via key after wipe; banners reset with the remount.
             setDemoMsg(result.summary);
-            if (result.ok) {
-              // Shop form remounts via formKey from App; clear transient banners.
-              setSavedMsg(null);
-              setBackupMsg(null);
-              setBackupError(null);
-            }
           }}
         >
           Wipe all data on this device…
