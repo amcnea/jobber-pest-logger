@@ -1,4 +1,4 @@
-import { EXAMPLE_SEEDS, inferIsExample, isExampleShopProduct } from "./catalog";
+import { EXAMPLE_SEEDS, inferIsExample, isExampleShopProduct, logHasExampleProducts } from "./catalog";
 import { newId } from "./ids";
 import type { ApplicationLog, AppliedProduct, Person, PersonnelRole, ShopProduct, ShopSettings } from "./types";
 
@@ -332,6 +332,61 @@ export function removeExampleProductsFromCatalog(): { catalog: ShopProduct[]; sa
   return { catalog: saved ? next : current, saved, removed: saved ? removed : 0 };
 }
 
+
+/**
+ * Soft demo reset: remove example catalog seeds and strip/drop logs that used them.
+ * Does not delete real (non-example) products, people, settings, or backup stamp.
+ */
+export function clearExampleDemoData(): {
+  catalog: ShopProduct[];
+  logs: ApplicationLog[];
+  saved: boolean;
+  removedCatalog: number;
+  removedLogs: number;
+  strippedLogs: number;
+} {
+  const cat = removeExampleProductsFromCatalog();
+  const currentLogs = loadLogs();
+  let removedLogs = 0;
+  let strippedLogs = 0;
+  const nextLogs: ApplicationLog[] = [];
+  for (const log of currentLogs) {
+    const hadExamples = log.sampleData === true || logHasExampleProducts(log.products);
+    const kept = log.products.filter(
+      (p) =>
+        !inferIsExample({
+          isExample: p.isExample,
+          catalogId: p.catalogId,
+          epaRegNo: p.epaRegNo,
+        }),
+    );
+    if (hadExamples && kept.length === 0) {
+      removedLogs += 1;
+      continue;
+    }
+    if (kept.length !== log.products.length) {
+      strippedLogs += 1;
+      nextLogs.push({
+        ...log,
+        products: kept,
+        sampleData: false,
+      });
+    } else {
+      nextLogs.push(log);
+    }
+  }
+  const logsSaved = saveLogs(nextLogs);
+  // Return what each subsystem actually persisted; do not gate logs on catalog.
+  return {
+    catalog: cat.catalog,
+    logs: logsSaved ? nextLogs : currentLogs,
+    saved: cat.saved && logsSaved,
+    removedCatalog: cat.removed,
+    removedLogs: logsSaved ? removedLogs : 0,
+    strippedLogs: logsSaved ? strippedLogs : 0,
+  };
+}
+
 export function emptyShopProduct(): ShopProduct {
   return {
     id: newId(),
@@ -574,6 +629,101 @@ export function dismissPilotCard(): boolean {
     return false;
   }
 }
+
+/**
+ * Wipe all Jobber Pest Logger keys on this device. Caller must confirm.
+ * Re-seeds example catalog so first-run can start again. Does not touch other origins.
+ * Snapshots first and rolls back on any failed write so saved:false means prior data is intact.
+ */
+export function wipeAllDeviceData(): {
+  saved: boolean;
+  catalog: ShopProduct[];
+  logs: ApplicationLog[];
+  people: Person[];
+  settings: ShopSettings;
+  lastBackupAt: string | null;
+} {
+  const clearedSettings = emptySettings();
+  const seed = EXAMPLE_SEEDS.map((p) => ({ ...p }));
+  const keys = [
+    LOGS_KEY,
+    CATALOG_KEY,
+    PEOPLE_KEY,
+    SETTINGS_KEY,
+    LAST_BACKUP_KEY,
+    PILOT_CARD_KEY,
+    A2HS_TIP_KEY,
+  ] as const;
+  const snapshot: Record<string, string | null> = {};
+  try {
+    for (const key of keys) {
+      snapshot[key] = localStorage.getItem(key);
+    }
+  } catch (err) {
+    console.error("jobber-pest-logger: could not snapshot storage before wipe", err);
+    return {
+      saved: false,
+      catalog: loadCatalog(),
+      logs: loadLogs(),
+      people: loadPeople(),
+      settings: loadSettings(),
+      lastBackupAt: loadLastBackupAt(),
+    };
+  }
+
+  const rollback = () => {
+    try {
+      for (const key of keys) {
+        const prev = snapshot[key];
+        if (prev === null) localStorage.removeItem(key);
+        else localStorage.setItem(key, prev);
+      }
+    } catch (err) {
+      console.error("jobber-pest-logger: could not roll back failed wipe", err);
+    }
+  };
+
+  try {
+    localStorage.removeItem(LAST_BACKUP_KEY);
+    localStorage.removeItem(PILOT_CARD_KEY);
+    localStorage.removeItem(A2HS_TIP_KEY);
+    const catalogOk = saveCatalog(seed);
+    const logsOk = saveLogs([]);
+    const peopleOk = savePeople([]);
+    const settingsOk = saveSettings(clearedSettings);
+    if (!(catalogOk && logsOk && peopleOk && settingsOk)) {
+      rollback();
+      return {
+        saved: false,
+        catalog: loadCatalog(),
+        logs: loadLogs(),
+        people: loadPeople(),
+        settings: loadSettings(),
+        lastBackupAt: loadLastBackupAt(),
+      };
+    }
+    return {
+      saved: true,
+      catalog: seed,
+      logs: [],
+      people: [],
+      settings: clearedSettings,
+      lastBackupAt: null,
+    };
+  } catch (err) {
+    console.error("jobber-pest-logger: wipeAllDeviceData failed", err);
+    rollback();
+    return {
+      saved: false,
+      catalog: loadCatalog(),
+      logs: loadLogs(),
+      people: loadPeople(),
+      settings: loadSettings(),
+      lastBackupAt: loadLastBackupAt(),
+    };
+  }
+}
+
 
 /** Record a successful backup download timestamp (device-local clock → ISO). */
 export function markLastBackupNow(now = new Date()): boolean {

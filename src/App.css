@@ -608,3 +608,12 @@ label.field {
     padding-right: 0.75rem;
   }
 }
+
+.btn.danger-wipe {
+  width: 100%;
+  min-height: var(--tap);
+  border: 1px solid #e0b4ae;
+  background: #fff6f4;
+  color: var(--danger);
+  font-weight: 700;
+}
