@@ -9,6 +9,7 @@ import {
   parseBackup,
 } from "../storage";
 import type { ApplicationLog, Person, ShopProduct, ShopSettings } from "../types";
+import { shopStoreStatusHint } from "../shop";
 
 interface Props {
   settings: ShopSettings;
@@ -127,6 +128,10 @@ export function Settings({
 
   return (
     <div>
+      <p className="hint store-status-settings" role="status">
+        {shopStoreStatusHint()}
+      </p>
+      {/* Create / join shared shop + PIN / roles: later slices (#2–#8). */}
       <h2>Shop settings</h2>
       <p className="hint">
         Shop name and TPCL live under their own localStorage key (separate from logs, catalog, and

@@ -33,6 +33,7 @@ import {
   type PropertyBookEntry,
 } from "./storage";
 import type { ApplicationLog, Person, Screen, ShopProduct, ShopSettings } from "./types";
+import { resolveShopStore, shopStoreStatusHint } from "./shop";
 import "./App.css";
 
 export default function App() {
@@ -238,6 +239,9 @@ export default function App() {
       <header className="topbar">
         <div className="eyebrow">Texas TDA · Jobber sidecar</div>
         <h1>Jobber Pest Logger</h1>
+        <p className="store-status" role="status">
+          {shopStoreStatusHint(resolveShopStore())}
+        </p>
       </header>
       <div className="banner">
         v1.6. Thin PWA polish (A2HS tip + manifest). Schema locked to 4 TAC § 7.144. Texas SPCS

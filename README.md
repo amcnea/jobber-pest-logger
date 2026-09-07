@@ -145,6 +145,36 @@ See package.json scripts. Install dependencies, then start the Vite "dev" script
 
 Production: "build" then "preview". Requires Node ^20.19 or Node >=22.12 (Vite 7). Data stays in the browser; nothing is uploaded.
 
+## Shared shop store (foundation)
+
+Optional **Firebase Firestore** remote so multiple office devices can share one shop document later. Still works as a static GitHub Pages app — no host migration.
+
+### Stack choice
+
+- **Local (default):** existing `localStorage` via `LocalShopStore` wrapping `storage.ts` (logs, catalog, people, settings, last-backup stamp).
+- **Shared (optional):** `RemoteShopStore` writes `shops/{shopId}` in Firestore when Vite Firebase env is set **and** this device has joined a shop session (`jobber-pest-logger:shop-session:v1` with `{ shopId }`). Empty session ⇒ local only (office-desk single-device default).
+
+`resolveShopStore()` picks local vs shared. App screens still use the existing storage paths for day-to-day reads/writes in this slice; the store API is the foundation for create/join and live sync in later PRs.
+
+### Env vars (optional)
+
+Copy `.env.example`. When **any** required key is missing, the app stays in **local-only** mode (current behavior). Firebase is **not** required for build, dev, or CI. The `firebase` package is lazy-imported so local-only loads do not need a project.
+
+- `VITE_FIREBASE_API_KEY`
+- `VITE_FIREBASE_AUTH_DOMAIN`
+- `VITE_FIREBASE_PROJECT_ID`
+- `VITE_FIREBASE_APP_ID`
+
+### Not in this slice (later PRs)
+
+Create/join UI, PIN, role gates, offline queue, migrating local → shop on join. Settings/topbar show a calm status line such as **This device: local only (shared shop not joined)** — no fake role toggle.
+
+### Firestore security rules (follow-up)
+
+Rules must restrict shop documents by shop code / join credentials before production shared use. This repo does **not** ship enforced rules yet — treat open rules as unsafe. Add a `firestore.rules` draft when join lands.
+
+Does not add Jobber OAuth, email SaaS, inventory, or role-gated UI.
+
 ## Stack
 
 React + Vite + TypeScript. CSV from the locked columns. PDF via jsPDF (print stylesheet as a fallback).
