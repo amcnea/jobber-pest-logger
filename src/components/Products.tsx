@@ -186,7 +186,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
       {draft.isExample && (
         <p className="hint">Example items never print a registration number in CSV or PDF.</p>
       )}
-      <div className="row">
+      <div className="sticky-save sticky-actions row">
         <button className="btn btn-primary" type="submit">
           Save product
         </button>
