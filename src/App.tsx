@@ -24,6 +24,8 @@ import {
   loadPeople,
   loadSettings,
   removeExampleProductsFromCatalog,
+  clearExampleDemoData,
+  wipeAllDeviceData,
   saveSettings,
   upsertLog,
   upsertPerson,
@@ -118,6 +120,48 @@ export default function App() {
     }
     setStorageError(null);
     return true;
+  }
+
+  function handleClearExamples(): { ok: boolean; summary: string } {
+    const result = clearExampleDemoData();
+    setCatalog(result.catalog);
+    setLogs(result.logs);
+    if (!result.saved) {
+      setStorageError("Could not clear example data on this device.");
+      return { ok: false, summary: "Could not clear example data on this device." };
+    }
+    setStorageError(null);
+    const bits = [
+      result.removedCatalog
+        ? `${result.removedCatalog} example product${result.removedCatalog === 1 ? "" : "s"} removed from catalog`
+        : "no example products in catalog",
+      result.removedLogs
+        ? `${result.removedLogs} demo log${result.removedLogs === 1 ? "" : "s"} deleted`
+        : null,
+      result.strippedLogs
+        ? `${result.strippedLogs} log${result.strippedLogs === 1 ? "" : "s"} stripped of example lines`
+        : null,
+    ].filter(Boolean);
+    return { ok: true, summary: `Example / demo data cleared (${bits.join("; ")}).` };
+  }
+
+  function handleWipeAll(): { ok: boolean; summary: string } {
+    const result = wipeAllDeviceData();
+    setCatalog(result.catalog);
+    setLogs(result.logs);
+    setPeople(result.people);
+    setSettings(result.settings);
+    setLastBackupAt(result.lastBackupAt);
+    setDraftSeed(null);
+    if (!result.saved) {
+      setStorageError("Could not wipe data on this device.");
+      return { ok: false, summary: "Could not wipe data on this device." };
+    }
+    setStorageError(null);
+    return {
+      ok: true,
+      summary: "All device data wiped. Example seeds re-added for a fresh first-run.",
+    };
   }
 
   function handleUpsertPerson(person: Person): boolean {
@@ -278,6 +322,8 @@ export default function App() {
             onSave={handleSaveSettings}
             onRestored={handleRestored}
             onBackupStampChange={setLastBackupAt}
+            onClearExamples={handleClearExamples}
+            onWipeAll={handleWipeAll}
           />
         )}
         {screen === "export" && (

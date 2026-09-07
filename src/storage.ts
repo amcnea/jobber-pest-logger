@@ -1,4 +1,4 @@
-import { EXAMPLE_SEEDS, inferIsExample, isExampleShopProduct } from "./catalog";
+import { EXAMPLE_SEEDS, inferIsExample, isExampleShopProduct, logHasExampleProducts } from "./catalog";
 import { newId } from "./ids";
 import type { ApplicationLog, AppliedProduct, Person, PersonnelRole, ShopProduct, ShopSettings } from "./types";
 
@@ -332,6 +332,61 @@ export function removeExampleProductsFromCatalog(): { catalog: ShopProduct[]; sa
   return { catalog: saved ? next : current, saved, removed: saved ? removed : 0 };
 }
 
+
+/**
+ * Soft demo reset: remove example catalog seeds and strip/drop logs that used them.
+ * Does not delete real (non-example) products, people, settings, or backup stamp.
+ */
+export function clearExampleDemoData(): {
+  catalog: ShopProduct[];
+  logs: ApplicationLog[];
+  saved: boolean;
+  removedCatalog: number;
+  removedLogs: number;
+  strippedLogs: number;
+} {
+  const cat = removeExampleProductsFromCatalog();
+  const currentLogs = loadLogs();
+  let removedLogs = 0;
+  let strippedLogs = 0;
+  const nextLogs: ApplicationLog[] = [];
+  for (const log of currentLogs) {
+    const hadExamples = log.sampleData === true || logHasExampleProducts(log.products);
+    const kept = log.products.filter(
+      (p) =>
+        !inferIsExample({
+          isExample: p.isExample,
+          catalogId: p.catalogId,
+          epaRegNo: p.epaRegNo,
+        }),
+    );
+    if (hadExamples && kept.length === 0) {
+      removedLogs += 1;
+      continue;
+    }
+    if (kept.length !== log.products.length) {
+      strippedLogs += 1;
+      nextLogs.push({
+        ...log,
+        products: kept,
+        sampleData: false,
+      });
+    } else {
+      nextLogs.push(log);
+    }
+  }
+  const logsSaved = saveLogs(nextLogs);
+  const saved = cat.saved && logsSaved;
+  return {
+    catalog: cat.catalog,
+    logs: saved ? nextLogs : currentLogs,
+    saved,
+    removedCatalog: cat.removed,
+    removedLogs: saved ? removedLogs : 0,
+    strippedLogs: saved ? strippedLogs : 0,
+  };
+}
+
 export function emptyShopProduct(): ShopProduct {
   return {
     id: newId(),
@@ -574,6 +629,54 @@ export function dismissPilotCard(): boolean {
     return false;
   }
 }
+
+/**
+ * Wipe all Jobber Pest Logger keys on this device. Caller must confirm.
+ * Re-seeds example catalog so first-run can start again. Does not touch other origins.
+ */
+export function wipeAllDeviceData(): {
+  saved: boolean;
+  catalog: ShopProduct[];
+  logs: ApplicationLog[];
+  people: Person[];
+  settings: ShopSettings;
+  lastBackupAt: string | null;
+} {
+  const emptySettings: ShopSettings = { shopName: "", shopTpclNumber: "", shopTpclLetter: "" };
+  const seed = EXAMPLE_SEEDS.map((p) => ({ ...p }));
+  try {
+    localStorage.removeItem(LOGS_KEY);
+    localStorage.removeItem(PEOPLE_KEY);
+    localStorage.removeItem(SETTINGS_KEY);
+    localStorage.removeItem(LAST_BACKUP_KEY);
+    localStorage.removeItem(PILOT_CARD_KEY);
+    localStorage.removeItem(A2HS_TIP_KEY);
+    const catalogOk = saveCatalog(seed);
+    const logsOk = saveLogs([]);
+    const peopleOk = savePeople([]);
+    const settingsOk = saveSettings(emptySettings);
+    const saved = catalogOk && logsOk && peopleOk && settingsOk;
+    return {
+      saved,
+      catalog: seed,
+      logs: [],
+      people: [],
+      settings: emptySettings,
+      lastBackupAt: null,
+    };
+  } catch (err) {
+    console.error("jobber-pest-logger: wipeAllDeviceData failed", err);
+    return {
+      saved: false,
+      catalog: loadCatalog(),
+      logs: loadLogs(),
+      people: loadPeople(),
+      settings: loadSettings(),
+      lastBackupAt: loadLastBackupAt(),
+    };
+  }
+}
+
 
 /** Record a successful backup download timestamp (device-local clock → ISO). */
 export function markLastBackupNow(now = new Date()): boolean {

@@ -21,6 +21,8 @@ interface Props {
     settings: ShopSettings;
   }) => void;
   onBackupStampChange: (iso: string | null) => void;
+  onClearExamples: () => { ok: boolean; summary: string };
+  onWipeAll: () => { ok: boolean; summary: string };
 }
 
 export function Settings({
@@ -29,11 +31,14 @@ export function Settings({
   onSave,
   onRestored,
   onBackupStampChange,
+  onClearExamples,
+  onWipeAll,
 }: Props) {
   const [draft, setDraft] = useState<ShopSettings>(settings);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [backupMsg, setBackupMsg] = useState<string | null>(null);
   const [backupError, setBackupError] = useState<string | null>(null);
+  const [demoMsg, setDemoMsg] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const lastBackupLabel = formatLastBackupLabel(lastBackupAt);
@@ -214,6 +219,62 @@ export function Settings({
         {backupError && (
           <p className="hint" role="alert">
             {backupError}
+          </p>
+        )}
+      </div>
+
+
+      <h2>Demo / reset</h2>
+      <p className="hint">
+        Soft demo reset clears example catalog seeds and any logs that only used them. Real products,
+        people, settings, and backups stay. A full wipe needs an explicit confirm — it removes real
+        shop data on this device and re-seeds examples.
+      </p>
+      <div className="card settings-backup-actions">
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={() => {
+            setDemoMsg(null);
+            const result = onClearExamples();
+            setDemoMsg(result.summary);
+          }}
+        >
+          Clear example / demo data
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost danger-wipe"
+          onClick={() => {
+            setDemoMsg(null);
+            if (
+              !confirm(
+                "Wipe ALL Jobber Pest Logger data on this device? Logs, real products, people, and settings will be deleted. Example seeds will be re-added. This cannot be undone.",
+              )
+            ) {
+              return;
+            }
+            if (
+              !confirm(
+                "Last chance: permanently wipe real shop data (logs, products, people, settings) on this device?",
+              )
+            ) {
+              return;
+            }
+            const result = onWipeAll();
+            setDemoMsg(result.summary);
+            if (result.ok) {
+              setDraft({ shopName: "", shopTpclNumber: "", shopTpclLetter: "" });
+              setSavedMsg(null);
+              setBackupMsg(null);
+            }
+          }}
+        >
+          Wipe all data on this device…
+        </button>
+        {demoMsg && (
+          <p className="hint" role="status">
+            {demoMsg}
           </p>
         )}
       </div>
