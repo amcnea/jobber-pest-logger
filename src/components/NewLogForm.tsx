@@ -531,6 +531,7 @@ export function NewLogForm({
                   }
                   inputMode="decimal"
                 />
+                {errors.termiteArea && <span className="error">{errors.termiteArea}</span>}
               </label>
             )}
             <label className="field">
@@ -615,6 +616,21 @@ export function NewLogForm({
                         />
                       </label>
                     </div>
+                    {(errors.termiteTankCount ||
+                      errors.termiteTankGallons ||
+                      errors.termiteStart ||
+                      errors.termiteStop) && (
+                      <p className="error">
+                        {[
+                          errors.termiteTankCount && "Tank count required",
+                          errors.termiteTankGallons && "Tank gallons required",
+                          errors.termiteStart && "Start time required",
+                          errors.termiteStop && "Stop time required",
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </p>
+                    )}
                   </>
                 )}
               </>
