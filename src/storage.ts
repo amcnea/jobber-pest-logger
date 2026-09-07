@@ -431,6 +431,7 @@ export function peopleForRole(people: Person[], role: PersonnelRole): Person[] {
 
 const SETTINGS_KEY = "jobber-pest-logger:settings:v1";
 const LAST_BACKUP_KEY = "jobber-pest-logger:last-backup:v1";
+const PILOT_CARD_KEY = "jobber-pest-logger:pilot-card-dismissed:v1";
 
 /** Soft nag when never backed up or last backup older than this many days. */
 export const BACKUP_NAG_DAYS = 7;
@@ -525,6 +526,26 @@ export function loadLastBackupAt(): string | null {
     return null;
   } catch {
     return null;
+  }
+}
+
+/** Whether the shop pilot / Jobber how-to card was dismissed on this device. */
+export function loadPilotCardDismissed(): boolean {
+  try {
+    return localStorage.getItem(PILOT_CARD_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Hide the shop pilot card on this device until storage is cleared. */
+export function dismissPilotCard(): boolean {
+  try {
+    localStorage.setItem(PILOT_CARD_KEY, "1");
+    return true;
+  } catch (err) {
+    console.error("jobber-pest-logger: could not dismiss pilot card", err);
+    return false;
   }
 }
 

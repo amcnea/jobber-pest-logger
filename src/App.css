@@ -416,3 +416,44 @@ label.field {
     grid-template-columns: 1fr;
   }
 }
+
+
+.banner-pilot {
+  background: #eef3f8;
+  color: #1a2f3d;
+  border-bottom-color: #b8c9d6;
+}
+
+.banner-pilot strong {
+  display: block;
+  margin-bottom: 0.15rem;
+}
+
+.banner-pilot .disclaimer {
+  margin: 0.55rem 0 0.65rem;
+  background: transparent;
+  border-left-color: #8aa0b0;
+}
+
+.pilot-steps {
+  margin: 0.35rem 0 0.25rem;
+  padding-left: 1.15rem;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.pilot-steps li {
+  margin-bottom: 0.25rem;
+}
+
+.banner-pilot .btn {
+  margin-top: 0.15rem;
+  font-size: 0.78rem;
+  min-height: 40px;
+}
+
+.banner-pilot a {
+  color: var(--brand-2);
+  font-weight: 700;
+  word-break: break-all;
+}
