@@ -25,6 +25,7 @@ export function History({ logs, onDelete, onEdit, onLogAgainHere, onDuplicateLas
 
   const ymd = /^\d{4}-\d{2}-\d{2}$/;
   const rangeActive = ymd.test(dateFrom.trim()) || ymd.test(dateTo.trim());
+  const hasDateInput = Boolean(dateFrom.trim() || dateTo.trim());
 
   const filtered = useMemo(
     () => filterLogsByDateUsed(logs, dateFrom, dateTo),
@@ -91,7 +92,7 @@ export function History({ logs, onDelete, onEdit, onLogAgainHere, onDuplicateLas
             type="button"
             className="btn btn-secondary"
             onClick={clearDates}
-            disabled={!rangeActive}
+            disabled={!hasDateInput}
           >
             Clear dates
           </button>
