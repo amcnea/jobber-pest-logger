@@ -4,6 +4,7 @@
  * Firebase SDK is lazy-imported so local-only builds do not need a project at runtime.
  */
 
+import { parseShopSections } from "../storage";
 import type { FirebaseClientConfig } from "./firebaseConfig";
 import { isValidShopId } from "./session";
 import type { ShopDocument, ShopStore, ShopStoreResult } from "./types";
@@ -92,30 +93,43 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Light shape check — full field validation stays in storage parsers for now. */
+/** Validate remote shop doc with the same section parsers as backup restore. */
 function coerceShopDocument(raw: unknown): ShopDocument | null {
   if (!isRecord(raw)) return null;
   if (typeof raw.version !== "string" || !raw.version.trim()) return null;
   if (typeof raw.updatedAt !== "string" || !raw.updatedAt.trim()) return null;
-  if (!Array.isArray(raw.logs) || !Array.isArray(raw.catalog) || !Array.isArray(raw.people)) {
+
+  let lastBackupAt: string | null | undefined;
+  if (raw.lastBackupAt === undefined) {
+    lastBackupAt = undefined;
+  } else if (raw.lastBackupAt === null) {
+    lastBackupAt = null;
+  } else if (
+    typeof raw.lastBackupAt === "string" &&
+    raw.lastBackupAt.trim() !== "" &&
+    !Number.isNaN(Date.parse(raw.lastBackupAt))
+  ) {
+    lastBackupAt = raw.lastBackupAt.trim();
+  } else {
     return null;
   }
-  if (!isRecord(raw.settings)) return null;
-  const lastBackupAt =
-    raw.lastBackupAt === undefined
-      ? undefined
-      : raw.lastBackupAt === null
-        ? null
-        : typeof raw.lastBackupAt === "string"
-          ? raw.lastBackupAt
-          : undefined;
+
+  const sectionsResult = parseShopSections({
+    logs: raw.logs,
+    catalog: raw.catalog,
+    people: raw.people,
+    settings: raw.settings,
+  });
+  if (!sectionsResult.ok) return null;
+
+  const { logs, catalog, people, settings } = sectionsResult.sections;
   return {
     version: raw.version.trim(),
     updatedAt: raw.updatedAt.trim(),
-    logs: raw.logs as unknown as ShopDocument["logs"],
-    catalog: raw.catalog as unknown as ShopDocument["catalog"],
-    people: raw.people as unknown as ShopDocument["people"],
-    settings: raw.settings as unknown as ShopDocument["settings"],
+    logs,
+    catalog,
+    people,
+    settings,
     lastBackupAt,
   };
 }
