@@ -121,7 +121,7 @@ export function Settings({
             autoComplete="organization"
           />
         </label>
-        <div className="row">
+        <div className="row row-tpcl">
           <label className="field">
             Shop TPCL number
             <input
@@ -143,7 +143,10 @@ export function Settings({
                 setDraft((d) => ({ ...d, shopTpclLetter: e.target.value }));
               }}
               placeholder="A"
+              maxLength={4}
               autoComplete="off"
+              inputMode="text"
+              aria-label="TPCL letter if any"
             />
           </label>
         </div>

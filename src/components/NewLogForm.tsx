@@ -200,7 +200,7 @@ export function NewLogForm({
           />
           {errors.targetPestOrPurpose && <span className="error">{errors.targetPestOrPurpose}</span>}
         </label>
-        <div className="row">
+        <div className="row row-tpcl">
           <label className="field">
             Shop TPCL number <span className="req">*</span>
             <input

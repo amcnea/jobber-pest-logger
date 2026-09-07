@@ -97,6 +97,8 @@ label.field {
 }
 
 .field input, .field select, .field textarea {
+  width: 100%;
+  min-width: 0;
   min-height: var(--tap);
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -111,6 +113,15 @@ label.field {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.6rem;
+}
+
+.row > .field {
+  min-width: 0;
+}
+
+/* TPCL number + short letter: keep letter column narrow on phone */
+.row-tpcl {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 4.75rem);
 }
 
 .row-3 {
