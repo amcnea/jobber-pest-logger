@@ -150,14 +150,16 @@ export function Settings({
             />
           </label>
         </div>
-        <button type="submit" className="btn btn-primary">
-          Save shop settings
-        </button>
-        {savedMsg && (
-          <p className="hint" role="status">
-            {savedMsg}
-          </p>
-        )}
+        <div className="sticky-save sticky-actions">
+          <button type="submit" className="btn btn-primary">
+            Save shop settings
+          </button>
+          {savedMsg && (
+            <p className="hint" role="status">
+              {savedMsg}
+            </p>
+          )}
+        </div>
       </form>
 
       <h2>Backup &amp; restore</h2>
@@ -173,7 +175,7 @@ export function Settings({
           {nag}
         </p>
       )}
-      <div className="card">
+      <div className="card settings-backup-actions">
         <button
           type="button"
           className="btn btn-primary"
@@ -186,12 +188,11 @@ export function Settings({
         >
           Download backup JSON
         </button>
-        <div style={{ height: "0.6rem" }} />
         <input
           ref={fileRef}
           type="file"
           accept="application/json,.json"
-          style={{ display: "none" }}
+          className="visually-hidden"
           onChange={(ev) => {
             void handleRestoreFile(ev);
           }}
@@ -199,7 +200,6 @@ export function Settings({
         <button
           type="button"
           className="btn btn-secondary"
-          style={{ width: "100%" }}
           onClick={() => fileRef.current?.click()}
         >
           Restore from file…

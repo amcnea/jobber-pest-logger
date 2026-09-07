@@ -232,6 +232,9 @@ export function Export({
           .
         </p>
         <p className="hint">Exports stay on your machine. Nothing is uploaded.</p>
+      </div>
+
+      <div className="sticky-save sticky-actions no-print">
         <div className="export-actions">
           <button
             type="button"
@@ -261,7 +264,7 @@ export function Export({
           )}
           <button
             type="button"
-            className="btn btn-secondary no-print"
+            className="btn btn-secondary"
             onClick={() => window.print()}
           >
             Print this page
