@@ -11,6 +11,13 @@ export function emptyShopSession(): ShopSession {
   return { shopId: "" };
 }
 
+/** Firestore doc ids cannot contain `/`; empty/invalid ⇒ local-only. */
+export function isValidShopId(shopId: string): boolean {
+  const id = shopId.trim();
+  return id.length > 0 && !id.includes("/");
+}
+
+
 /** Load join session. Missing or invalid ⇒ local (not joined). */
 export function loadShopSession(): ShopSession {
   try {
@@ -19,7 +26,7 @@ export function loadShopSession(): ShopSession {
     const parsed = JSON.parse(raw) as unknown;
     if (!isRecord(parsed)) return emptyShopSession();
     const shopId = typeof parsed.shopId === "string" ? parsed.shopId.trim() : "";
-    return { shopId };
+    return { shopId: isValidShopId(shopId) ? shopId : "" };
   } catch {
     return emptyShopSession();
   }
@@ -32,7 +39,7 @@ export function loadShopSession(): ShopSession {
 export function saveShopSession(session: ShopSession): boolean {
   try {
     const shopId = session.shopId.trim();
-    if (!shopId) {
+    if (!isValidShopId(shopId)) {
       localStorage.removeItem(SHOP_SESSION_KEY);
       return true;
     }
@@ -49,5 +56,5 @@ export function clearShopSession(): boolean {
 }
 
 export function hasJoinedShop(session: ShopSession = loadShopSession()): boolean {
-  return session.shopId.trim().length > 0;
+  return isValidShopId(session.shopId);
 }

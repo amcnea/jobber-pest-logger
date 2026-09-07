@@ -14,6 +14,7 @@ export {
   clearShopSession,
   emptyShopSession,
   hasJoinedShop,
+  isValidShopId,
   loadShopSession,
   saveShopSession,
 } from "./session";

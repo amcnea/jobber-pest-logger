@@ -124,7 +124,8 @@ export class RemoteShopStore implements ShopStore {
       const { docRef, setDoc } = await this.fs();
       const payload: ShopDocument = {
         ...doc,
-        updatedAt: doc.updatedAt || new Date().toISOString(),
+        // Always stamp write time — caller updatedAt may be stale (local get / cache).
+        updatedAt: new Date().toISOString(),
       };
       await setDoc(docRef, payload);
       return { ok: true, value: undefined };
