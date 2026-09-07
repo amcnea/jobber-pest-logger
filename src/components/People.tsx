@@ -166,7 +166,7 @@ export function People({ people, onUpsert, onDelete }: Props) {
           not TDA-required). No SMS.
         </span>
       </label>
-      <div className="row">
+      <div className="sticky-save sticky-actions row">
         <button className="btn btn-primary" type="submit">
           Save tech
         </button>
