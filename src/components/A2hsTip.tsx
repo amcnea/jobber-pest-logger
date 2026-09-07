@@ -10,14 +10,22 @@ function isStandaloneDisplay(): boolean {
   return false;
 }
 
+/** iPadOS Safari/Chrome often report a Macintosh UA; touch points expose the tablet. */
+function isIpadOsDesktopUa(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return /Macintosh/i.test(navigator.userAgent) && navigator.maxTouchPoints > 1;
+}
+
 function isLikelyMobile(): boolean {
   if (typeof navigator === "undefined") return false;
-  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  return (
+    /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || isIpadOsDesktopUa()
+  );
 }
 
 function isIos(): boolean {
   if (typeof navigator === "undefined") return false;
-  return /iPhone|iPad|iPod/i.test(navigator.userAgent);
+  return /iPhone|iPad|iPod/i.test(navigator.userAgent) || isIpadOsDesktopUa();
 }
 
 /**
