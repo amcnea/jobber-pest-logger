@@ -3,6 +3,7 @@ import { exportBlockedByExamples, productEpaCaption } from "../catalog";
 import { downloadCsv } from "../csv";
 import { filterLogsByDateUsed, monthRangeLocal } from "../dates";
 import { LAWGICAL_DISCLAIMER } from "../disclaimer";
+import { exportCompletenessIssues } from "../formDefaults";
 import { backupNagMessage, formatLastBackupLabel } from "../storage";
 import type { ApplicationLog, Screen, ShopProduct, ShopSettings } from "../types";
 
@@ -40,7 +41,12 @@ export function Export({
     () => exportBlockedByExamples(catalog, logs),
     [catalog, logs],
   );
-  const exportBlocked = exampleGate.blocked;
+  const completenessIssues = useMemo(
+    () => exportCompletenessIssues(filtered),
+    [filtered],
+  );
+  const completenessBlocked = completenessIssues.length > 0;
+  const exportBlocked = exampleGate.blocked || completenessBlocked;
 
   const shopName = settings.shopName.trim();
   const ymd = /^\d{4}-\d{2}-\d{2}$/;
@@ -104,7 +110,7 @@ export function Export({
         </p>
       )}
 
-      {exportBlocked && (
+      {exampleGate.blocked && (
         <div className="nag nag-block" role="status">
           <strong>Example seeds still present — CSV/PDF export disabled</strong>
           <p>
@@ -141,10 +147,38 @@ export function Export({
           )}
         </div>
       )}
-      {!exportBlocked && exampleMsg && (
+      {!exampleGate.blocked && exampleMsg && (
         <p className="hint" role="status">
           {exampleMsg}
         </p>
+      )}
+
+      {completenessBlocked && (
+        <div className="nag nag-block" role="status">
+          <strong>Incomplete records in range — CSV/PDF export disabled</strong>
+          <p>
+            Every log in the export set needs filled § 7.144(a) fields
+            {completenessIssues.some((i) =>
+              i.fields.some((f) => f.toLowerCase().includes("termite") || f.toLowerCase().includes("pretreat")),
+            )
+              ? ", plus termite § 7.144(b) extras when that flag is on"
+              : ""}
+            . Edit them in History, then come back.
+          </p>
+          <ul className="warn-list">
+            {completenessIssues.slice(0, 8).map((issue) => (
+              <li key={issue.logId}>
+                {issue.dateUsed} · {issue.serviceAddress}: {issue.fields.join("; ")}
+              </li>
+            ))}
+            {completenessIssues.length > 8 && (
+              <li>…and {completenessIssues.length - 8} more incomplete log(s)</li>
+            )}
+          </ul>
+          <button type="button" className="btn btn-secondary" onClick={() => onGo("history")}>
+            Open History
+          </button>
+        </div>
       )}
 
       <div className="card">

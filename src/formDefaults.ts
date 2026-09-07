@@ -80,6 +80,24 @@ export interface FieldErrors {
   [key: string]: string;
 }
 
+/** Human labels for export completeness UI (keys match validateLog). */
+export const FIELD_LABELS: Record<string, string> = {
+  customerBillingName: "Customer billing name",
+  customerBillingAddress: "Customer billing address",
+  serviceAddress: "Service address",
+  targetPestOrPurpose: "Target pest or purpose",
+  dateUsed: "Date used",
+  shopTpclNumber: "Shop TPCL number",
+  applyingName: "Person applying — name",
+  applyingLicense: "Person applying — license number",
+  products: "Pesticides / devices",
+  termiteArea: "Termite area treated (sq ft)",
+  termiteTankCount: "Pretreat tank count",
+  termiteTankGallons: "Pretreat tank gallons",
+  termiteStart: "Pretreat start time",
+  termiteStop: "Pretreat stop time",
+};
+
 export function validateLog(log: ApplicationLog): FieldErrors {
   const errors: FieldErrors = {};
   if (!log.customerBillingName.trim()) errors.customerBillingName = "Required";
@@ -93,6 +111,9 @@ export function validateLog(log: ApplicationLog): FieldErrors {
   if (!applying?.licenseNumber.trim()) errors.applyingLicense = "Required";
   if (log.products.length === 0) errors.products = "Add at least one pesticide or device from the shop list.";
   log.products.forEach((p, i) => {
+    if (!p.name.trim()) {
+      errors[`product-${i}-name`] = "Product name required";
+    }
     if (p.method === "device" && !p.deviceCount.trim()) {
       errors[`product-${i}-device`] = "Device count required";
     }
@@ -108,7 +129,66 @@ export function validateLog(log: ApplicationLog): FieldErrors {
       }
     }
   });
+  if (log.isTermite) {
+    if (!log.termite.isBait && !log.termite.areaTreatedSqFt.trim()) {
+      errors.termiteArea = "Required for non-bait termite work";
+    }
+    if (log.termite.isCommercialPretreat) {
+      if (!log.termite.tankCount.trim()) errors.termiteTankCount = "Required";
+      if (!log.termite.tankGallons.trim()) errors.termiteTankGallons = "Required";
+      if (!log.termite.startTime.trim()) errors.termiteStart = "Required";
+      if (!log.termite.stopTime.trim()) errors.termiteStop = "Required";
+    }
+  }
   return errors;
+}
+
+export interface ExportCompletenessIssue {
+  logId: string;
+  dateUsed: string;
+  serviceAddress: string;
+  fields: string[];
+}
+
+/** Empty required § 7.144(a) fields (and termite (b) when flagged) on logs in the export set. */
+export function exportCompletenessIssues(logs: ApplicationLog[]): ExportCompletenessIssue[] {
+  const issues: ExportCompletenessIssue[] = [];
+  for (const log of logs) {
+    const errors = validateLog(log);
+    const keys = Object.keys(errors);
+    if (keys.length === 0) continue;
+    const fields = keys.map((k) => {
+      if (FIELD_LABELS[k]) return FIELD_LABELS[k];
+      if (k.startsWith("product-")) {
+        const m = /^product-(\d+)-(.*)$/.exec(k);
+        if (m) {
+          const idx = Number(m[1]) + 1;
+          const part = m[2];
+          const partLabel =
+            part === "name"
+              ? "name"
+              : part === "device"
+                ? "device count"
+                : part === "rtu"
+                  ? "RTU amount"
+                  : part === "mix"
+                    ? "mix rate / % AI"
+                    : part === "total"
+                      ? "total material applied"
+                      : part;
+          return `Product line ${idx}: ${partLabel}`;
+        }
+      }
+      return k;
+    });
+    issues.push({
+      logId: log.id,
+      dateUsed: log.dateUsed || "(no date)",
+      serviceAddress: log.serviceAddress.trim() || "(no service address)",
+      fields,
+    });
+  }
+  return issues;
 }
 
 /** On edit, keep original createdAt; always refresh sampleData from products. */
