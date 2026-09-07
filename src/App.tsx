@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Export } from "./components/Export";
 import { FirstRunChecklist } from "./components/FirstRunChecklist";
 import { A2hsTip } from "./components/A2hsTip";
@@ -53,6 +53,13 @@ export default function App() {
     slot: "backup" | "demo";
     text: string;
   } | null>(null);
+
+  // Settings seeds local banners from flash on remount; clear so revisit/fail
+  // cannot resurrect a stale success message.
+  useEffect(() => {
+    if (settingsFlash == null) return;
+    setSettingsFlash(null);
+  }, [settingsFormKey, settingsFlash]);
 
   const peopleWarnings = useMemo(() => collectPeopleWarnings(people), [people]);
   const firstRunSteps = useMemo(
