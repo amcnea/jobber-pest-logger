@@ -544,6 +544,7 @@ export function loadA2hsTipDismissed(): boolean {
   }
 }
 
+/** Hide the Add to Home Screen tip on this device until storage is cleared. */
 export function dismissA2hsTip(): boolean {
   try {
     localStorage.setItem(A2HS_TIP_KEY, "1");

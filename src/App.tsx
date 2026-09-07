@@ -168,7 +168,7 @@ export default function App() {
         <h1>Jobber Pest Logger</h1>
       </header>
       <div className="banner">
-        v1.6. Thin PWA polish + PDF/History/catalog gates. Schema locked to 4 TAC § 7.144. Texas SPCS
+        v1.6. Thin PWA polish (A2HS tip + manifest). Schema locked to 4 TAC § 7.144. Texas SPCS
         shops. Example seeds and incomplete records block real CSV/PDF export.
       </div>
       <FirstRunChecklist steps={firstRunSteps} onGo={setScreen} />
