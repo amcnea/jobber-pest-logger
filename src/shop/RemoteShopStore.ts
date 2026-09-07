@@ -5,6 +5,7 @@
  */
 
 import type { FirebaseClientConfig } from "./firebaseConfig";
+import { isValidShopId } from "./session";
 import type { ShopDocument, ShopStore, ShopStoreResult } from "./types";
 
 const SHOPS_COLLECTION = "shops";
@@ -85,8 +86,11 @@ export class RemoteShopStore implements ShopStore {
   constructor(config: FirebaseClientConfig, shopId: string) {
     this.config = config;
     this.shopId = shopId.trim();
-    if (!this.shopId) {
-      throw new Error("RemoteShopStore requires a non-empty shopId");
+    // Match session.isValidShopId — Firestore doc ids cannot contain `/`.
+    if (!isValidShopId(this.shopId)) {
+      throw new Error(
+        'RemoteShopStore requires a non-empty shopId without "/" (Firestore path separator)',
+      );
     }
   }
 

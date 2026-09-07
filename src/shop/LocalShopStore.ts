@@ -17,14 +17,43 @@ import {
 } from "../storage";
 import type { ShopDocument, ShopStore, ShopStoreResult } from "./types";
 
+/** Last successful putShop write time — not part of backup/wipe payload in #1. */
+const LOCAL_UPDATED_AT_KEY = "jobber-pest-logger:shop-updated-at:v1";
+
+function readLocalUpdatedAt(): string | null {
+  try {
+    const raw = localStorage.getItem(LOCAL_UPDATED_AT_KEY);
+    if (!raw) return null;
+    const trimmed = raw.trim();
+    return trimmed || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Best-effort stamp; failures are ignored so callers can still report data save success. */
+function writeLocalUpdatedAt(iso: string): void {
+  try {
+    localStorage.setItem(LOCAL_UPDATED_AT_KEY, iso);
+  } catch (err) {
+    console.error("jobber-pest-logger: could not stamp local shop updatedAt", err);
+  }
+}
+
 export class LocalShopStore implements ShopStore {
   readonly mode = "local" as const;
 
   async getShop(): Promise<ShopStoreResult<ShopDocument>> {
     try {
+      let updatedAt = readLocalUpdatedAt();
+      if (!updatedAt) {
+        // First read before any put — seed a stable stamp so later sync/diff is not "now" every call.
+        updatedAt = new Date().toISOString();
+        writeLocalUpdatedAt(updatedAt);
+      }
       const doc: ShopDocument = {
         version: BACKUP_VERSION,
-        updatedAt: new Date().toISOString(),
+        updatedAt,
         logs: loadLogs(),
         catalog: loadCatalog(),
         people: loadPeople(),
@@ -55,6 +84,8 @@ export class LocalShopStore implements ShopStore {
           error: "Could not save shop data on this device (storage full or blocked).",
         };
       }
+      // Stamp after successful data writes; meta failure must not fail the put.
+      writeLocalUpdatedAt(new Date().toISOString());
       return { ok: true, value: undefined };
     } catch (err) {
       const message = err instanceof Error ? err.message : "Could not save local shop data.";
