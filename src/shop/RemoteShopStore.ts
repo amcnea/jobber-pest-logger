@@ -10,18 +10,33 @@ import type { ShopDocument, ShopStore, ShopStoreResult } from "./types";
 
 const SHOPS_COLLECTION = "shops";
 
+/** Thrown inside a transaction when remote updatedAt !== caller's snapshot. */
+class ShopWriteConflictError extends Error {
+  readonly conflict = true as const;
+  constructor(message = "Shop was updated elsewhere; reload and try again.") {
+    super(message);
+    this.name = "ShopWriteConflictError";
+  }
+}
+
+type FirestoreSnap = { exists: () => boolean; data: () => unknown };
+
 type FirestoreFns = {
   docRef: unknown;
-  getDoc: (ref: unknown) => Promise<{ exists: () => boolean; data: () => unknown }>;
+  getDoc: (ref: unknown) => Promise<FirestoreSnap>;
   setDoc: (ref: unknown, data: unknown) => Promise<void>;
+  /**
+   * CAS put: fails with ShopWriteConflictError if the remote doc's updatedAt
+   * differs from expectedUpdatedAt (caller's snapshot). Stamps a fresh updatedAt
+   * on the written payload after the check succeeds.
+   */
+  putWithCas: (expectedUpdatedAt: string, payload: ShopDocument) => Promise<void>;
 };
 
 async function loadFirestore(config: FirebaseClientConfig, shopId: string): Promise<FirestoreFns> {
   // Lazy import — tree-shakeable entry; not pulled into the critical path when unused.
-  const [{ initializeApp, getApps }, { getFirestore, doc, getDoc, setDoc }] = await Promise.all([
-    import("firebase/app"),
-    import("firebase/firestore"),
-  ]);
+  const [{ initializeApp, getApps }, { getFirestore, doc, getDoc, setDoc, runTransaction }] =
+    await Promise.all([import("firebase/app"), import("firebase/firestore")]);
 
   const appName = "jobber-pest-logger";
   const existing = getApps().find((a) => a.name === appName);
@@ -42,6 +57,25 @@ async function loadFirestore(config: FirebaseClientConfig, shopId: string): Prom
     docRef,
     getDoc: getDoc as FirestoreFns["getDoc"],
     setDoc: setDoc as FirestoreFns["setDoc"],
+    putWithCas: async (expectedUpdatedAt, payload) => {
+      await runTransaction(db, async (transaction) => {
+        const snap = await transaction.get(docRef);
+        if (snap.exists()) {
+          const data = snap.data() as Record<string, unknown> | undefined;
+          const remoteUpdatedAt =
+            data && typeof data.updatedAt === "string" ? data.updatedAt : "";
+          if (remoteUpdatedAt !== expectedUpdatedAt) {
+            throw new ShopWriteConflictError();
+          }
+        }
+        // Missing doc ⇒ first write / create; no conflict.
+        // Stamp write time only after CAS succeeds (and on each retry attempt).
+        transaction.set(docRef, {
+          ...payload,
+          updatedAt: new Date().toISOString(),
+        });
+      });
+    },
   };
 }
 
@@ -125,15 +159,18 @@ export class RemoteShopStore implements ShopStore {
 
   async putShop(doc: ShopDocument): Promise<ShopStoreResult<void>> {
     try {
-      const { docRef, setDoc } = await this.fs();
-      const payload: ShopDocument = {
-        ...doc,
-        // Always stamp write time — caller updatedAt may be stale (local get / cache).
-        updatedAt: new Date().toISOString(),
-      };
-      await setDoc(docRef, payload);
+      const { putWithCas } = await this.fs();
+      // CAS against caller's snapshot updatedAt; transaction stamps a fresh updatedAt on write.
+      await putWithCas(doc.updatedAt, doc);
       return { ok: true, value: undefined };
     } catch (err) {
+      if (err instanceof ShopWriteConflictError || (err && (err as { conflict?: boolean }).conflict)) {
+        return {
+          ok: false,
+          error: "Shop was updated elsewhere; reload and try again.",
+          conflict: true,
+        };
+      }
       const message =
         err instanceof Error ? err.message : "Could not save shop to Firestore.";
       return { ok: false, error: message };

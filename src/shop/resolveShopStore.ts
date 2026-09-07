@@ -52,7 +52,8 @@ export function shopStoreStatusHint(
   info: ResolvedShopStoreInfo = resolveShopStore(),
 ): string {
   if (info.mode === "shared" && info.shopId) {
-    return `This device: shared shop (${info.shopId})`;
+    // App screens still read/write via storage.ts in this slice — do not claim live shared data.
+    return "Shared shop foundation ready — screens still device-local until join/sync wires in";
   }
   return "This device: local only (shared shop not joined)";
 }

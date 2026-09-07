@@ -22,7 +22,7 @@ export type ShopStoreMode = "local" | "shared";
 
 export type ShopStoreResult<T> =
   | { ok: true; value: T }
-  | { ok: false; error: string };
+  | { ok: false; error: string; /** True when remote CAS detected a newer snapshot. */ conflict?: boolean };
 
 /**
  * Get/put shop document. Subscribe is deferred to a later slice (offline/live).

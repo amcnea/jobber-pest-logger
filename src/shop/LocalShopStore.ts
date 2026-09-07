@@ -73,12 +73,43 @@ export class LocalShopStore implements ShopStore {
    * (included on getShop for document shape; not overwritten here).
    */
   async putShop(doc: ShopDocument): Promise<ShopStoreResult<void>> {
+    // Same four section keys as applyBackup in storage.ts — snapshot before multi-key write.
+    const keys = [
+      "jobber-pest-logger:logs:v1",
+      "jobber-pest-logger:catalog:v1",
+      "jobber-pest-logger:people:v1",
+      "jobber-pest-logger:settings:v1",
+    ] as const;
+    const snapshot: Record<string, string | null> = {};
+    try {
+      for (const key of keys) {
+        snapshot[key] = localStorage.getItem(key);
+      }
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Could not snapshot local shop data before save.";
+      return { ok: false, error: message };
+    }
+
+    const rollback = () => {
+      try {
+        for (const key of keys) {
+          const prev = snapshot[key];
+          if (prev === null) localStorage.removeItem(key);
+          else localStorage.setItem(key, prev);
+        }
+      } catch (err) {
+        console.error("jobber-pest-logger: could not roll back failed putShop", err);
+      }
+    };
+
     try {
       const logsOk = saveLogs(doc.logs);
       const catalogOk = saveCatalog(doc.catalog);
       const peopleOk = savePeople(doc.people);
       const settingsOk = saveSettings(doc.settings);
       if (!(logsOk && catalogOk && peopleOk && settingsOk)) {
+        rollback();
         return {
           ok: false,
           error: "Could not save shop data on this device (storage full or blocked).",
@@ -88,6 +119,7 @@ export class LocalShopStore implements ShopStore {
       writeLocalUpdatedAt(new Date().toISOString());
       return { ok: true, value: undefined };
     } catch (err) {
+      rollback();
       const message = err instanceof Error ? err.message : "Could not save local shop data.";
       return { ok: false, error: message };
     }

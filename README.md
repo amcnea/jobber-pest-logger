@@ -171,7 +171,7 @@ Create/join UI, PIN, role gates, offline queue, migrating local → shop on join
 
 ### Firestore security rules (follow-up)
 
-Rules must restrict shop documents by shop code / join credentials before production shared use. This repo does **not** ship enforced rules yet — treat open rules as unsafe. Add a `firestore.rules` draft when join lands.
+Client `shopId` alone is **not** authorization. Firestore security rules + membership (shop code / role / PIN) must land with create/join (#2–#5). This slice does **not** add Firebase Auth or email SaaS — product lock for later. Treat open project rules as unsafe until then. Draft `firestore.rules` in-repo is a deny-all placeholder (not production-ready).
 
 Does not add Jobber OAuth, email SaaS, inventory, or role-gated UI.
 
