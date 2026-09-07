@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { dismissA2hsTip, loadA2hsTipDismissed } from "../storage";
 
 function isStandaloneDisplay(): boolean {
-  if (typeof window === "undefined") return true;
+  if (typeof window === "undefined") return false;
   const mq = window.matchMedia?.("(display-mode: standalone)");
   if (mq?.matches) return true;
   const nav = window.navigator as Navigator & { standalone?: boolean };
@@ -29,6 +29,7 @@ export function A2hsTip() {
   const [standalone, setStandalone] = useState(() => isStandaloneDisplay());
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
     const mq = window.matchMedia?.("(display-mode: standalone)");
     const sync = () => setStandalone(isStandaloneDisplay());
     sync();
