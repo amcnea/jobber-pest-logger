@@ -1,0 +1,11 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Placeholder — deny all until join/PIN membership (#2–#5).
+    // Client shopId alone is not authorization.
+    // Do NOT deploy as "production ready" rules; replace when create/join ships.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

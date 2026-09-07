@@ -782,6 +782,70 @@ export function downloadBackup(): void {
   markLastBackupNow();
 }
 
+
+export type ShopSections = {
+  logs: ApplicationLog[];
+  catalog: ShopProduct[];
+  people: Person[];
+  settings: ShopSettings;
+};
+
+export type ShopSectionsParseResult =
+  | { ok: true; sections: ShopSections }
+  | { ok: false; error: string };
+
+/**
+ * Validate nested shop section payloads (logs/catalog/people/settings).
+ * Shared by parseBackup and RemoteShopStore.getShop — reject, do not drop, bad rows.
+ */
+export function parseShopSections(raw: {
+  logs: unknown;
+  catalog: unknown;
+  people: unknown;
+  settings: unknown;
+}): ShopSectionsParseResult {
+  if (!Array.isArray(raw.logs)) {
+    return { ok: false, error: "Shop logs must be an array." };
+  }
+  if (!Array.isArray(raw.catalog)) {
+    return { ok: false, error: "Shop catalog must be an array." };
+  }
+  if (!Array.isArray(raw.people)) {
+    return { ok: false, error: "Shop people must be an array." };
+  }
+  if (!isRecord(raw.settings)) {
+    return { ok: false, error: "Shop settings must be an object." };
+  }
+
+  const logs = (raw.logs as unknown[])
+    .map(normalizeLog)
+    .filter((l): l is ApplicationLog => l !== null);
+  if (logs.length !== (raw.logs as unknown[]).length) {
+    return { ok: false, error: "Shop contains invalid application log(s)." };
+  }
+
+  const catalog = (raw.catalog as unknown[])
+    .map(normalizeShopProduct)
+    .filter((prod): prod is ShopProduct => prod !== null);
+  if (catalog.length !== (raw.catalog as unknown[]).length) {
+    return { ok: false, error: "Shop contains invalid catalog product(s)." };
+  }
+
+  const people = (raw.people as unknown[])
+    .map(normalizePerson)
+    .filter((person): person is Person => person !== null);
+  if (people.length !== (raw.people as unknown[]).length) {
+    return { ok: false, error: "Shop contains invalid people row(s)." };
+  }
+
+  const settings = normalizeSettings(raw.settings);
+  if (!settings) {
+    return { ok: false, error: "Shop settings are invalid." };
+  }
+
+  return { ok: true, sections: { logs, catalog, people, settings } };
+}
+
 export type RestoreResult =
   | { ok: true; backup: DeviceBackup }
   | { ok: false; error: string };
@@ -807,44 +871,22 @@ export function parseBackup(raw: unknown): RestoreResult {
   if (Number.isNaN(Date.parse(exportedAt))) {
     return { ok: false, error: "Backup exportedAt is not a valid date." };
   }
-  if (!Array.isArray(raw.logs)) {
-    return { ok: false, error: "Backup logs must be an array." };
-  }
-  if (!Array.isArray(raw.catalog)) {
-    return { ok: false, error: "Backup catalog must be an array." };
-  }
-  if (!Array.isArray(raw.people)) {
-    return { ok: false, error: "Backup people must be an array." };
-  }
-  if (!isRecord(raw.settings)) {
-    return { ok: false, error: "Backup settings must be an object." };
-  }
-
-  const logs = (raw.logs as unknown[])
-    .map(normalizeLog)
-    .filter((l): l is ApplicationLog => l !== null);
-  if (logs.length !== (raw.logs as unknown[]).length) {
-    return { ok: false, error: "Backup contains invalid application log(s)." };
+  const sectionsResult = parseShopSections({
+    logs: raw.logs,
+    catalog: raw.catalog,
+    people: raw.people,
+    settings: raw.settings,
+  });
+  if (!sectionsResult.ok) {
+    // Keep backup-flavored errors for the restore UI.
+    const mapped = sectionsResult.error
+      .replace(/^Shop /, "Backup ")
+      .replace(/^Shop contains /, "Backup contains ")
+      .replace(/^Shop settings /, "Backup settings ");
+    return { ok: false, error: mapped };
   }
 
-  const catalog = (raw.catalog as unknown[])
-    .map(normalizeShopProduct)
-    .filter((p): p is ShopProduct => p !== null);
-  if (catalog.length !== (raw.catalog as unknown[]).length) {
-    return { ok: false, error: "Backup contains invalid catalog product(s)." };
-  }
-
-  const people = (raw.people as unknown[])
-    .map(normalizePerson)
-    .filter((p): p is Person => p !== null);
-  if (people.length !== (raw.people as unknown[]).length) {
-    return { ok: false, error: "Backup contains invalid people row(s)." };
-  }
-
-  const settings = normalizeSettings(raw.settings);
-  if (!settings) {
-    return { ok: false, error: "Backup settings are invalid." };
-  }
+  const { logs, catalog, people, settings } = sectionsResult.sections;
 
   return {
     ok: true,

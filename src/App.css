@@ -27,6 +27,14 @@
   margin-bottom: 0.15rem;
 }
 
+.store-status {
+  margin: 0.35rem 0 0;
+  font-size: 0.72rem;
+  opacity: 0.85;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+}
+
 .banner {
   background: var(--warn-bg);
   color: #5c4a1f;
