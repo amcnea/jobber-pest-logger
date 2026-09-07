@@ -43,14 +43,25 @@ export function looksLikeSampleEpa(epaRegNo: string | null | undefined): boolean
   return typeof epaRegNo === "string" && /^SAMPLE-/i.test(epaRegNo.trim());
 }
 
+const EXAMPLE_SEED_IDS = new Set(EXAMPLE_SEEDS.map((p) => p.id));
+
 export function inferIsExample(product: {
   isExample?: boolean;
   catalogId?: string;
   epaRegNo?: string | null;
 }): boolean {
-  // SAMPLE markers win over an explicit false — audit exports must never print SAMPLE-* as real EPA #s.
+  // SAMPLE / example seed markers win over an explicit false — audit exports must never
+  // print SAMPLE-* or built-in example-* seeds as real EPA #s, even if isExample was omitted.
   if (looksLikeSampleEpa(product.epaRegNo)) return true;
-  if (typeof product.catalogId === "string" && product.catalogId.startsWith("sample-")) return true;
+  if (typeof product.catalogId === "string") {
+    if (
+      product.catalogId.startsWith("sample-") ||
+      product.catalogId.startsWith("example-") ||
+      EXAMPLE_SEED_IDS.has(product.catalogId)
+    ) {
+      return true;
+    }
+  }
   if (typeof product.isExample === "boolean") return product.isExample;
   return false;
 }
