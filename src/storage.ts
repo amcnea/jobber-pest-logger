@@ -633,6 +633,7 @@ export function dismissPilotCard(): boolean {
 /**
  * Wipe all Jobber Pest Logger keys on this device. Caller must confirm.
  * Re-seeds example catalog so first-run can start again. Does not touch other origins.
+ * Snapshots first and rolls back on any failed write so saved:false means prior data is intact.
  */
 export function wipeAllDeviceData(): {
   saved: boolean;
@@ -644,11 +645,45 @@ export function wipeAllDeviceData(): {
 } {
   const clearedSettings = emptySettings();
   const seed = EXAMPLE_SEEDS.map((p) => ({ ...p }));
+  const keys = [
+    LOGS_KEY,
+    CATALOG_KEY,
+    PEOPLE_KEY,
+    SETTINGS_KEY,
+    LAST_BACKUP_KEY,
+    PILOT_CARD_KEY,
+    A2HS_TIP_KEY,
+  ] as const;
+  const snapshot: Record<string, string | null> = {};
   try {
-    localStorage.removeItem(LOGS_KEY);
-    localStorage.removeItem(CATALOG_KEY);
-    localStorage.removeItem(PEOPLE_KEY);
-    localStorage.removeItem(SETTINGS_KEY);
+    for (const key of keys) {
+      snapshot[key] = localStorage.getItem(key);
+    }
+  } catch (err) {
+    console.error("jobber-pest-logger: could not snapshot storage before wipe", err);
+    return {
+      saved: false,
+      catalog: loadCatalog(),
+      logs: loadLogs(),
+      people: loadPeople(),
+      settings: loadSettings(),
+      lastBackupAt: loadLastBackupAt(),
+    };
+  }
+
+  const rollback = () => {
+    try {
+      for (const key of keys) {
+        const prev = snapshot[key];
+        if (prev === null) localStorage.removeItem(key);
+        else localStorage.setItem(key, prev);
+      }
+    } catch (err) {
+      console.error("jobber-pest-logger: could not roll back failed wipe", err);
+    }
+  };
+
+  try {
     localStorage.removeItem(LAST_BACKUP_KEY);
     localStorage.removeItem(PILOT_CARD_KEY);
     localStorage.removeItem(A2HS_TIP_KEY);
@@ -656,37 +691,31 @@ export function wipeAllDeviceData(): {
     const logsOk = saveLogs([]);
     const peopleOk = savePeople([]);
     const settingsOk = saveSettings(clearedSettings);
-    const saved = catalogOk && logsOk && peopleOk && settingsOk;
-    // Never return unpersisted seed/empties as if they landed on disk.
-    // Avoid loadCatalog() on failure — it auto-reseeds and would mask a failed save.
+    if (!(catalogOk && logsOk && peopleOk && settingsOk)) {
+      rollback();
+      return {
+        saved: false,
+        catalog: loadCatalog(),
+        logs: loadLogs(),
+        people: loadPeople(),
+        settings: loadSettings(),
+        lastBackupAt: loadLastBackupAt(),
+      };
+    }
     return {
-      saved,
-      catalog: catalogOk ? seed : [],
-      logs: logsOk ? [] : loadLogs(),
-      people: peopleOk ? [] : loadPeople(),
-      settings: settingsOk ? clearedSettings : loadSettings(),
+      saved: true,
+      catalog: seed,
+      logs: [],
+      people: [],
+      settings: clearedSettings,
       lastBackupAt: null,
     };
   } catch (err) {
     console.error("jobber-pest-logger: wipeAllDeviceData failed", err);
-    // Prefer raw catalog peek: loadCatalog auto-seeds and can diverge from disk.
-    let catalog: ShopProduct[] = [];
-    try {
-      const raw = localStorage.getItem(CATALOG_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as unknown;
-        if (Array.isArray(parsed)) {
-          catalog = parsed
-            .map(normalizeShopProduct)
-            .filter((p): p is ShopProduct => p !== null);
-        }
-      }
-    } catch {
-      catalog = [];
-    }
+    rollback();
     return {
       saved: false,
-      catalog,
+      catalog: loadCatalog(),
       logs: loadLogs(),
       people: loadPeople(),
       settings: loadSettings(),
