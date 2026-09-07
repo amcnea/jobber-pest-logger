@@ -51,9 +51,20 @@ function productLine(p: ApplicationLog["products"][number]): string {
   return `RTU: ${p.name} ${epaBit} ${p.rtuAmount} ${p.rtuUnit}`.trim();
 }
 
+/** Reserved footer band height — must match drawFooter layout + font. */
 function footerHeight(doc: jsPDF): number {
+  const prevSize = doc.getFontSize();
+  const prevFont = doc.getFont();
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(6.5);
   const footerLines = doc.splitTextToSize(LAWGICAL_DISCLAIMER, MAX_WIDTH) as string[];
-  return footerLines.length * 3.2 + 6;
+  doc.setFont(prevFont.fontName, prevFont.fontStyle);
+  doc.setFontSize(prevSize);
+  const lineH = 3.2;
+  const blockH = footerLines.length * lineH;
+  // drawFooter: top = PAGE_H - MARGIN - blockH - 5; separator at top - 2.5
+  // band from separator to page bottom = MARGIN + blockH + 5 + 2.5
+  return MARGIN + blockH + 7.5;
 }
 
 function drawFooter(doc: jsPDF, page: number, pageCount: number): void {
