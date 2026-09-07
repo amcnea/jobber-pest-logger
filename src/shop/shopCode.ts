@@ -12,7 +12,7 @@ const DEFAULT_LENGTH = 8;
 
 /**
  * Generate a short uppercase shop code suitable as a Firestore document id.
- * Uses crypto.getRandomValues when available.
+ * Requires crypto.getRandomValues — fails closed if unavailable.
  */
 export function generateShopCode(length = DEFAULT_LENGTH): string {
   const n = Math.max(4, Math.min(32, Math.floor(length)));
@@ -20,15 +20,12 @@ export function generateShopCode(length = DEFAULT_LENGTH): string {
   const out: string[] = [];
 
   const c = globalThis.crypto;
-  if (typeof c?.getRandomValues === "function") {
-    const bytes = c.getRandomValues(new Uint8Array(n));
-    for (let i = 0; i < n; i++) {
-      out.push(alphabet[bytes[i]! % alphabet.length]!);
-    }
-  } else {
-    for (let i = 0; i < n; i++) {
-      out.push(alphabet[Math.floor(Math.random() * alphabet.length)]!);
-    }
+  if (typeof c?.getRandomValues !== "function") {
+    throw new Error("Secure random source is unavailable; cannot generate a shop code.");
+  }
+  const bytes = c.getRandomValues(new Uint8Array(n));
+  for (let i = 0; i < n; i++) {
+    out.push(alphabet[bytes[i]! % alphabet.length]!);
   }
 
   const code = out.join("");

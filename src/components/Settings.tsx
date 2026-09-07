@@ -233,15 +233,23 @@ export function Settings({
         {joined && sessionShopId ? (
           <>
             <p className="hint" role="status">
-              Mode: <strong>shared</strong>
+              Mode: <strong>{firebaseOk ? "shared" : "local only"}</strong>
             </p>
+            {!firebaseOk && (
+              <p className="hint" role="status">
+                Saved shop session is inactive without Firebase — this device stays local-only.
+                Leave clears the saved session.
+              </p>
+            )}
             <p className="shop-code-display" role="status">
               Shop code: <strong className="shop-code">{sessionShopId}</strong>
             </p>
-            <p className="hint">
-              Day-to-day screens still read/write this device&apos;s localStorage. Create and first
-              migrate upload a shop snapshot to Firestore; live shared read/write is a later slice.
-            </p>
+            {firebaseOk && (
+              <p className="hint">
+                Day-to-day screens still read/write this device&apos;s localStorage. Create and first
+                migrate upload a shop snapshot to Firestore; live shared read/write is a later slice.
+              </p>
+            )}
             <button
               type="button"
               className="btn btn-secondary"
