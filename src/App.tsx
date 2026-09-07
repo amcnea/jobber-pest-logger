@@ -48,6 +48,11 @@ export default function App() {
   const [draftKey, setDraftKey] = useState(0);
   /** Remount Settings shop form after wipe/restore so draft matches props. */
   const [settingsFormKey, setSettingsFormKey] = useState(0);
+  /** Survives Settings remount so wipe/restore success banners stay visible. */
+  const [settingsFlash, setSettingsFlash] = useState<{
+    slot: "backup" | "demo";
+    text: string;
+  } | null>(null);
 
   const peopleWarnings = useMemo(() => collectPeopleWarnings(people), [people]);
   const firstRunSteps = useMemo(
@@ -160,10 +165,12 @@ export default function App() {
       return { ok: false, summary: "Could not wipe data on this device." };
     }
     setStorageError(null);
+    const summary = "All device data wiped. Example seeds re-added for a fresh first-run.";
+    setSettingsFlash({ slot: "demo", text: summary });
     setSettingsFormKey((k) => k + 1);
     return {
       ok: true,
-      summary: "All device data wiped. Example seeds re-added for a fresh first-run.",
+      summary,
     };
   }
 
@@ -195,16 +202,20 @@ export default function App() {
     return true;
   }
 
-  function handleRestored(data: {
-    logs: ApplicationLog[];
-    catalog: ShopProduct[];
-    people: Person[];
-    settings: ShopSettings;
-  }) {
+  function handleRestored(
+    data: {
+      logs: ApplicationLog[];
+      catalog: ShopProduct[];
+      people: Person[];
+      settings: ShopSettings;
+    },
+    flash?: string,
+  ) {
     setLogs(data.logs);
     setCatalog(data.catalog);
     setPeople(data.people);
     setSettings(data.settings);
+    setSettingsFlash(flash ? { slot: "backup", text: flash } : null);
     setSettingsFormKey((k) => k + 1);
     setStorageError(null);
   }
@@ -324,6 +335,7 @@ export default function App() {
             key={settingsFormKey}
             settings={settings}
             lastBackupAt={lastBackupAt}
+            flash={settingsFlash}
             onSave={handleSaveSettings}
             onRestored={handleRestored}
             onBackupStampChange={setLastBackupAt}
