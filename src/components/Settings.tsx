@@ -267,6 +267,7 @@ export function Settings({
               setDraft({ shopName: "", shopTpclNumber: "", shopTpclLetter: "" });
               setSavedMsg(null);
               setBackupMsg(null);
+              setBackupError(null);
             }
           }}
         >

@@ -642,7 +642,7 @@ export function wipeAllDeviceData(): {
   settings: ShopSettings;
   lastBackupAt: string | null;
 } {
-  const emptySettings: ShopSettings = { shopName: "", shopTpclNumber: "", shopTpclLetter: "" };
+  const clearedSettings = emptySettings();
   const seed = EXAMPLE_SEEDS.map((p) => ({ ...p }));
   try {
     localStorage.removeItem(LOGS_KEY);
@@ -655,7 +655,7 @@ export function wipeAllDeviceData(): {
     const catalogOk = saveCatalog(seed);
     const logsOk = saveLogs([]);
     const peopleOk = savePeople([]);
-    const settingsOk = saveSettings(emptySettings);
+    const settingsOk = saveSettings(clearedSettings);
     const saved = catalogOk && logsOk && peopleOk && settingsOk;
     // Never return unpersisted seed/empties as if they landed on disk.
     // Avoid loadCatalog() on failure — it auto-reseeds and would mask a failed save.
@@ -664,7 +664,7 @@ export function wipeAllDeviceData(): {
       catalog: catalogOk ? seed : [],
       logs: logsOk ? [] : loadLogs(),
       people: peopleOk ? [] : loadPeople(),
-      settings: settingsOk ? emptySettings : loadSettings(),
+      settings: settingsOk ? clearedSettings : loadSettings(),
       lastBackupAt: null,
     };
   } catch (err) {
