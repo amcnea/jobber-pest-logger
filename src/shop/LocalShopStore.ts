@@ -31,12 +31,14 @@ function readLocalUpdatedAt(): string | null {
   }
 }
 
-/** Best-effort stamp; failures are ignored so callers can still report data save success. */
-function writeLocalUpdatedAt(iso: string): void {
+/** Persist local shop updatedAt. Returns false if localStorage write fails. */
+function writeLocalUpdatedAt(iso: string): boolean {
   try {
     localStorage.setItem(LOCAL_UPDATED_AT_KEY, iso);
+    return true;
   } catch (err) {
     console.error("jobber-pest-logger: could not stamp local shop updatedAt", err);
+    return false;
   }
 }
 
@@ -49,7 +51,12 @@ export class LocalShopStore implements ShopStore {
       if (!updatedAt) {
         // First read before any put — seed a stable stamp so later sync/diff is not "now" every call.
         updatedAt = new Date().toISOString();
-        writeLocalUpdatedAt(updatedAt);
+        if (!writeLocalUpdatedAt(updatedAt)) {
+          return {
+            ok: false,
+            error: "Could not stamp local shop updatedAt on this device (storage full or blocked).",
+          };
+        }
       }
       const doc: ShopDocument = {
         version: BACKUP_VERSION,
@@ -115,10 +122,16 @@ export class LocalShopStore implements ShopStore {
           error: "Could not save shop data on this device (storage full or blocked).",
         };
       }
-      // Stamp after successful data writes; meta failure must not fail the put.
-      // Return the committed stamp so callers can CAS against the same value on next put.
+      // Stamp after successful data writes. Timestamp persistence is part of the contract —
+      // if it fails, roll back sections and do not report the stamp as committed.
       const updatedAt = new Date().toISOString();
-      writeLocalUpdatedAt(updatedAt);
+      if (!writeLocalUpdatedAt(updatedAt)) {
+        rollback();
+        return {
+          ok: false,
+          error: "Could not stamp local shop updatedAt on this device (storage full or blocked).",
+        };
+      }
       return { ok: true, value: { updatedAt } };
     } catch (err) {
       rollback();
