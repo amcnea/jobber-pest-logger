@@ -86,6 +86,11 @@ function drawFooter(doc: jsPDF, page: number, pageCount: number): void {
 
 /** Shop name + report title at the top of each page. Returns y below the header. */
 function drawPageHeader(doc: jsPDF, shopName: string | undefined): number {
+  // Save caller text state — ensureSpace may insert a page mid-block.
+  const prevSize = doc.getFontSize();
+  const prevFont = doc.getFont();
+  const prevColor = doc.getTextColor();
+
   let y = MARGIN + 4;
   doc.setFont("helvetica", "bold");
   doc.setFontSize(13);
@@ -102,22 +107,27 @@ function drawPageHeader(doc: jsPDF, shopName: string | undefined): number {
     doc.setFontSize(9);
     doc.setTextColor(90);
     doc.text("Shop name not set — add it in Settings", MARGIN, y);
-    doc.setTextColor(0);
     y += 5;
   }
   doc.setDrawColor(160);
   doc.line(MARGIN, y, MARGIN + MAX_WIDTH, y);
+
+  doc.setFont(prevFont.fontName, prevFont.fontStyle);
+  doc.setFontSize(prevSize);
+  doc.setTextColor(prevColor);
   return y + 5;
 }
 
 export function downloadPdf(logs: ApplicationLog[], shopName?: string): void {
   const doc = new jsPDF({ unit: "mm", format: "letter" });
-  const contentBottom = () => PAGE_H - footerHeight(doc) - 2;
+  // Cache once — footerHeight re-splits the disclaimer; band is fixed for this doc.
+  const footerBandH = footerHeight(doc);
+  const contentBottom = PAGE_H - footerBandH - 2;
 
   let y = drawPageHeader(doc, shopName);
 
   const ensureSpace = (needed: number) => {
-    if (y + needed <= contentBottom()) return;
+    if (y + needed <= contentBottom) return;
     doc.addPage();
     y = drawPageHeader(doc, shopName);
   };
