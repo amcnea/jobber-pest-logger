@@ -436,6 +436,7 @@ export function peopleForRole(people: Person[], role: PersonnelRole): Person[] {
 const SETTINGS_KEY = "jobber-pest-logger:settings:v1";
 const LAST_BACKUP_KEY = "jobber-pest-logger:last-backup:v1";
 const PILOT_CARD_KEY = "jobber-pest-logger:pilot-card-dismissed:v1";
+const A2HS_TIP_KEY = "jobber-pest-logger:a2hs-tip-dismissed:v1";
 
 /** Soft nag when never backed up or last backup older than this many days. */
 export const BACKUP_NAG_DAYS = 7;
@@ -530,6 +531,27 @@ export function loadLastBackupAt(): string | null {
     return null;
   } catch {
     return null;
+  }
+}
+
+
+/** Whether the Add to Home Screen tip was dismissed on this device. */
+export function loadA2hsTipDismissed(): boolean {
+  try {
+    return localStorage.getItem(A2HS_TIP_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Hide the Add to Home Screen tip on this device until storage is cleared. */
+export function dismissA2hsTip(): boolean {
+  try {
+    localStorage.setItem(A2HS_TIP_KEY, "1");
+    return true;
+  } catch (err) {
+    console.error("jobber-pest-logger: could not dismiss A2HS tip", err);
+    return false;
   }
 }
 

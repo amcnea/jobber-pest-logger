@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Export } from "./components/Export";
 import { FirstRunChecklist } from "./components/FirstRunChecklist";
+import { A2hsTip } from "./components/A2hsTip";
 import { ShopPilotCard } from "./components/ShopPilotCard";
 import { History } from "./components/History";
 import { NewLogForm } from "./components/NewLogForm";
@@ -167,11 +168,12 @@ export default function App() {
         <h1>Jobber Pest Logger</h1>
       </header>
       <div className="banner">
-        v1.5. Shop pilot card + export completeness gate. Schema locked to 4 TAC § 7.144. Texas SPCS
+        v1.6. Thin PWA polish (A2HS tip + manifest). Schema locked to 4 TAC § 7.144. Texas SPCS
         shops. Example seeds and incomplete records block real CSV/PDF export.
       </div>
       <FirstRunChecklist steps={firstRunSteps} onGo={setScreen} />
       <ShopPilotCard />
+      <A2hsTip />
       {peopleWarnings.length > 0 && (
         <div className="banner banner-due" role="status">
           <strong>License / CE reminders</strong> (in-app only; not TDA-required; no SMS). License:
