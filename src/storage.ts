@@ -376,14 +376,14 @@ export function clearExampleDemoData(): {
     }
   }
   const logsSaved = saveLogs(nextLogs);
-  const saved = cat.saved && logsSaved;
+  // Return what each subsystem actually persisted; do not gate logs on catalog.
   return {
     catalog: cat.catalog,
-    logs: saved ? nextLogs : currentLogs,
-    saved,
+    logs: logsSaved ? nextLogs : currentLogs,
+    saved: cat.saved && logsSaved,
     removedCatalog: cat.removed,
-    removedLogs: saved ? removedLogs : 0,
-    strippedLogs: saved ? strippedLogs : 0,
+    removedLogs: logsSaved ? removedLogs : 0,
+    strippedLogs: logsSaved ? strippedLogs : 0,
   };
 }
 
@@ -646,6 +646,7 @@ export function wipeAllDeviceData(): {
   const seed = EXAMPLE_SEEDS.map((p) => ({ ...p }));
   try {
     localStorage.removeItem(LOGS_KEY);
+    localStorage.removeItem(CATALOG_KEY);
     localStorage.removeItem(PEOPLE_KEY);
     localStorage.removeItem(SETTINGS_KEY);
     localStorage.removeItem(LAST_BACKUP_KEY);
@@ -656,19 +657,36 @@ export function wipeAllDeviceData(): {
     const peopleOk = savePeople([]);
     const settingsOk = saveSettings(emptySettings);
     const saved = catalogOk && logsOk && peopleOk && settingsOk;
+    // Never return unpersisted seed/empties as if they landed on disk.
+    // Avoid loadCatalog() on failure — it auto-reseeds and would mask a failed save.
     return {
       saved,
-      catalog: seed,
-      logs: [],
-      people: [],
-      settings: emptySettings,
+      catalog: catalogOk ? seed : [],
+      logs: logsOk ? [] : loadLogs(),
+      people: peopleOk ? [] : loadPeople(),
+      settings: settingsOk ? emptySettings : loadSettings(),
       lastBackupAt: null,
     };
   } catch (err) {
     console.error("jobber-pest-logger: wipeAllDeviceData failed", err);
+    // Prefer raw catalog peek: loadCatalog auto-seeds and can diverge from disk.
+    let catalog: ShopProduct[] = [];
+    try {
+      const raw = localStorage.getItem(CATALOG_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as unknown;
+        if (Array.isArray(parsed)) {
+          catalog = parsed
+            .map(normalizeShopProduct)
+            .filter((p): p is ShopProduct => p !== null);
+        }
+      }
+    } catch {
+      catalog = [];
+    }
     return {
       saved: false,
-      catalog: loadCatalog(),
+      catalog,
       logs: loadLogs(),
       people: loadPeople(),
       settings: loadSettings(),
