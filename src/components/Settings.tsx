@@ -1,4 +1,4 @@
-import { useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { LAWGICAL_DISCLAIMER } from "../disclaimer";
 import {
   applyBackup,
@@ -13,13 +13,20 @@ import type { ApplicationLog, Person, ShopProduct, ShopSettings } from "../types
 interface Props {
   settings: ShopSettings;
   lastBackupAt: string | null;
+  /** Set by App before remount so wipe/restore success survives the key bump. */
+  flash?: { slot: "backup" | "demo"; text: string } | null;
+  /** App clears settingsFlash after Settings seeds local banners from flash. */
+  onFlashConsumed?: () => void;
   onSave: (settings: ShopSettings) => boolean;
-  onRestored: (data: {
-    logs: ApplicationLog[];
-    catalog: ShopProduct[];
-    people: Person[];
-    settings: ShopSettings;
-  }) => void;
+  onRestored: (
+    data: {
+      logs: ApplicationLog[];
+      catalog: ShopProduct[];
+      people: Person[];
+      settings: ShopSettings;
+    },
+    flash?: string,
+  ) => void;
   onBackupStampChange: (iso: string | null) => void;
   onClearExamples: () => { ok: boolean; summary: string };
   onWipeAll: () => { ok: boolean; summary: string };
@@ -28,6 +35,8 @@ interface Props {
 export function Settings({
   settings,
   lastBackupAt,
+  flash = null,
+  onFlashConsumed,
   onSave,
   onRestored,
   onBackupStampChange,
@@ -36,13 +45,24 @@ export function Settings({
 }: Props) {
   const [draft, setDraft] = useState<ShopSettings>(settings);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
-  const [backupMsg, setBackupMsg] = useState<string | null>(null);
+  const [backupMsg, setBackupMsg] = useState<string | null>(
+    flash?.slot === "backup" ? flash.text : null,
+  );
   const [backupError, setBackupError] = useState<string | null>(null);
-  const [demoMsg, setDemoMsg] = useState<string | null>(null);
+  const [demoMsg, setDemoMsg] = useState<string | null>(
+    flash?.slot === "demo" ? flash.text : null,
+  );
   const fileRef = useRef<HTMLInputElement>(null);
 
   const lastBackupLabel = formatLastBackupLabel(lastBackupAt);
   const nag = backupNagMessage(lastBackupAt);
+
+  // Explicit consume: App clears settingsFlash once we seeded local banners.
+  useEffect(() => {
+    if (flash != null) {
+      onFlashConsumed?.();
+    }
+  }, [flash, onFlashConsumed]);
 
   function submit(e: FormEvent) {
     e.preventDefault();
@@ -92,16 +112,17 @@ export function Settings({
       return;
     }
 
-    onRestored({
-      logs: result.backup.logs,
-      catalog: result.backup.catalog,
-      people: result.backup.people,
-      settings: result.backup.settings,
-    });
-    setDraft(result.backup.settings);
-    setBackupMsg(
-      `Restored backup (v${result.backup.version}) from ${result.backup.exportedAt}. Device data replaced.`,
+    const restoreFlash = `Restored backup (v${result.backup.version}) from ${result.backup.exportedAt}. Device data replaced.`;
+    onRestored(
+      {
+        logs: result.backup.logs,
+        catalog: result.backup.catalog,
+        people: result.backup.people,
+        settings: result.backup.settings,
+      },
+      restoreFlash,
     );
+    // App remounts Settings via key; flash prop carries the success banner.
   }
 
   return (
@@ -262,13 +283,8 @@ export function Settings({
               return;
             }
             const result = onWipeAll();
-            setDemoMsg(result.summary);
-            if (result.ok) {
-              setDraft({ shopName: "", shopTpclNumber: "", shopTpclLetter: "" });
-              setSavedMsg(null);
-              setBackupMsg(null);
-              setBackupError(null);
-            }
+            // Success remounts Settings; App passes flash. Keep failure banner here.
+            if (!result.ok) setDemoMsg(result.summary);
           }}
         >
           Wipe all data on this device…
