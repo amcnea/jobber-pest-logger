@@ -51,30 +51,31 @@ function productLine(p: ApplicationLog["products"][number]): string {
   return `RTU: ${p.name} ${epaBit} ${p.rtuAmount} ${p.rtuUnit}`.trim();
 }
 
-/** Reserved footer band height — must match drawFooter layout + font. */
-function footerHeight(doc: jsPDF): number {
+const FOOTER_LINE_H = 3.2;
+/** Max wrapped lines for shop name in the repeating page header. */
+const SHOP_NAME_MAX_LINES = 2;
+
+/** Split disclaimer once; band height must match drawFooter layout + font. */
+function measureFooter(doc: jsPDF): { lines: string[]; bandH: number } {
   const prevSize = doc.getFontSize();
   const prevFont = doc.getFont();
   doc.setFont("helvetica", "normal");
   doc.setFontSize(6.5);
-  const footerLines = doc.splitTextToSize(LAWGICAL_DISCLAIMER, MAX_WIDTH) as string[];
+  const lines = doc.splitTextToSize(LAWGICAL_DISCLAIMER, MAX_WIDTH) as string[];
   doc.setFont(prevFont.fontName, prevFont.fontStyle);
   doc.setFontSize(prevSize);
-  const lineH = 3.2;
-  const blockH = footerLines.length * lineH;
+  const blockH = lines.length * FOOTER_LINE_H;
   // drawFooter: top = PAGE_H - MARGIN - blockH - 5; separator at top - 2.5
   // band from separator to page bottom = MARGIN + blockH + 5 + 2.5
-  return MARGIN + blockH + 7.5;
+  return { lines, bandH: MARGIN + blockH + 7.5 };
 }
 
-function drawFooter(doc: jsPDF, page: number, pageCount: number): void {
+function drawFooter(doc: jsPDF, page: number, pageCount: number, footerLines: string[]): void {
   doc.setPage(page);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(6.5);
   doc.setTextColor(70);
-  const footerLines = doc.splitTextToSize(LAWGICAL_DISCLAIMER, MAX_WIDTH) as string[];
-  const lineH = 3.2;
-  const blockH = footerLines.length * lineH;
+  const blockH = footerLines.length * FOOTER_LINE_H;
   const top = PAGE_H - MARGIN - blockH - 5;
   doc.setDrawColor(200);
   doc.line(MARGIN, top - 2.5, MARGIN + MAX_WIDTH, top - 2.5);
@@ -100,8 +101,17 @@ function drawPageHeader(doc: jsPDF, shopName: string | undefined): number {
   const name = shopName?.trim();
   if (name) {
     doc.setFontSize(11);
-    y = wrap(doc, name, MARGIN, y, MAX_WIDTH);
-    y += 1;
+    const nameLines = doc.splitTextToSize(name, MAX_WIDTH) as string[];
+    const capped = nameLines.slice(0, SHOP_NAME_MAX_LINES);
+    if (nameLines.length > SHOP_NAME_MAX_LINES) {
+      let last = capped[SHOP_NAME_MAX_LINES - 1] ?? "";
+      while (last.length > 0 && doc.getTextWidth(last + "…") > MAX_WIDTH) {
+        last = last.slice(0, -1);
+      }
+      capped[SHOP_NAME_MAX_LINES - 1] = `${last}…`;
+    }
+    doc.text(capped, MARGIN, y);
+    y += capped.length * LINE_H + 1;
   } else {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
@@ -120,8 +130,8 @@ function drawPageHeader(doc: jsPDF, shopName: string | undefined): number {
 
 export function downloadPdf(logs: ApplicationLog[], shopName?: string): void {
   const doc = new jsPDF({ unit: "mm", format: "letter" });
-  // Cache once — footerHeight re-splits the disclaimer; band is fixed for this doc.
-  const footerBandH = footerHeight(doc);
+  // Split disclaimer once; reuse lines + band height for every page.
+  const { lines: footerLines, bandH: footerBandH } = measureFooter(doc);
   const contentBottom = PAGE_H - footerBandH - 2;
 
   let y = drawPageHeader(doc, shopName);
@@ -231,7 +241,7 @@ export function downloadPdf(logs: ApplicationLog[], shopName?: string): void {
 
   const pageCount = doc.getNumberOfPages();
   for (let i = 1; i <= pageCount; i++) {
-    drawFooter(doc, i, pageCount);
+    drawFooter(doc, i, pageCount, footerLines);
   }
 
   doc.save("texas-tda-application-logs.pdf");
