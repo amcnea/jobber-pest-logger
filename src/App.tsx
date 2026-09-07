@@ -46,6 +46,8 @@ export default function App() {
   /** Prefill for New log (from History). Remount via draftKey when set. */
   const [draftSeed, setDraftSeed] = useState<ApplicationLog | null>(null);
   const [draftKey, setDraftKey] = useState(0);
+  /** Remount Settings shop form after wipe/restore so draft matches props. */
+  const [settingsFormKey, setSettingsFormKey] = useState(0);
 
   const peopleWarnings = useMemo(() => collectPeopleWarnings(people), [people]);
   const firstRunSteps = useMemo(
@@ -158,6 +160,7 @@ export default function App() {
       return { ok: false, summary: "Could not wipe data on this device." };
     }
     setStorageError(null);
+    setSettingsFormKey((k) => k + 1);
     return {
       ok: true,
       summary: "All device data wiped. Example seeds re-added for a fresh first-run.",
@@ -202,6 +205,7 @@ export default function App() {
     setCatalog(data.catalog);
     setPeople(data.people);
     setSettings(data.settings);
+    setSettingsFormKey((k) => k + 1);
     setStorageError(null);
   }
 
@@ -317,6 +321,7 @@ export default function App() {
         )}
         {screen === "settings" && (
           <Settings
+            formKey={settingsFormKey}
             settings={settings}
             lastBackupAt={lastBackupAt}
             onSave={handleSaveSettings}
