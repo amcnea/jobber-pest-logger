@@ -9,7 +9,15 @@ import {
   parseBackup,
 } from "../storage";
 import type { ApplicationLog, Person, ShopProduct, ShopSettings } from "../types";
-import { shopStoreStatusHint } from "../shop";
+import {
+  createShop,
+  hasJoinedShop,
+  isFirebaseConfigured,
+  joinShop,
+  leaveShop,
+  loadShopSession,
+  shopStoreStatusHint,
+} from "../shop";
 
 interface Props {
   settings: ShopSettings;
@@ -18,6 +26,8 @@ interface Props {
   flash?: { slot: "backup" | "demo"; text: string } | null;
   /** App clears settingsFlash after Settings seeds local banners from flash. */
   onFlashConsumed?: () => void;
+  /** Bump topbar / store status after create, join, or leave. */
+  onShopSessionChange?: () => void;
   onSave: (settings: ShopSettings) => boolean;
   onRestored: (
     data: {
@@ -38,6 +48,7 @@ export function Settings({
   lastBackupAt,
   flash = null,
   onFlashConsumed,
+  onShopSessionChange,
   onSave,
   onRestored,
   onBackupStampChange,
@@ -53,10 +64,83 @@ export function Settings({
   const [demoMsg, setDemoMsg] = useState<string | null>(
     flash?.slot === "demo" ? flash.text : null,
   );
+  const [joinCode, setJoinCode] = useState("");
+  const [shopBusy, setShopBusy] = useState(false);
+  const [shopMsg, setShopMsg] = useState<string | null>(null);
+  const [shopError, setShopError] = useState<string | null>(null);
+  const [shopHint, setShopHint] = useState<string | null>(null);
+  const [createdCode, setCreatedCode] = useState<string | null>(null);
+  const [joined, setJoined] = useState(() => hasJoinedShop());
+  const [sessionShopId, setSessionShopId] = useState(() => loadShopSession().shopId);
   const fileRef = useRef<HTMLInputElement>(null);
 
+  const firebaseOk = isFirebaseConfigured();
   const lastBackupLabel = formatLastBackupLabel(lastBackupAt);
   const nag = backupNagMessage(lastBackupAt);
+
+  function refreshShopSessionUi(nextShopId?: string) {
+    const session = loadShopSession();
+    const id = nextShopId ?? session.shopId;
+    setSessionShopId(id);
+    setJoined(hasJoinedShop(session));
+    onShopSessionChange?.();
+  }
+
+  async function handleCreateShop() {
+    setShopBusy(true);
+    setShopMsg(null);
+    setShopError(null);
+    setShopHint(null);
+    setCreatedCode(null);
+    try {
+      const result = await createShop();
+      if (!result.ok) {
+        setShopError(result.error);
+        return;
+      }
+      setCreatedCode(result.shopId);
+      setShopMsg(result.message);
+      if (result.hint) setShopHint(result.hint);
+      refreshShopSessionUi(result.shopId);
+    } finally {
+      setShopBusy(false);
+    }
+  }
+
+  async function handleJoinShop() {
+    setShopBusy(true);
+    setShopMsg(null);
+    setShopError(null);
+    setShopHint(null);
+    setCreatedCode(null);
+    try {
+      const result = await joinShop(joinCode);
+      if (!result.ok) {
+        setShopError(result.error);
+        return;
+      }
+      setJoinCode("");
+      setShopMsg(result.message);
+      if (result.hint) setShopHint(result.hint);
+      refreshShopSessionUi(result.shopId);
+    } finally {
+      setShopBusy(false);
+    }
+  }
+
+  function handleLeaveShop() {
+    setShopMsg(null);
+    setShopError(null);
+    setShopHint(null);
+    setCreatedCode(null);
+    const result = leaveShop();
+    if (!result.ok) {
+      setShopError(result.error);
+      return;
+    }
+    setShopMsg(result.message);
+    refreshShopSessionUi("");
+  }
 
   // Explicit consume: App clears settingsFlash once we seeded local banners.
   useEffect(() => {
@@ -131,7 +215,107 @@ export function Settings({
       <p className="hint store-status-settings" role="status">
         {shopStoreStatusHint()}
       </p>
-      {/* Create / join shared shop + PIN / roles: later slices (#2–#8). */}
+
+      <h2>Shared shop</h2>
+      <p className="hint">
+        Optional multi-device shop via Firebase. Local-only until you create or join. Requires
+        Firebase env from <code>.env.example</code>. Shop code is the join secret until a later PIN
+        slice. Cloud sync is <strong>not</strong> the 2-year premises retention path — keep Export /
+        backup and the Lawgical disclaimer.
+      </p>
+      <div className="card settings-backup-actions shop-card">
+        {!firebaseOk && (
+          <p className="hint" role="status">
+            Firebase is not configured on this build. Create / Join stay disabled; this device remains
+            local-only.
+          </p>
+        )}
+        {joined && sessionShopId ? (
+          <>
+            <p className="hint" role="status">
+              Mode: <strong>shared</strong>
+            </p>
+            <p className="shop-code-display" role="status">
+              Shop code: <strong className="shop-code">{sessionShopId}</strong>
+            </p>
+            <p className="hint">
+              Day-to-day screens still read/write this device&apos;s localStorage. Create and first
+              migrate upload a shop snapshot to Firestore; live shared read/write is a later slice.
+            </p>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={shopBusy}
+              onClick={handleLeaveShop}
+            >
+              Leave shop
+            </button>
+          </>
+        ) : (
+          <>
+            <p className="hint" role="status">
+              Mode: <strong>local only</strong>
+            </p>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={!firebaseOk || shopBusy}
+              onClick={() => {
+                void handleCreateShop();
+              }}
+            >
+              {shopBusy ? "Working…" : "Create shop"}
+            </button>
+            {createdCode && (
+              <p className="shop-code-display" role="status">
+                Share this code with the office:{" "}
+                <strong className="shop-code">{createdCode}</strong>
+              </p>
+            )}
+            <label className="field">
+              Join with shop code
+              <input
+                value={joinCode}
+                onChange={(e) => {
+                  setShopError(null);
+                  setJoinCode(e.target.value);
+                }}
+                placeholder="e.g. ABCD2345"
+                autoComplete="off"
+                spellCheck={false}
+                disabled={!firebaseOk || shopBusy}
+                aria-label="Shop code to join"
+              />
+            </label>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={!firebaseOk || shopBusy || !joinCode.trim()}
+              onClick={() => {
+                void handleJoinShop();
+              }}
+            >
+              Join shop
+            </button>
+          </>
+        )}
+        {shopMsg && (
+          <p className="hint" role="status">
+            {shopMsg}
+          </p>
+        )}
+        {shopHint && (
+          <p className="nag" role="status">
+            {shopHint}
+          </p>
+        )}
+        {shopError && (
+          <p className="hint" role="alert">
+            {shopError}
+          </p>
+        )}
+      </div>
+
       <h2>Shop settings</h2>
       <p className="hint">
         Shop name and TPCL live under their own localStorage key (separate from logs, catalog, and

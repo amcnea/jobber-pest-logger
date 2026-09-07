@@ -54,10 +54,15 @@ export default function App() {
     slot: "backup" | "demo";
     text: string;
   } | null>(null);
-
+  /** Bumps topbar store-status after create / join / leave. */
+  const [shopSessionTick, setShopSessionTick] = useState(0);
 
   const consumeSettingsFlash = useCallback(() => {
     setSettingsFlash(null);
+  }, []);
+
+  const handleShopSessionChange = useCallback(() => {
+    setShopSessionTick((n) => n + 1);
   }, []);
 
   /** Navigate; clear flash when leaving Settings so remount cannot resurrect it. */
@@ -240,7 +245,8 @@ export default function App() {
         <div className="eyebrow">Texas TDA · Jobber sidecar</div>
         <h1>Jobber Pest Logger</h1>
         <p className="store-status" role="status">
-          {shopStoreStatusHint(resolveShopStore())}
+          {/* shopSessionTick forces re-read after Settings create/join/leave */}
+          {shopSessionTick >= 0 && shopStoreStatusHint(resolveShopStore())}
         </p>
       </header>
       <div className="banner">
@@ -354,6 +360,7 @@ export default function App() {
             lastBackupAt={lastBackupAt}
             flash={settingsFlash}
             onFlashConsumed={consumeSettingsFlash}
+            onShopSessionChange={handleShopSessionChange}
             onSave={handleSaveSettings}
             onRestored={handleRestored}
             onBackupStampChange={setLastBackupAt}

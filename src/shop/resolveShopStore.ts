@@ -51,9 +51,12 @@ export function resolveShopStore(): ResolvedShopStoreInfo {
 export function shopStoreStatusHint(
   info: ResolvedShopStoreInfo = resolveShopStore(),
 ): string {
+  if (!info.firebaseConfigured) {
+    return "This device: local only (Firebase env not set — see .env.example)";
+  }
   if (info.mode === "shared" && info.shopId) {
-    // App screens still read/write via storage.ts in this slice — do not claim live shared data.
-    return "Shared shop foundation ready — screens still device-local until join/sync wires in";
+    // Create/join uploaded a snapshot; day-to-day screens still use storage.ts until #3/#6.
+    return `Joined shop ${info.shopId} — snapshot synced on create/migrate; day-to-day still device-local until live sync`;
   }
   return "This device: local only (shared shop not joined)";
 }
