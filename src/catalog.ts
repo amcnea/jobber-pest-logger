@@ -12,6 +12,7 @@ export const EXAMPLE_SEEDS: ShopProduct[] = [
     is25b: false,
     kind: "pesticide",
     isExample: true,
+    archived: false,
   },
   {
     id: "example-25b-concentrate",
@@ -20,6 +21,7 @@ export const EXAMPLE_SEEDS: ShopProduct[] = [
     is25b: true,
     kind: "pesticide",
     isExample: true,
+    archived: false,
   },
   {
     id: "example-insect-monitor",
@@ -28,6 +30,7 @@ export const EXAMPLE_SEEDS: ShopProduct[] = [
     is25b: false,
     kind: "device",
     isExample: true,
+    archived: false,
   },
 ];
 
@@ -137,4 +140,10 @@ export function exportBlockedByExamples(
     catalogExamples,
     logExamples,
   };
+}
+
+
+/** Products available on New log picker (not archived). */
+export function activeCatalogProducts(catalog: ShopProduct[]): ShopProduct[] {
+  return catalog.filter((p) => !p.archived);
 }

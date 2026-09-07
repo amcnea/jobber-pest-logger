@@ -457,3 +457,13 @@ label.field {
   font-weight: 700;
   word-break: break-all;
 }
+
+
+.catalog-filters {
+  margin-bottom: 0.85rem;
+}
+
+.card-archived {
+  opacity: 0.78;
+  background: #f3f4f1;
+}

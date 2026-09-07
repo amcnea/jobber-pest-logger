@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent } from "react";
-import { AMOUNT_UNITS, catalogPickerLabel, productEpaCaption } from "../catalog";
+import { AMOUNT_UNITS, activeCatalogProducts, catalogPickerLabel, productEpaCaption } from "../catalog";
 import {
   emptyLog,
   productFromCatalog,
@@ -44,8 +44,9 @@ export function NewLogForm({
     rosterPicksForPersonnel((initialDraft ?? emptyLog(settings)).personnel, people),
   );
 
-  const pesticides = useMemo(() => catalog.filter((p) => p.kind === "pesticide"), [catalog]);
-  const devices = useMemo(() => catalog.filter((p) => p.kind === "device"), [catalog]);
+  const activeCatalog = useMemo(() => activeCatalogProducts(catalog), [catalog]);
+  const pesticides = useMemo(() => activeCatalog.filter((p) => p.kind === "pesticide"), [activeCatalog]);
+  const devices = useMemo(() => activeCatalog.filter((p) => p.kind === "device"), [activeCatalog]);
 
   function patch(partial: Partial<ApplicationLog>) {
     setErrors({});
@@ -230,12 +231,12 @@ export function NewLogForm({
           fills the name and EPA # (blank for 25(b) and example seeds). Example seeds export as
           &quot;example / not a real EPA number&quot;.
         </p>
-        {catalog.length === 0 && (
+        {activeCatalog.length === 0 && (
           <p className="error">The shop list is empty. Add products in the Products tab, then come back.</p>
         )}
         <label className="field">
           Add from shop list
-          <select value={picker} onChange={(e) => setPicker(e.target.value)} disabled={catalog.length === 0}>
+          <select value={picker} onChange={(e) => setPicker(e.target.value)} disabled={activeCatalog.length === 0}>
             <option value="">Select a product…</option>
             <optgroup label="Pesticides">
               {pesticides.map((p) => (
