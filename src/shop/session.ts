@@ -11,10 +11,19 @@ export function emptyShopSession(): ShopSession {
   return { shopId: "" };
 }
 
-/** Firestore doc ids cannot contain `/`; empty/invalid ⇒ local-only. */
+/**
+ * Firestore document-ID constraints (local-only when invalid).
+ * Rejects empty, `/`, `.`, `..`, reserved `__.*__`, and IDs > 1500 UTF-8 bytes.
+ * @see https://firebase.google.com/docs/firestore/quotas
+ */
 export function isValidShopId(shopId: string): boolean {
   const id = shopId.trim();
-  return id.length > 0 && !id.includes("/");
+  if (!id || id.includes("/")) return false;
+  if (id === "." || id === "..") return false;
+  // Firestore reserved: IDs matching __.*__
+  if (/^__.*__$/.test(id)) return false;
+  if (new TextEncoder().encode(id).length > 1500) return false;
+  return true;
 }
 
 

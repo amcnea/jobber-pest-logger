@@ -31,7 +31,11 @@ export type ShopStoreResult<T> =
 export interface ShopStore {
   readonly mode: ShopStoreMode;
   getShop(): Promise<ShopStoreResult<ShopDocument>>;
-  putShop(doc: ShopDocument): Promise<ShopStoreResult<void>>;
+  /**
+   * Persist shop document. On success, `value.updatedAt` is the committed
+   * write timestamp (callers must use it for the next CAS put).
+   */
+  putShop(doc: ShopDocument): Promise<ShopStoreResult<{ updatedAt: string }>>;
   /**
    * Live updates — TODO slice #3+ (shared listen / offline queue).
    * Stub returns an unsubscribe no-op so callers can wire later without API churn.

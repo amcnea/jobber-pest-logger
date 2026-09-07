@@ -72,7 +72,7 @@ export class LocalShopStore implements ShopStore {
    * lastBackupAt remains owned by markLastBackupNow / wipe / downloadBackup
    * (included on getShop for document shape; not overwritten here).
    */
-  async putShop(doc: ShopDocument): Promise<ShopStoreResult<void>> {
+  async putShop(doc: ShopDocument): Promise<ShopStoreResult<{ updatedAt: string }>> {
     // Same four section keys as applyBackup in storage.ts — snapshot before multi-key write.
     const keys = [
       "jobber-pest-logger:logs:v1",
@@ -116,8 +116,10 @@ export class LocalShopStore implements ShopStore {
         };
       }
       // Stamp after successful data writes; meta failure must not fail the put.
-      writeLocalUpdatedAt(new Date().toISOString());
-      return { ok: true, value: undefined };
+      // Return the committed stamp so callers can CAS against the same value on next put.
+      const updatedAt = new Date().toISOString();
+      writeLocalUpdatedAt(updatedAt);
+      return { ok: true, value: { updatedAt } };
     } catch (err) {
       rollback();
       const message = err instanceof Error ? err.message : "Could not save local shop data.";

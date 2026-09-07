@@ -28,12 +28,18 @@ type FirestoreFns = {
   /**
    * CAS put: fails with ShopWriteConflictError if the remote doc's updatedAt
    * differs from expectedUpdatedAt (caller's snapshot). Stamps a fresh updatedAt
-   * on the written payload after the check succeeds.
+   * on the written payload after the check succeeds, and returns that committed stamp.
    */
-  putWithCas: (expectedUpdatedAt: string, payload: ShopDocument) => Promise<void>;
+  putWithCas: (expectedUpdatedAt: string, payload: ShopDocument) => Promise<string>;
 };
 
 async function loadFirestore(config: FirebaseClientConfig, shopId: string): Promise<FirestoreFns> {
+  // Belt-and-suspenders: never build a Firestore doc path with an invalid shopId.
+  if (!isValidShopId(shopId)) {
+    throw new Error(
+      'Cannot build shops/{shopId} path: shopId must be non-empty, no "/", not ".", "..", or reserved __.*__, ≤1500 UTF-8 bytes',
+    );
+  }
   // Lazy import — tree-shakeable entry; not pulled into the critical path when unused.
   const [{ initializeApp, getApps }, { getFirestore, doc, getDoc, setDoc, runTransaction }] =
     await Promise.all([import("firebase/app"), import("firebase/firestore")]);
@@ -58,6 +64,7 @@ async function loadFirestore(config: FirebaseClientConfig, shopId: string): Prom
     getDoc: getDoc as FirestoreFns["getDoc"],
     setDoc: setDoc as FirestoreFns["setDoc"],
     putWithCas: async (expectedUpdatedAt, payload) => {
+      let committedUpdatedAt = "";
       await runTransaction(db, async (transaction) => {
         const snap = await transaction.get(docRef);
         if (snap.exists()) {
@@ -70,11 +77,13 @@ async function loadFirestore(config: FirebaseClientConfig, shopId: string): Prom
         }
         // Missing doc ⇒ first write / create; no conflict.
         // Stamp write time only after CAS succeeds (and on each retry attempt).
+        committedUpdatedAt = new Date().toISOString();
         transaction.set(docRef, {
           ...payload,
-          updatedAt: new Date().toISOString(),
+          updatedAt: committedUpdatedAt,
         });
       });
+      return committedUpdatedAt;
     },
   };
 }
@@ -120,10 +129,11 @@ export class RemoteShopStore implements ShopStore {
   constructor(config: FirebaseClientConfig, shopId: string) {
     this.config = config;
     this.shopId = shopId.trim();
-    // Match session.isValidShopId — Firestore doc ids cannot contain `/`.
+    // Match session.isValidShopId — reject empty, `/`, `.`, `..`, `__.*__`, >1500 UTF-8 bytes.
+    // Any path that builds a Firestore doc id must use a validated shopId (constructor gate).
     if (!isValidShopId(this.shopId)) {
       throw new Error(
-        'RemoteShopStore requires a non-empty shopId without "/" (Firestore path separator)',
+        'RemoteShopStore requires a valid shopId (non-empty, no "/", not ".", "..", or reserved __.*__, ≤1500 UTF-8 bytes)',
       );
     }
   }
@@ -157,12 +167,12 @@ export class RemoteShopStore implements ShopStore {
     }
   }
 
-  async putShop(doc: ShopDocument): Promise<ShopStoreResult<void>> {
+  async putShop(doc: ShopDocument): Promise<ShopStoreResult<{ updatedAt: string }>> {
     try {
       const { putWithCas } = await this.fs();
-      // CAS against caller's snapshot updatedAt; transaction stamps a fresh updatedAt on write.
-      await putWithCas(doc.updatedAt, doc);
-      return { ok: true, value: undefined };
+      // CAS against caller's snapshot updatedAt; return the committed stamp for next CAS.
+      const updatedAt = await putWithCas(doc.updatedAt, doc);
+      return { ok: true, value: { updatedAt } };
     } catch (err) {
       if (err instanceof ShopWriteConflictError || (err && (err as { conflict?: boolean }).conflict)) {
         return {
