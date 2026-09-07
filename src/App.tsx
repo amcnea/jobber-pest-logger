@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Export } from "./components/Export";
 import { FirstRunChecklist } from "./components/FirstRunChecklist";
+import { ShopPilotCard } from "./components/ShopPilotCard";
 import { History } from "./components/History";
 import { NewLogForm } from "./components/NewLogForm";
 import { People } from "./components/People";
@@ -166,11 +167,11 @@ export default function App() {
         <h1>Jobber Pest Logger</h1>
       </header>
       <div className="banner">
-        v1.4. First-run checklist + example-seed export gate. Property book + edit saved log. Schema
-        locked to 4 TAC § 7.144. Texas SPCS shops. Example seeds must be cleared before real CSV/PDF
-        export.
+        v1.5. Shop pilot card + export completeness gate. Schema locked to 4 TAC § 7.144. Texas SPCS
+        shops. Example seeds and incomplete records block real CSV/PDF export.
       </div>
       <FirstRunChecklist steps={firstRunSteps} onGo={setScreen} />
+      <ShopPilotCard />
       {peopleWarnings.length > 0 && (
         <div className="banner banner-due" role="status">
           <strong>License / CE reminders</strong> (in-app only; not TDA-required; no SMS). License:
