@@ -27,7 +27,13 @@ export type CreateJoinResult =
 export function shopDocumentHasMeaningfulData(doc: ShopDocument): boolean {
   if (doc.logs.length > 0) return true;
   if (doc.people.length > 0) return true;
-  if (doc.settings.shopName.trim() || doc.settings.shopTpclNumber.trim()) return true;
+  if (
+    doc.settings.shopName.trim() ||
+    doc.settings.shopTpclNumber.trim() ||
+    doc.settings.shopTpclLetter.trim()
+  ) {
+    return true;
+  }
   if (doc.catalog.some((p) => !isExampleShopProduct(p))) return true;
   return false;
 }
@@ -68,7 +74,14 @@ export async function createShop(): Promise<CreateJoinResult> {
   let shopId = "";
   let lastProbeError = "";
   for (let attempt = 0; attempt < 6; attempt++) {
-    const candidate = generateShopCode();
+    let candidate: string;
+    try {
+      candidate = generateShopCode();
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Secure random source is unavailable; cannot generate a shop code.";
+      return { ok: false, error: message };
+    }
     const probe = new RemoteShopStore(config, candidate);
     const existing = await probe.getShop();
     if (!existing.ok && remoteMissingError(existing.error)) {
