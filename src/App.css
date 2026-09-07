@@ -547,3 +547,21 @@ label.field {
     margin-bottom: 0.85rem;
   }
 }
+
+
+.banner-a2hs {
+  background: #f4efe4;
+  color: #3d3420;
+  border-bottom-color: #d9c9a0;
+}
+
+.banner-a2hs strong {
+  display: block;
+  margin-bottom: 0.15rem;
+}
+
+.banner-a2hs .btn {
+  margin-top: 0.25rem;
+  font-size: 0.78rem;
+  min-height: 40px;
+}
