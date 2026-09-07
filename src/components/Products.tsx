@@ -100,7 +100,8 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   }
 
   function setArchived(product: ShopProduct, archived: boolean) {
-    onUpsert({ ...product, archived });
+    const saved = onUpsert({ ...product, archived });
+    if (!saved) return;
     if (editingId === product.id) cancel();
   }
 
@@ -203,6 +204,8 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return catalog.filter((p) => {
+      // Keep the product being edited visible even if filters would hide it.
+      if (editingId && p.id === editingId) return true;
       if (listFilter === "active" && p.archived) return false;
       if (listFilter === "archived" && !p.archived) return false;
       if (kindFilter !== "all" && p.kind !== kindFilter) return false;
@@ -212,7 +215,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
       }`.toLowerCase();
       return hay.includes(q);
     });
-  }, [catalog, query, listFilter, kindFilter]);
+  }, [catalog, query, listFilter, kindFilter, editingId]);
 
   return (
     <div>
@@ -264,6 +267,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Name or EPA #"
               autoComplete="off"
+              disabled={editingId !== null}
             />
           </label>
           <div className="row">
@@ -272,6 +276,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
               <select
                 value={listFilter}
                 onChange={(e) => setListFilter(e.target.value as ListFilter)}
+                disabled={editingId !== null}
               >
                 <option value="active">Active</option>
                 <option value="archived">Archived ({archivedCount})</option>
@@ -283,6 +288,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
               <select
                 value={kindFilter}
                 onChange={(e) => setKindFilter(e.target.value as KindFilter)}
+                disabled={editingId !== null}
               >
                 <option value="all">All kinds</option>
                 <option value="pesticide">Pesticide</option>

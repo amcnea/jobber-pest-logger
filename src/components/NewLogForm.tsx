@@ -232,7 +232,11 @@ export function NewLogForm({
           &quot;example / not a real EPA number&quot;.
         </p>
         {activeCatalog.length === 0 && (
-          <p className="error">The shop list is empty. Add products in the Products tab, then come back.</p>
+          <p className="error">
+            {catalog.length === 0
+              ? "The shop list is empty. Add products in the Products tab, then come back."
+              : "No active products on the shop list. Unarchive products in the Products tab (or add new ones), then come back."}
+          </p>
         )}
         <label className="field">
           Add from shop list
