@@ -51,6 +51,7 @@ export function Export({
   const shopName = settings.shopName.trim();
   const ymd = /^\d{4}-\d{2}-\d{2}$/;
   const rangeActive = ymd.test(dateFrom.trim()) || ymd.test(dateTo.trim());
+  const hasDateInput = Boolean(dateFrom.trim() || dateTo.trim());
 
   function applyThisMonth() {
     const { from, to } = monthRangeLocal();
@@ -209,7 +210,7 @@ export function Export({
             type="button"
             className="btn btn-secondary"
             onClick={clearDates}
-            disabled={!rangeActive}
+            disabled={!hasDateInput}
           >
             Clear dates
           </button>

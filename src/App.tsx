@@ -77,7 +77,7 @@ export default function App() {
   }
 
   function handleDelete(id: string) {
-    if (!confirm("Delete this log from this device?")) return;
+    // Confirm lives in History (includes date + address in the prompt).
     const result = deleteLog(id);
     setLogs(result.logs);
     setStorageError(result.saved ? null : "Could not update saved logs on this device.");

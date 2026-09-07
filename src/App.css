@@ -467,3 +467,83 @@ label.field {
   opacity: 0.78;
   background: #f3f4f1;
 }
+
+
+.history-filters {
+  margin-bottom: 0.85rem;
+}
+
+.history-group-head {
+  margin-bottom: 0.35rem;
+}
+
+.history-log-card {
+  padding: 0.55rem 0.65rem;
+  margin-bottom: 0.45rem;
+}
+
+.history-log-head {
+  align-items: flex-start;
+  gap: 0.4rem;
+  margin-bottom: 0;
+}
+
+.history-log-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  margin-bottom: 0.15rem;
+}
+
+.history-log-line {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.3;
+}
+
+.history-log-actions {
+  flex-shrink: 0;
+}
+
+.history-log-actions .btn {
+  font-size: 0.72rem;
+  padding: 0.35rem 0.45rem;
+  min-height: 36px;
+}
+
+@media (max-width: 480px) {
+  .history-log-head {
+    flex-direction: column;
+  }
+
+  .history-log-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.35rem;
+  }
+
+  .history-log-actions .btn {
+    width: 100%;
+  }
+
+  .property-actions {
+    gap: 0.35rem;
+  }
+
+  .property-actions .btn {
+    font-size: 0.72rem;
+    padding: 0.4rem 0.45rem;
+    min-height: 40px;
+  }
+
+  .history-group h3 {
+    font-size: 0.92rem;
+    margin-bottom: 0.2rem;
+  }
+
+  .history-group {
+    margin-bottom: 0.85rem;
+  }
+}
