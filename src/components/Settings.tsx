@@ -1,4 +1,4 @@
-import { useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { LAWGICAL_DISCLAIMER } from "../disclaimer";
 import {
   applyBackup,
@@ -15,6 +15,8 @@ interface Props {
   lastBackupAt: string | null;
   /** Set by App before remount so wipe/restore success survives the key bump. */
   flash?: { slot: "backup" | "demo"; text: string } | null;
+  /** App clears settingsFlash after Settings seeds local banners from flash. */
+  onFlashConsumed?: () => void;
   onSave: (settings: ShopSettings) => boolean;
   onRestored: (
     data: {
@@ -34,6 +36,7 @@ export function Settings({
   settings,
   lastBackupAt,
   flash = null,
+  onFlashConsumed,
   onSave,
   onRestored,
   onBackupStampChange,
@@ -53,6 +56,13 @@ export function Settings({
 
   const lastBackupLabel = formatLastBackupLabel(lastBackupAt);
   const nag = backupNagMessage(lastBackupAt);
+
+  // Explicit consume: App clears settingsFlash once we seeded local banners.
+  useEffect(() => {
+    if (flash != null) {
+      onFlashConsumed?.();
+    }
+  }, [flash, onFlashConsumed]);
 
   function submit(e: FormEvent) {
     e.preventDefault();

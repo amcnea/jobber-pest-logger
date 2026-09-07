@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Export } from "./components/Export";
 import { FirstRunChecklist } from "./components/FirstRunChecklist";
 import { A2hsTip } from "./components/A2hsTip";
@@ -54,12 +54,18 @@ export default function App() {
     text: string;
   } | null>(null);
 
-  // Settings seeds local banners from flash on remount; clear so revisit/fail
-  // cannot resurrect a stale success message.
-  useEffect(() => {
-    if (settingsFlash == null) return;
+
+  const consumeSettingsFlash = useCallback(() => {
     setSettingsFlash(null);
-  }, [settingsFormKey, settingsFlash]);
+  }, []);
+
+  /** Navigate; clear flash when leaving Settings so remount cannot resurrect it. */
+  function go(s: Screen) {
+    if (screen === "settings" && s !== "settings") {
+      setSettingsFlash(null);
+    }
+    setScreen(s);
+  }
 
   const peopleWarnings = useMemo(() => collectPeopleWarnings(people), [people]);
   const firstRunSteps = useMemo(
@@ -72,7 +78,7 @@ export default function App() {
   function openNewLog(draft: ApplicationLog | null) {
     setDraftSeed(draft);
     setDraftKey((k) => k + 1);
-    setScreen("new");
+    go("new");
   }
 
   /** Open an existing saved log into New log form; upsert keeps the same id. */
@@ -89,7 +95,7 @@ export default function App() {
     }
     setStorageError(null);
     setDraftSeed(null);
-    setScreen("history");
+    go("history");
     return true;
   }
 
@@ -237,7 +243,7 @@ export default function App() {
         v1.6. Thin PWA polish (A2HS tip + manifest). Schema locked to 4 TAC § 7.144. Texas SPCS
         shops. Example seeds and incomplete records block real CSV/PDF export.
       </div>
-      <FirstRunChecklist steps={firstRunSteps} onGo={setScreen} />
+      <FirstRunChecklist steps={firstRunSteps} onGo={go} />
       <ShopPilotCard />
       <A2hsTip />
       {peopleWarnings.length > 0 && (
@@ -247,7 +253,7 @@ export default function App() {
           <ul className="warn-list">
             {peopleWarnings.map((w) => (
               <li key={w.personId}>
-                <button type="button" className="linkish" onClick={() => setScreen("people")}>
+                <button type="button" className="linkish" onClick={() => go("people")}>
                   {w.personName}
                 </button>
                 : {w.messages.join("; ")}
@@ -276,32 +282,32 @@ export default function App() {
         <button
           type="button"
           className={screen === "history" ? "active" : ""}
-          onClick={() => setScreen("history")}
+          onClick={() => go("history")}
         >
           History
         </button>
         <button
           type="button"
           className={screen === "products" ? "active" : ""}
-          onClick={() => setScreen("products")}
+          onClick={() => go("products")}
         >
           Products
         </button>
         <button
           type="button"
           className={screen === "people" ? "active" : ""}
-          onClick={() => setScreen("people")}
+          onClick={() => go("people")}
         >
           People
         </button>
         <button
           type="button"
           className={screen === "settings" ? "active" : ""}
-          onClick={() => setScreen("settings")}
+          onClick={() => go("settings")}
         >
           Settings
         </button>
-        <button type="button" className={screen === "export" ? "active" : ""} onClick={() => setScreen("export")}>
+        <button type="button" className={screen === "export" ? "active" : ""} onClick={() => go("export")}>
           Export
         </button>
       </nav>
@@ -343,6 +349,7 @@ export default function App() {
             settings={settings}
             lastBackupAt={lastBackupAt}
             flash={settingsFlash}
+            onFlashConsumed={consumeSettingsFlash}
             onSave={handleSaveSettings}
             onRestored={handleRestored}
             onBackupStampChange={setLastBackupAt}
@@ -357,7 +364,7 @@ export default function App() {
             settings={settings}
             lastBackupAt={lastBackupAt}
             onRemoveExamples={handleRemoveExampleProducts}
-            onGo={(s) => setScreen(s)}
+            onGo={go}
           />
         )}
       </main>
