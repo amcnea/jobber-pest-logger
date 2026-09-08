@@ -183,7 +183,10 @@ Sign-in / join / unlock loads the remote shop doc and verifies the entered PIN a
 5. **Leave shop** — clear session → local-only. Does **not** wipe remote or local data. (Authenticated **tech** uses Sign out; Leave is office-facing in Settings.)
 6. **Change PINs** — office-only after unlock. Pre-#3 shops with no `auth` can **bootstrap PINs** once from the unlock gate.
 
-Helpers for #4: `canAccessOffice()`, `sessionRole()`, `isSessionAuthenticated()`. This slice does **not** fully hide office screens yet.
+Helpers: `canAccessOffice()`, `canUseOfficeSurfaces()`, `sessionRole()`, `isSessionAuthenticated()`.
+**#4 Role-gated UI:** authenticated **tech** sees New log + History only (Log again / Duplicate allowed;
+no Edit/Delete). Products, People, Settings, Export (and backup/wipe) are office — tech deep-links
+redirect to New log. Local-only and office sessions keep the full UI.
 
 ### Env vars (optional, required for create/join/unlock)
 
@@ -204,8 +207,7 @@ Cloud sync is **not** the Texas § 7.144 two-year premises retention path. Keep 
 
 ### Not in this slice (later PRs)
 
-- **#4** Role-gated UI / nav (hide office screens for tech) — session already stores `role`
-- Offline queue (#6), export rewrite (#7), Jobber OAuth / email SaaS, first-office-only bootstrap polish (#5)
+- Offline queue (#6), export rewrite (#7), Jobber OAuth / email SaaS, Auth/membership (#5), polish (#8)
 
 Does not add Jobber OAuth, email SaaS, or inventory.
 

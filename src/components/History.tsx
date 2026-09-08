@@ -6,6 +6,8 @@ import type { ApplicationLog } from "../types";
 
 interface Props {
   logs: ApplicationLog[];
+  /** Office-only: Edit / Delete on saved logs. Tech keeps Log again / Duplicate (new logs). */
+  canEditDelete?: boolean;
   onDelete: (id: string) => void;
   onEdit: (log: ApplicationLog) => void;
   onLogAgainHere: (property: PropertyBookEntry) => void;
@@ -19,7 +21,14 @@ function productSummary(log: ApplicationLog): string {
     .join(", ");
 }
 
-export function History({ logs, onDelete, onEdit, onLogAgainHere, onDuplicateLastStop }: Props) {
+export function History({
+  logs,
+  canEditDelete = true,
+  onDelete,
+  onEdit,
+  onLogAgainHere,
+  onDuplicateLastStop,
+}: Props) {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
@@ -63,10 +72,20 @@ export function History({ logs, onDelete, onEdit, onLogAgainHere, onDuplicateLas
     <div>
       <h2>Property-level history</h2>
       <p className="hint">
-        Prior logs grouped by service address (property book). Use <strong>Edit</strong> to update a
-        saved log, <strong>Log again here</strong> to prefill the property, or{" "}
-        <strong>Duplicate last stop</strong> for products and pest from the most recent visit. Stored
-        only in this browser (localStorage).
+        Prior logs grouped by service address (property book).{" "}
+        {canEditDelete ? (
+          <>
+            Use <strong>Edit</strong> to update a saved log, <strong>Log again here</strong> to
+            prefill the property, or <strong>Duplicate last stop</strong> for products and pest from
+            the most recent visit.
+          </>
+        ) : (
+          <>
+            Use <strong>Log again here</strong> or <strong>Duplicate last stop</strong> to start a
+            new log (tech cannot edit or delete saved logs — ask office).
+          </>
+        )}{" "}
+        Stored only in this browser (localStorage).
       </p>
 
       <div className="card history-filters">
@@ -157,14 +176,16 @@ export function History({ logs, onDelete, onEdit, onLogAgainHere, onDuplicateLas
                       </div>
                     )}
                   </div>
-                  <div className="card-actions history-log-actions">
-                    <button type="button" className="btn btn-secondary" onClick={() => onEdit(log)}>
-                      Edit
-                    </button>
-                    <button type="button" className="btn btn-ghost" onClick={() => handleDelete(log)}>
-                      Delete
-                    </button>
-                  </div>
+                  {canEditDelete && (
+                    <div className="card-actions history-log-actions">
+                      <button type="button" className="btn btn-secondary" onClick={() => onEdit(log)}>
+                        Edit
+                      </button>
+                      <button type="button" className="btn btn-ghost" onClick={() => handleDelete(log)}>
+                        Delete
+                      </button>
+                    </div>
+                  )}
                 </div>
               </article>
             );

@@ -35,6 +35,17 @@
   letter-spacing: 0.01em;
 }
 
+.role-chrome {
+  margin: 0.4rem 0 0;
+  font-size: 0.78rem;
+  opacity: 0.95;
+  font-weight: 500;
+}
+
+.role-chrome strong {
+  text-transform: capitalize;
+}
+
 .banner {
   background: var(--warn-bg);
   color: #5c4a1f;
@@ -51,6 +62,10 @@
   position: sticky;
   top: 0;
   z-index: 4;
+}
+
+.tabs-tech {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .tabs button {

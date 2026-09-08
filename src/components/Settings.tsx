@@ -357,8 +357,8 @@ export function Settings({
               <p className="hint">
                 Day-to-day screens still read/write this device&apos;s localStorage. Create and first
                 migrate upload a shop snapshot to Firestore; live shared read/write is a later slice.
-                Full office/tech screen gates land in #4 — <code>canAccessOffice()</code> /{" "}
-                <code>session.role</code> are ready.
+                Tech sessions see New log + History only; office keeps catalog, people, settings,
+                export, and edit/delete.
               </p>
             )}
             <div className="shop-session-actions">
@@ -387,7 +387,7 @@ export function Settings({
             {role === "tech" && (
               <p className="hint">
                 Signed in as tech. Leave shop is disabled here — sign out, or ask office to leave from
-                an office session. Role-gated screens arrive in #4.
+                an office session. Office screens are hidden in the main tabs for this role.
               </p>
             )}
             {officeOk && firebaseOk && (
@@ -821,7 +821,7 @@ export function Settings({
           Wipe all data on this device…
         </button>
         {authenticated && role === "tech" && (
-          <p className="hint">Wipe is disabled for tech sessions (office helper stub for #4).</p>
+          <p className="hint">Wipe is disabled for tech sessions (office-only).</p>
         )}
         {demoMsg && (
           <p className="hint" role="status">
