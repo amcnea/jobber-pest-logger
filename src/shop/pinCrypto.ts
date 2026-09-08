@@ -112,7 +112,7 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
 export async function verifyPin(pin: string, record: PinHashRecord): Promise<boolean> {
   if (!isValidPin(pin)) return false;
   if (record.algorithm !== PIN_HASH_ALGORITHM) return false;
-  if (!Number.isFinite(record.iterations) || record.iterations < 10_000) return false;
+  if (record.iterations !== PIN_PBKDF2_ITERATIONS) return false;
   let salt: Uint8Array;
   let expected: Uint8Array;
   try {
@@ -136,8 +136,7 @@ export function isPinHashRecord(value: unknown): value is PinHashRecord {
   if (
     r.algorithm !== PIN_HASH_ALGORITHM ||
     typeof r.iterations !== "number" ||
-    !Number.isFinite(r.iterations) ||
-    r.iterations < 10_000 ||
+    r.iterations !== PIN_PBKDF2_ITERATIONS ||
     typeof r.saltB64 !== "string" ||
     typeof r.hashB64 !== "string"
   ) {

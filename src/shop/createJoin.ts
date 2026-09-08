@@ -38,7 +38,7 @@ export type CreateJoinResult =
       hint?: string;
       role?: ShopRole;
     }
-  | { ok: false; error: string };
+  | { ok: false; error: string; reason?: "pins-missing" };
 
 export interface CreateShopPins {
   officePin: string;
@@ -122,17 +122,21 @@ async function verifyAgainstAuth(
   auth: ShopPinAuth | undefined,
   role: ShopRole,
   pin: string,
-): Promise<string | null> {
+): Promise<{ error: string; reason?: "pins-missing" } | null> {
   if (!auth) {
-    return "This shop has no PINs yet. An office device must set office and tech PINs before unlock/join.";
+    return {
+      error:
+        "This shop has no PINs yet. An office device must set office and tech PINs before unlock/join.",
+      reason: "pins-missing",
+    };
   }
   if (!isValidPin(pin)) {
-    return "PIN must be 4–8 digits.";
+    return { error: "PIN must be 4–8 digits." };
   }
   const record = pinRecordForRole(auth, role);
   const ok = await verifyPin(pin, record);
   if (!ok) {
-    return "Incorrect PIN for that role. Try again or ask the office.";
+    return { error: "Incorrect PIN for that role. Try again or ask the office." };
   }
   return null;
 }
@@ -267,7 +271,7 @@ export async function joinShop(
     };
   }
   const pinErr = await verifyAgainstAuth(remoteDoc.auth, input.role, input.pin);
-  if (pinErr) return { ok: false, error: pinErr };
+  if (pinErr) return { ok: false, error: pinErr.error, reason: pinErr.reason };
 
   const localResult = await getLocalShopStore().getShop();
   if (!localResult.ok) {
@@ -358,7 +362,7 @@ export async function signInShop(
     };
   }
   const pinErr = await verifyAgainstAuth(remoteResult.value.auth, input.role, input.pin);
-  if (pinErr) return { ok: false, error: pinErr };
+  if (pinErr) return { ok: false, error: pinErr.error, reason: pinErr.reason };
 
   const sessionErr = await persistAuthenticatedSession(shopId, input.role);
   if (sessionErr) {

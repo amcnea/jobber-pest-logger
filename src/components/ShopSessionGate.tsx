@@ -2,7 +2,7 @@
  * Minimal shared-shop sign-in / unlock gate (#3).
  * PIN is verified against remote hashes — role cannot be flipped locally alone.
  */
-import { useState } from "react";
+import { useId, useState } from "react";
 import {
   bootstrapShopPins,
   hasJoinedShop,
@@ -37,6 +37,7 @@ export function ShopSessionGate({
   const [officePinConfirm, setOfficePinConfirm] = useState("");
   const [techPin, setTechPin] = useState("");
   const [techPinConfirm, setTechPinConfirm] = useState("");
+  const roleGroupName = `shop-role-gate-${useId()}`;
 
   async function handleSignIn() {
     setBusy(true);
@@ -46,7 +47,7 @@ export function ShopSessionGate({
       const result = await signInShop(shopCode, { role, pin });
       if (!result.ok) {
         setError(result.error);
-        if (/no PINs yet/i.test(result.error)) {
+        if (result.reason === "pins-missing") {
           setShowBootstrap(true);
         }
         return;
@@ -121,7 +122,7 @@ export function ShopSessionGate({
         <label className="shop-role-option">
           <input
             type="radio"
-            name="shop-role-gate"
+            name={roleGroupName}
             checked={role === "office"}
             onChange={() => setRole("office")}
           />
@@ -130,7 +131,7 @@ export function ShopSessionGate({
         <label className="shop-role-option">
           <input
             type="radio"
-            name="shop-role-gate"
+            name={roleGroupName}
             checked={role === "tech"}
             onChange={() => setRole("tech")}
           />
