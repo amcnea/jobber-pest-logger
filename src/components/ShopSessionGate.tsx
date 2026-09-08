@@ -175,6 +175,7 @@ export function ShopSessionGate({
             <input
               type="password"
               inputMode="numeric"
+              autoComplete="new-password"
               value={officePin}
               onChange={(e) => setOfficePin(e.target.value)}
               disabled={busy}
@@ -185,6 +186,7 @@ export function ShopSessionGate({
             <input
               type="password"
               inputMode="numeric"
+              autoComplete="new-password"
               value={officePinConfirm}
               onChange={(e) => setOfficePinConfirm(e.target.value)}
               disabled={busy}
@@ -195,6 +197,7 @@ export function ShopSessionGate({
             <input
               type="password"
               inputMode="numeric"
+              autoComplete="new-password"
               value={techPin}
               onChange={(e) => setTechPin(e.target.value)}
               disabled={busy}
@@ -205,6 +208,7 @@ export function ShopSessionGate({
             <input
               type="password"
               inputMode="numeric"
+              autoComplete="new-password"
               value={techPinConfirm}
               onChange={(e) => setTechPinConfirm(e.target.value)}
               disabled={busy}
