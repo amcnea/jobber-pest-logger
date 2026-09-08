@@ -56,6 +56,7 @@ export async function signOutFirebaseAuth(
   config: FirebaseClientConfig,
 ): Promise<void> {
   const auth = await getAuth(config);
+  await auth.authStateReady();
   if (!auth.currentUser) return;
   const { signOut } = await import("firebase/auth");
   await signOut(auth);
