@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Export } from "./components/Export";
 import { FirstRunChecklist } from "./components/FirstRunChecklist";
 import { A2hsTip } from "./components/A2hsTip";
@@ -73,6 +73,7 @@ export default function App() {
   const [outboxTick, setOutboxTick] = useState(0);
   const [outboxFlushing, setOutboxFlushing] = useState(false);
   const [outboxMessage, setOutboxMessage] = useState<string | null>(null);
+  const flushInFlight = useRef(false);
 
   const consumeSettingsFlash = useCallback(() => {
     setSettingsFlash(null);
@@ -96,6 +97,8 @@ export default function App() {
       refreshOutboxBanner();
       return;
     }
+    if (flushInFlight.current) return;
+    flushInFlight.current = true;
     setOutboxFlushing(true);
     setOutboxMessage(null);
     try {
@@ -110,6 +113,7 @@ export default function App() {
         setOutboxMessage(result.error ?? "Could not sync queued logs. Will retry when online.");
       }
     } finally {
+      flushInFlight.current = false;
       setOutboxFlushing(false);
       refreshOutboxBanner();
     }
@@ -433,8 +437,10 @@ export default function App() {
                   <strong>
                     {pending} log{pending === 1 ? "" : "s"} waiting to sync
                   </strong>
-                  Saved on this device; cloud put failed or offline. § 7.144 fields are kept in the
-                  outbox until sync succeeds.
+                  <p>
+                    Saved on this device; cloud put failed or offline. § 7.144 fields are kept in
+                    the outbox until sync succeeds.
+                  </p>
                   <div style={{ marginTop: "0.5rem" }}>
                     <button
                       type="button"

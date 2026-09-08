@@ -87,6 +87,7 @@ export {
   loadLogOutbox,
   outboxEntriesForShop,
   removeOutboxLogIds,
+  removeOutboxVersions,
   syncLogToRemote,
   type LogOutboxEntry,
 } from "./logOutbox";

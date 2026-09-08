@@ -78,6 +78,20 @@ export function enqueueLogOutbox(
   return writeOutbox([entry, ...rest]);
 }
 
+/** Remove only exact shopId + log.id + queuedAt versions (preserve newer re-queues). */
+export function removeOutboxVersions(
+  shopId: string,
+  versions: Array<{ logId: string; queuedAt: string }>,
+): boolean {
+  const id = shopId.trim();
+  const drop = new Set(versions.map((v) => `${v.logId}\0${v.queuedAt}`));
+  const next = loadLogOutbox().filter(
+    (e) => !(e.shopId === id && drop.has(`${e.log.id}\0${e.queuedAt}`)),
+  );
+  return writeOutbox(next);
+}
+
+/** @deprecated Prefer removeOutboxVersions so a newer queued payload is not wiped. */
 export function removeOutboxLogIds(shopId: string, logIds: string[]): boolean {
   const id = shopId.trim();
   const drop = new Set(logIds);
@@ -151,9 +165,9 @@ export async function flushLogOutbox(
       };
     }
 
-    removeOutboxLogIds(
+    removeOutboxVersions(
       id,
-      pending.map((e) => e.log.id),
+      pending.map((e) => ({ logId: e.log.id, queuedAt: e.queuedAt })),
     );
     return { ok: true, flushed: pending.length, remaining: 0 };
   };
@@ -174,10 +188,18 @@ export async function syncLogToRemote(
   log: ApplicationLog,
 ): Promise<{ ok: true } | { ok: false; error: string; queued: boolean }> {
   const id = shopId.trim();
+  // Queue before the network round-trip so a discarded tab cannot lose the cloud copy.
+  enqueueLogOutbox(id, log);
+  const versionKey = outboxEntriesForShop(id).find((e) => e.log.id === log.id)?.queuedAt;
+  const clearThisVersion = () => {
+    if (!versionKey) return removeOutboxLogIds(id, [log.id]);
+    return removeOutboxVersions(id, [{ logId: log.id, queuedAt: versionKey }]);
+  };
+
   const got = await remote.getShop();
   if (!got.ok) {
-    const queued = enqueueLogOutbox(id, log, got.error);
-    return { ok: false, error: got.error, queued };
+    enqueueLogOutbox(id, log, got.error);
+    return { ok: false, error: got.error, queued: true };
   }
 
   const logs = [...got.value.logs];
@@ -197,17 +219,17 @@ export async function syncLogToRemote(
         else logs2[i2] = log;
         const put2 = await remote.putShop({ ...again.value, logs: logs2 });
         if (put2.ok) {
-          removeOutboxLogIds(id, [log.id]);
+          clearThisVersion();
           return { ok: true };
         }
-        const queued = enqueueLogOutbox(id, log, put2.error);
-        return { ok: false, error: put2.error, queued };
+        enqueueLogOutbox(id, log, put2.error);
+        return { ok: false, error: put2.error, queued: true };
       }
     }
-    const queued = enqueueLogOutbox(id, log, put.error);
-    return { ok: false, error: put.error, queued };
+    enqueueLogOutbox(id, log, put.error);
+    return { ok: false, error: put.error, queued: true };
   }
 
-  removeOutboxLogIds(id, [log.id]);
+  clearThisVersion();
   return { ok: true };
 }
