@@ -1,0 +1,84 @@
+name: PR static review
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: tsc --noEmit
+        run: npx tsc --noEmit
+
+  semgrep:
+    name: Semgrep + reviewdog
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Semgrep
+        run: python -m pip install --upgrade pip semgrep
+
+      - name: Install reviewdog
+        uses: reviewdog/action-setup@v1
+        with:
+          reviewdog_version: latest
+
+      - name: Semgrep scan
+        run: |
+          semgrep scan \
+            --metrics=off \
+            --config p/typescript \
+            --config p/javascript \
+            --config p/react \
+            --config p/secrets \
+            --config .semgrep.yml \
+            --sarif \
+            --output semgrep.sarif || true
+
+      - name: Publish findings on the PR
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ ! -s semgrep.sarif ]; then
+            echo "No SARIF output; skipping reviewdog."
+            exit 0
+          fi
+          reviewdog \
+            -f=sarif \
+            -name=semgrep \
+            -reporter=github-pr-review \
+            -filter-mode=added \
+            -level=warning \
+            -fail-on-error=false \
+            < semgrep.sarif
