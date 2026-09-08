@@ -133,14 +133,26 @@ export async function verifyPin(pin: string, record: PinHashRecord): Promise<boo
 export function isPinHashRecord(value: unknown): value is PinHashRecord {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const r = value as Record<string, unknown>;
-  return (
-    r.algorithm === PIN_HASH_ALGORITHM &&
-    typeof r.iterations === "number" &&
-    typeof r.saltB64 === "string" &&
-    r.saltB64.length > 0 &&
-    typeof r.hashB64 === "string" &&
-    r.hashB64.length > 0
-  );
+  if (
+    r.algorithm !== PIN_HASH_ALGORITHM ||
+    typeof r.iterations !== "number" ||
+    !Number.isFinite(r.iterations) ||
+    r.iterations < 10_000 ||
+    typeof r.saltB64 !== "string" ||
+    typeof r.hashB64 !== "string"
+  ) {
+    return false;
+  }
+  try {
+    // Match verifyPin structural gates so malformed remote records fail parse
+    // (authUnreadable path) instead of looking like a wrong PIN.
+    return (
+      b64ToBytes(r.saltB64).length >= 8 &&
+      b64ToBytes(r.hashB64).length === HASH_BITS / 8
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function parseShopPinAuth(raw: unknown): ShopPinAuth | undefined {
