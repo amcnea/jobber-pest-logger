@@ -74,6 +74,7 @@ export function isSessionExpired(
   if (!session.verifiedAt) return true;
   const t = Date.parse(session.verifiedAt);
   if (Number.isNaN(t)) return true;
+  if (t > nowMs) return true;
   return nowMs - t > SESSION_TTL_MS;
 }
 
@@ -151,3 +152,4 @@ export function hasJoinedShop(session: ShopSession = loadShopSession()): boolean
 export function needsShopUnlock(session: ShopSession = loadShopSession()): boolean {
   return hasJoinedShop(session) && !isSessionAuthenticated(session);
 }
+
