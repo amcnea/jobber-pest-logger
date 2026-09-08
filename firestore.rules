@@ -1,9 +1,10 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // #2 create/join: allow read/write on shops/{shopId} only.
-    // Shop code is obscurity until PIN / Auth / membership in later slices (#3–#5).
-    // Anyone who knows the shopId can read and write the shop document.
+    // #2/#3: allow read/write on shops/{shopId} only.
+    // Shop code + client-side PIN hashes are obscurity until Firebase Auth / membership (#5).
+    // Anyone who knows the shopId can still read/write the shop document at the rules layer.
+    // PIN verification happens in the client against auth.* hashes on the doc — not enforced here.
     // Do NOT treat this as production authorization.
     match /shops/{shopId} {
       allow read, write: if shopId.size() > 0
