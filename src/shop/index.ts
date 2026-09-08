@@ -1,4 +1,4 @@
-/** Shared shop store — foundation (#1) + create/join (#2) + session PIN/role (#3) + role-gated UI (#4). */
+/** Shared shop store — foundation (#1) + create/join (#2) + session PIN/role (#3) + role-gated UI (#4) + Auth/membership (#5). */
 
 export type {
   ShopDocument,
@@ -10,6 +10,7 @@ export type {
   ShopPinAuth,
   ShopRole,
   PinHashRecord,
+  ShopMembers,
 } from "./types";
 
 export {
@@ -37,6 +38,8 @@ export {
   readFirebaseEnv,
   type FirebaseClientConfig,
 } from "./firebaseConfig";
+
+export { ensureAnonymousAuth, getCurrentUid } from "./firebaseAuth";
 
 export { LocalShopStore, getLocalShopStore } from "./LocalShopStore";
 export { RemoteShopStore } from "./RemoteShopStore";

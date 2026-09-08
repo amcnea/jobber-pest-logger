@@ -145,14 +145,24 @@ See package.json scripts. Install dependencies, then start the Vite "dev" script
 
 Production: "build" then "preview". Requires Node ^20.19 or Node >=22.12 (Vite 7). Data stays in the browser; nothing is uploaded.
 
-## Shared shop store + session PIN / role (#3)
+## Shared shop store + session PIN / role + Auth/membership (#3–#5)
 
-Optional **Firebase Firestore** remote so multiple devices can share one shop document, gated by **shop code + role (office|tech) + PIN**. Still works as a static GitHub Pages app — no host migration. Local-only (no PIN) until Firebase env is set **and** this device creates or joins / unlocks a shop.
+Optional **Firebase Firestore** remote so multiple devices can share one shop document, gated by **Firebase Anonymous Auth**, **shop membership**, **shop code**, and **role (office|tech) + PIN**. Still a static GitHub Pages app — no host migration, no email/password SaaS, no Jobber OAuth. Local-only (no PIN) until Firebase env is set **and** this device creates or joins / unlocks a shop.
 
 ### Stack choice
 
 - **Local (default):** existing `localStorage` via `LocalShopStore` wrapping `storage.ts` (logs, catalog, people, settings, last-backup stamp). No PIN when Firebase is unset or the device is not joined.
-- **Shared (optional):** `RemoteShopStore` writes `shops/{shopId}` in Firestore when Vite Firebase env is set **and** this device has a **PIN-authenticated** session (`jobber-pest-logger:shop-session:v1`).
+- **Shared (optional):** `RemoteShopStore` writes `shops/{shopId}` in Firestore when Vite Firebase env is set **and** this device has a **PIN-authenticated** session (`jobber-pest-logger:shop-session:v1`). Every remote call **signInAnonymously** first so `request.auth.uid` is present for rules.
+
+### Auth model (#5)
+
+| Layer | What it does |
+| --- | --- |
+| **Firebase Anonymous Auth** | Each browser gets a stable `uid` (persisted by the Firebase SDK). No email. |
+| **Shop membership** | Shop doc fields `ownerUid` + `members: { [uid]: "office" \| "tech" }`. First creator is office owner. |
+| **firestore.rules** | Deny unauthenticated access. `get` requires signed-in. Writes require membership (or join-self / legacy PIN bootstrap). `list` denied. |
+| **Client PIN verify** | PBKDF2 hashes on the shop doc; verify in the browser after Anonymous Auth, then `addMembership` for that uid. |
+| **localStorage session** | UI/device gate only (`shopId`, `role`, `verifiedAt`). **Not** server proof — rules use Auth uid + members. |
 
 Session fields:
 
@@ -162,7 +172,7 @@ Session fields:
 | `role` | `office` or `tech` — only after remote PIN verify |
 | `verifiedAt` | ISO time of last successful PIN verify (soft TTL **14 days**) |
 
-**Sign-out** clears `role` + `verifiedAt` but keeps `shopId` for convenient unlock. **Leave** clears the whole session (back to local-only). Raw PINs are **never** stored in localStorage.
+**Sign-out** clears `role` + `verifiedAt` but keeps `shopId` for convenient unlock. **Leave** clears the whole session (back to local-only). Raw PINs are **never** stored in localStorage. Firebase Anonymous uid is kept across sign-out/leave so re-join is stable.
 
 ### PIN storage (design choice)
 
@@ -172,16 +182,16 @@ Office and tech PINs are hashed in the browser with **Web Crypto PBKDF2-SHA-256*
 auth: { version: 1, officePin: { algorithm, iterations, saltB64, hashB64 }, techPin: { … } }
 ```
 
-Sign-in / join / unlock loads the remote shop doc and verifies the entered PIN against the hash for the chosen role. Flipping `role` in localStorage alone does not count — `normalizeShopSession` drops orphan role flags, and shared mode requires a fresh `verifiedAt` from a successful verify. (Firestore rules still allow anyone who knows `shopId` to read/write until Auth / membership in a later slice — client PIN is a real UX gate, not server ACLs.)
+Sign-in / join / unlock: Anonymous Auth → load shop doc → verify PIN for the chosen role → write `members[uid]` → save session. Flipping `role` in localStorage alone does not count.
 
 ### Create / join / unlock / leave (Settings → Shared shop)
 
-1. **Create shop** — office sets office PIN + tech PIN (confirm fields), generates shop code, uploads local snapshot **with** `auth` hashes, signs in as **office**.
-2. **Join shop** — shop code + role pick + matching PIN. Cannot set PINs on join. Migrate-once rules from #2 still apply; migrate uploads preserve remote `auth`.
-3. **Unlock / sign-in** — when `shopId` is remembered but session expired/signed out: role + PIN (and code if needed). App shows a compact unlock gate while locked.
+1. **Create shop (first-office bootstrap)** — office sets office PIN + tech PIN, Anonymous Auth, generates shop code, uploads local snapshot with `auth` hashes + `ownerUid` + `members[uid]=office`, signs in as **office**.
+2. **Join shop** — shop code + role + matching PIN. Anonymous Auth → verify PIN → add uid to `members` → session. Cannot set PINs on join. Migrate-once from #2 still applies **after** membership is written.
+3. **Unlock / sign-in** — remembered `shopId` + role + PIN; ensures membership for this uid.
 4. **Sign out** — clear role/auth; keep shopId.
-5. **Leave shop** — clear session → local-only. Does **not** wipe remote or local data. (Authenticated **tech** uses Sign out; Leave is office-facing in Settings.)
-6. **Change PINs** — office-only after unlock. Pre-#3 shops with no `auth` can **bootstrap PINs** once from the unlock gate.
+5. **Leave shop** — clear session → local-only. Does **not** wipe remote or local data.
+6. **Change PINs** — office/owner only (client session + rules). Pre-#3 shops with no `auth` can **bootstrap PINs** once (claims ownership).
 
 Helpers: `canAccessOffice()`, `canUseOfficeSurfaces()`, `sessionRole()`, `isSessionAuthenticated()`.
 **#4 Role-gated UI:** authenticated **tech** sees New log + History only (Log again / Duplicate allowed;
@@ -197,17 +207,34 @@ Copy `.env.example` to `.env.local` (or `.env`) and rebuild. When **any** requir
 - `VITE_FIREBASE_PROJECT_ID`
 - `VITE_FIREBASE_APP_ID`
 
-### Firestore security rules (caveat)
+Also enable **Anonymous** sign-in in the Firebase console, and **deploy** in-repo `firestore.rules`.
 
-In-repo `firestore.rules` allows read/write on `shops/{shopId}` only (everything else deny). **Shop code + client PIN hashes are obscurity, not server authorization**, until Auth / membership (#5). Deploy rules when you enable Firebase; do not treat them as production-ready access control.
+### Firestore security rules — enforced vs still obscurity
+
+**Enforced (after rules deploy):**
+
+- Unauthenticated read/write on `shops/{shopId}` → **denied** (closes open shopId IDOR for strangers with no Auth).
+- `list` on shops → **denied** (no enumeration).
+- **Create** only when signed in and `ownerUid` / `members[uid]=office` match the caller.
+- **Update** for members: office/owner may change PIN hashes; tech may not change `auth` / `ownerUid` / `members`.
+- **Join-self** update may add only the caller’s uid to `members` (optional legacy `ownerUid` claim when missing).
+- Legacy PIN bootstrap only when remote has no `auth` yet.
+
+**Still obscurity / deferred:**
+
+- PIN verification is **client-side** against hashes; any signed-in caller who knows `shopId` can `get` the doc (needed for join without Cloud Functions). Offline brute-force of 4–8 digit PINs remains possible if hashes are obtained.
+- Join-self write is not rate-limited or PIN-checked inside rules — the client is expected to verify PIN first. A crafted client could attempt membership without PIN until Function-based verify ships.
+- `localStorage` session remains a UI gate only.
+
+**Follow-up (not this slice):** Cloud Function callable for PIN verify + membership grant (rate-limited), so hashes never need to be client-readable.
 
 ### Premises retention (unchanged)
 
-Cloud sync is **not** the Texas § 7.144 two-year premises retention path. Keep Export / JSON backup and the Lawgical disclaimer. This app does not run a retention engine.
+Cloud sync is **not** the Texas § 7.144 two-year premises retention path. Keep Export / JSON backup and the Lawgical disclaimer. This app does not run a retention engine. Cloud ≠ premises.
 
 ### Not in this slice (later PRs)
 
-- Offline queue (#6), export rewrite (#7), Jobber OAuth / email SaaS, Auth/membership (#5), polish (#8)
+- Offline queue (#6), export rewrite (#7), timeout polish (#8), Jobber OAuth / email SaaS, Function-based PIN verify
 
 Does not add Jobber OAuth, email SaaS, or inventory.
 

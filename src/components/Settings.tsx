@@ -315,9 +315,11 @@ export function Settings({
 
       <h2>Shared shop</h2>
       <p className="hint">
-        Optional multi-device shop via Firebase. Local-only until you create or join with a PIN.
-        Requires Firebase env from <code>.env.example</code>. PINs are salted hashes on the shop
-        document — never stored plaintext in session. Cloud sync is <strong>not</strong> the 2-year
+        Optional multi-device shop via Firebase Anonymous Auth + membership. Local-only until you
+        create, join, or unlock with a PIN. Requires Firebase env from <code>.env.example</code>, Anonymous
+        Auth enabled in the console, and in-repo <code>firestore.rules</code> deployed before
+        membership enforcement. First create makes this device the office owner. PINs are salted
+        hashes — never stored plaintext in session. Cloud sync is <strong>not</strong> the 2-year
         premises retention path — keep Export / backup and the Lawgical disclaimer.
       </p>
       <div className="card settings-backup-actions shop-card">
@@ -470,8 +472,8 @@ export function Settings({
               <>
                 <h3 className="shop-subhead">Create shop (office)</h3>
                 <p className="hint">
-                  Sets salted office + tech PIN hashes on the new shop document. You stay signed in as
-                  office.
+                  First-office bootstrap: signs in anonymously, sets office + tech PIN hashes, and
+                  records this device as shop owner. You stay signed in as office.
                 </p>
                 <label className="field">
                   Office PIN (4–8 digits)
@@ -546,7 +548,10 @@ export function Settings({
             {firebaseOk && (
               <>
                 <h3 className="shop-subhead">Join shop</h3>
-                <p className="hint">Requires shop code + role + matching PIN from the office.</p>
+                <p className="hint">
+                  Tech (or office) join: shop code + role + matching PIN. Signs in anonymously, verifies
+                  PIN, then adds this device to shop members.
+                </p>
               </>
             )}
             <label className="field">
