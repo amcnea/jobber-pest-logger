@@ -1,9 +1,12 @@
-/** Shared shop document + store API (slice #1 foundation; #3 session/PIN). */
+/** Shared shop document + store API (slice #1 foundation; #3 session/PIN; #5 Auth/membership). */
 
 import type { ApplicationLog, Person, ShopProduct, ShopSettings } from "../types";
 import type { ShopPinAuth, ShopRole } from "./pinCrypto";
 
 export type { ShopPinAuth, ShopRole, PinHashRecord } from "./pinCrypto";
+
+/** Membership role map: Firebase Auth uid → office|tech (#5). */
+export type ShopMembers = Record<string, ShopRole>;
 
 /** Aligns with DeviceBackup field shapes; updatedAt replaces exportedAt for live docs. */
 export interface ShopDocument {
@@ -18,9 +21,20 @@ export interface ShopDocument {
   lastBackupAt?: string | null;
   /**
    * PIN hashes for office/tech (#3). Present on shared shops after create / PIN bootstrap.
-   * Never stores plaintext PINs.
+   * Never stores plaintext PINs. Readable only by authenticated clients (rules); cracked
+   * offline if obtained — Function-based verify is a follow-up.
    */
   auth?: ShopPinAuth;
+  /**
+   * Firebase Auth uid of the first-office creator (#5). Immutable after create
+   * (rules preserve ownerUid).
+   */
+  ownerUid?: string;
+  /**
+   * Devices that completed create/join with a verified role (#5).
+   * Firestore rules allow shop R/W for members; join-self may add the caller's uid.
+   */
+  members?: ShopMembers;
   /**
    * Client-only: remote `auth` key was present but failed parse (corrupt / unreadable).
    * Never write this field to Firestore — strip on put.
@@ -63,6 +77,7 @@ export interface ShopStore {
  * - `shopId` alone may be remembered after sign-out (convenience).
  * - `role` + `verifiedAt` mean PIN was verified against remote hashes for this device session.
  * - Raw PINs are never stored here.
+ * - Server authorization is Firebase Auth uid + shop.members (not this localStorage blob).
  */
 export interface ShopSession {
   /** Firestore shops/{shopId} when joined/remembered; empty string means not joined. */

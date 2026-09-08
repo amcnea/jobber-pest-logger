@@ -1,6 +1,7 @@
 /**
- * Minimal shared-shop sign-in / unlock gate (#3).
- * PIN is verified against remote hashes — role cannot be flipped locally alone.
+ * Minimal shared-shop sign-in / unlock gate (#3 + #5).
+ * Anonymous Auth + PIN verify against remote hashes, then membership for this uid.
+ * Role cannot be flipped locally alone.
  */
 import { useId, useState } from "react";
 import {

@@ -1,6 +1,7 @@
 /**
  * resolveShopStore — local by default; remote only when Firebase is configured
- * AND this device has a PIN-authenticated shop session (#3).
+ * AND this device has a PIN-authenticated shop session (#3). Server auth is
+ * Firebase Anonymous uid + shop.members (#5); localStorage is UI-only.
  */
 
 import { getFirebaseConfig, isFirebaseConfigured } from "./firebaseConfig";

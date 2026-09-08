@@ -1,18 +1,131 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // #2/#3: allow read/write on shops/{shopId} only.
-    // Shop code + client-side PIN hashes are obscurity until Firebase Auth / membership (#5).
-    // Anyone who knows the shopId can still read/write the shop document at the rules layer.
-    // PIN verification happens in the client against auth.* hashes on the doc — not enforced here.
-    // Do NOT treat this as production authorization.
+    // #5: Firebase Anonymous Auth + shop membership.
+    // Unauthenticated strangers with a guessed shopId are denied (closes open IDOR).
+    // Signed-in get is allowed so join/unlock can client-verify PIN hashes, then
+    // write membership via join-self update. PIN hashes remain readable to any
+    // authenticated caller who knows shopId — Function-based verify + rate limit
+    // is the follow-up. localStorage session is UI-only; rules enforce membership
+    // for writes after create/join.
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isValidShopId(id) {
+      return id.size() > 0
+        && id.size() <= 1500
+        && id != '.'
+        && id != '..'
+        && !id.matches('.*[/].*')
+        && !id.matches('__.*__');
+    }
+
+    function membersMap() {
+      return resource.data.get('members', {});
+    }
+
+    function requestMembers() {
+      return request.resource.data.get('members', {});
+    }
+
+    function memberRole() {
+      return request.auth.uid in membersMap()
+        ? membersMap()[request.auth.uid]
+        : null;
+    }
+
+    function isOwner() {
+      return signedIn()
+        && resource.data.get('ownerUid', '') == request.auth.uid;
+    }
+
+    function isOffice() {
+      return isOwner() || memberRole() == 'office';
+    }
+
+    function isTech() {
+      return memberRole() == 'tech';
+    }
+
+    function isMember() {
+      return isOffice() || isTech();
+    }
+
+    function ownerUidUnchanged() {
+      return request.resource.data.get('ownerUid', '') == resource.data.get('ownerUid', '');
+    }
+
+    function authUnchanged() {
+      return request.resource.data.get('auth', null) == resource.data.get('auth', null);
+    }
+
+    function membersUnchanged() {
+      return requestMembers() == membersMap();
+    }
+
+    // Join / unlock after client PIN verify: only members[+optional ownerUid] and updatedAt change.
+    function isJoinSelfUpdate() {
+      return signedIn()
+        && request.resource.data.members[request.auth.uid] in ['office', 'tech']
+        && request.resource.data.members.diff(membersMap()).affectedKeys().hasOnly([request.auth.uid])
+        && (
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['members', 'updatedAt'])
+          || (
+            request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['members', 'updatedAt', 'ownerUid'])
+            && resource.data.get('ownerUid', '') == ''
+            && request.resource.data.ownerUid == request.auth.uid
+            && request.resource.data.members[request.auth.uid] == 'office'
+          )
+        );
+    }
+
+    // Pre-#3 / no-auth shops: first office device may set auth + claim ownership.
+    function isLegacyPinBootstrap() {
+      return signedIn()
+        && !resource.data.keys().hasAny(['auth'])
+        && request.resource.data.keys().hasAll(['auth', 'ownerUid', 'members'])
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.members[request.auth.uid] == 'office'
+        && (
+          !resource.data.keys().hasAny(['ownerUid'])
+          || resource.data.get('ownerUid', '') == ''
+          || resource.data.ownerUid == request.auth.uid
+        );
+    }
+
     match /shops/{shopId} {
-      allow read, write: if shopId.size() > 0
-        && shopId.size() <= 1500
-        && shopId != '.'
-        && shopId != '..'
-        && !shopId.matches('.*[/].*')
-        && !shopId.matches('__.*__');
+      // First-office create: creator must be signed in and set themselves as owner + office.
+      allow create: if signedIn()
+        && isValidShopId(shopId)
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.keys().hasAll([
+          'version', 'updatedAt', 'logs', 'catalog', 'people', 'settings',
+          'auth', 'ownerUid', 'members'
+        ])
+        && request.resource.data.members[request.auth.uid] == 'office';
+
+      // Authenticated get only (no public / unauthenticated read). List denied.
+      allow get: if signedIn() && isValidShopId(shopId);
+      allow list: if false;
+
+      allow update: if signedIn()
+        && isValidShopId(shopId)
+        && (
+          // Office/owner: full document updates (PIN change, migrate, etc.).
+          (isOffice() && ownerUidUnchanged())
+          // Tech: may update shop data but not auth, ownerUid, or members.
+          || (isTech() && ownerUidUnchanged() && authUnchanged() && membersUnchanged())
+          // After client PIN verify: add this uid to members (optional legacy owner claim).
+          || isJoinSelfUpdate()
+          // Pre-#3 shops with no auth hashes yet.
+          || isLegacyPinBootstrap()
+        );
+
+      allow delete: if false;
     }
 
     // Everything else stays denied.
