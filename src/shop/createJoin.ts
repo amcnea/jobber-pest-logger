@@ -602,7 +602,10 @@ export async function changeShopPins(pins: CreateShopPins): Promise<CreateJoinRe
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Could not sign in anonymously to Firebase.";
-    return { ok: false, error: message };
+    return {
+      ok: false,
+      error: `${message} Enable Anonymous Auth in the Firebase console for this project.`,
+    };
   }
 
   const shopId = session.shopId.trim();

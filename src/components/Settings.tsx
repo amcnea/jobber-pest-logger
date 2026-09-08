@@ -316,7 +316,7 @@ export function Settings({
       <h2>Shared shop</h2>
       <p className="hint">
         Optional multi-device shop via Firebase Anonymous Auth + membership. Local-only until you
-        create or join with a PIN. Requires Firebase env from <code>.env.example</code>, Anonymous
+        create, join, or unlock with a PIN. Requires Firebase env from <code>.env.example</code>, Anonymous
         Auth enabled in the console, and in-repo <code>firestore.rules</code> deployed before
         membership enforcement. First create makes this device the office owner. PINs are salted
         hashes — never stored plaintext in session. Cloud sync is <strong>not</strong> the 2-year
