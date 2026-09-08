@@ -84,12 +84,17 @@ service cloud.firestore {
     }
 
     // Pre-#3 / no-auth shops: first office device may set auth + claim ownership.
+    // Diff limited to bootstrap fields so other shop data cannot be overwritten.
     function isLegacyPinBootstrap() {
       return signedIn()
         && !resource.data.keys().hasAny(['auth'])
         && request.resource.data.keys().hasAll(['auth', 'ownerUid', 'members'])
         && request.resource.data.ownerUid == request.auth.uid
         && request.resource.data.members[request.auth.uid] == 'office'
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['auth', 'ownerUid', 'members', 'updatedAt'])
+        && request.resource.data.members.diff(membersMap()).affectedKeys()
+          .hasOnly([request.auth.uid])
         && (
           !resource.data.keys().hasAny(['ownerUid'])
           || resource.data.get('ownerUid', '') == ''
