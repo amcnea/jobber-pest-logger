@@ -232,9 +232,13 @@ Also enable **Anonymous** sign-in in the Firebase console, and **deploy** in-rep
 
 Cloud sync is **not** the Texas § 7.144 two-year premises retention path. Keep Export / JSON backup and the Lawgical disclaimer. This app does not run a retention engine. Cloud ≠ premises.
 
+### Offline log outbox (#6)
+
+Shared-mode application logs still save on-device first (`upsertLog`). A durable **localStorage outbox** (`jobber-pest-logger:log-outbox:v1`) holds full § 7.144(a) log payloads when a Firestore put fails or the network blips. Flush runs on online / visibility and via **Retry sync now**. Idempotent merge by `log.id`. Local-only mode is unchanged (already durable). Live subscribe / multi-device pull remains later.
+
 ### Not in this slice (later PRs)
 
-- Offline queue (#6), export rewrite (#7), timeout polish (#8), Jobber OAuth / email SaaS, Function-based PIN verify
+- Export rewrite (#7), timeout polish (#8), Jobber OAuth / email SaaS, Function-based PIN verify (see `docs/BACKLOG.md`)
 
 Does not add Jobber OAuth, email SaaS, or inventory.
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Export } from "./components/Export";
 import { FirstRunChecklist } from "./components/FirstRunChecklist";
 import { A2hsTip } from "./components/A2hsTip";
@@ -35,12 +35,16 @@ import {
 import type { ApplicationLog, Person, Screen, ShopProduct, ShopSettings } from "./types";
 import {
   canUseOfficeSurfaces,
+  flushLogOutbox,
   isFirebaseConfigured,
   loadShopSession,
   needsShopUnlock,
+  outboxEntriesForShop,
+  RemoteShopStore,
   resolveShopStore,
   sessionRole,
   shopStoreStatusHint,
+  syncLogToRemote,
 } from "./shop";
 import { ShopSessionGate } from "./components/ShopSessionGate";
 import "./App.css";
@@ -65,6 +69,13 @@ export default function App() {
   } | null>(null);
   /** Bumps topbar store-status after create / join / leave. */
   const [shopSessionTick, setShopSessionTick] = useState(0);
+  /** Bumps outbox banner after enqueue / flush. */
+  const [outboxTick, setOutboxTick] = useState(0);
+  const [outboxFlushing, setOutboxFlushing] = useState(false);
+  const [outboxMessage, setOutboxMessage] = useState<string | null>(null);
+  const flushInFlight = useRef(false);
+  /** Set when a flush is requested while one is already in flight. */
+  const flushAgain = useRef(false);
 
   const consumeSettingsFlash = useCallback(() => {
     setSettingsFlash(null);
@@ -72,7 +83,70 @@ export default function App() {
 
   const handleShopSessionChange = useCallback(() => {
     setShopSessionTick((n) => n + 1);
+    setOutboxTick((n) => n + 1);
   }, []);
+
+  const refreshOutboxBanner = useCallback(() => {
+    setOutboxTick((n) => n + 1);
+  }, []);
+
+  const flushPendingLogs = useCallback(async () => {
+    const info = resolveShopStore();
+    if (info.mode !== "shared" || !info.shopId || !(info.store instanceof RemoteShopStore)) {
+      return;
+    }
+    if (outboxEntriesForShop(info.shopId).length === 0) {
+      refreshOutboxBanner();
+      return;
+    }
+    if (flushInFlight.current) {
+      // e.g. shop A→B mid-flush: retry current shop after the active flush settles.
+      flushAgain.current = true;
+      return;
+    }
+    flushInFlight.current = true;
+    setOutboxFlushing(true);
+    setOutboxMessage(null);
+    try {
+      const result = await flushLogOutbox(info.store, info.shopId);
+      if (result.ok) {
+        setOutboxMessage(
+          result.flushed > 0
+            ? `Synced ${result.flushed} queued log${result.flushed === 1 ? "" : "s"} to the shop.`
+            : null,
+        );
+      } else {
+        setOutboxMessage(result.error ?? "Could not sync queued logs. Will retry when online.");
+      }
+    } finally {
+      flushInFlight.current = false;
+      setOutboxFlushing(false);
+      refreshOutboxBanner();
+      if (flushAgain.current) {
+        flushAgain.current = false;
+        queueMicrotask(() => {
+          void flushPendingLogs();
+        });
+      }
+    }
+  }, [refreshOutboxBanner]);
+
+  // Flush outbox on mount, online, and visibility (shared mode only).
+  useEffect(() => {
+    void flushPendingLogs();
+    const onOnline = () => {
+      void flushPendingLogs();
+    };
+    const onVis = () => {
+      if (document.visibilityState === "visible") void flushPendingLogs();
+    };
+    window.addEventListener("online", onOnline);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [flushPendingLogs, shopSessionTick]);
 
   // Re-read session when tick bumps (create/join/leave/sign-in/sign-out).
   const shopSession = loadShopSession();
@@ -138,6 +212,25 @@ export default function App() {
     }
     setStorageError(null);
     setDraftSeed(null);
+    // Shared mode: push to Firestore; on network blip keep full log in outbox (#6).
+    const info = resolveShopStore();
+    if (info.mode === "shared" && info.shopId && info.store instanceof RemoteShopStore) {
+      const remote = info.store;
+      const shopId = info.shopId;
+      void (async () => {
+        const sync = await syncLogToRemote(remote, shopId, log);
+        if (!sync.ok) {
+          setOutboxMessage(
+            sync.queued
+              ? "Saved on this device. Cloud sync pending — will retry when online."
+              : `Saved on this device, but could not queue cloud sync: ${sync.error}`,
+          );
+        } else {
+          setOutboxMessage(null);
+        }
+        refreshOutboxBanner();
+      })();
+    }
     go("history");
     return true;
   }
@@ -341,6 +434,47 @@ export default function App() {
           {storageError}
         </div>
       )}
+      {outboxTick >= 0 &&
+        (() => {
+          const info = resolveShopStore();
+          const pending =
+            info.mode === "shared" && info.shopId
+              ? outboxEntriesForShop(info.shopId).length
+              : 0;
+          if (pending === 0 && !outboxMessage) return null;
+          return (
+            <div className="banner banner-due" role="status">
+              {pending > 0 ? (
+                <>
+                  <strong>
+                    {pending} log{pending === 1 ? "" : "s"} waiting to sync
+                  </strong>
+                  <p>
+                    Saved on this device; cloud put failed or offline. § 7.144 fields are kept in
+                    the outbox until sync succeeds.
+                  </p>
+                  <div style={{ marginTop: "0.5rem" }}>
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={outboxFlushing}
+                      onClick={() => void flushPendingLogs()}
+                    >
+                      {outboxFlushing ? "Syncing…" : "Retry sync now"}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                outboxMessage
+              )}
+              {pending > 0 && outboxMessage ? (
+                <p className="hint" style={{ marginTop: "0.35rem" }}>
+                  {outboxMessage}
+                </p>
+              ) : null}
+            </div>
+          );
+        })()}
       <nav className={allowOfficeSurfaces ? "tabs" : "tabs tabs-tech"} aria-label="Main">
         <button
           type="button"
