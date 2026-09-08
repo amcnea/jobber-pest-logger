@@ -27,6 +27,7 @@ export async function ensureAnonymousAuth(
   config: FirebaseClientConfig,
 ): Promise<{ uid: string; user: User }> {
   const auth = await getAuth(config);
+  await auth.authStateReady();
   if (auth.currentUser) {
     return { uid: auth.currentUser.uid, user: auth.currentUser };
   }
@@ -43,6 +44,7 @@ export async function getCurrentUid(
   config: FirebaseClientConfig,
 ): Promise<string | null> {
   const auth = await getAuth(config);
+  await auth.authStateReady();
   return auth.currentUser?.uid ?? null;
 }
 
