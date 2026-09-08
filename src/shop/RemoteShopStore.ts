@@ -126,11 +126,14 @@ function coerceShopDocument(raw: unknown): ShopDocument | null {
   return doc;
 }
 
-/** Strip client-only signals before Firestore writes. */
+/** Strip client-only signals and undefined fields before Firestore writes. */
 function firestorePayload(doc: ShopDocument): Record<string, unknown> {
-  const payload: ShopDocument = { ...doc };
-  delete payload.authUnreadable;
-  return { ...payload };
+  const { authUnreadable: _drop, ...rest } = doc;
+  const payload: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(rest)) {
+    if (value !== undefined) payload[key] = value;
+  }
+  return payload;
 }
 
 async function loadFirestore(config: FirebaseClientConfig, shopId: string): Promise<FirestoreFns> {
