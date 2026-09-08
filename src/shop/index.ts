@@ -1,4 +1,4 @@
-/** Shared shop store — foundation (#1) + create/join (#2) + session PIN/role (#3). */
+/** Shared shop store — foundation (#1) + create/join (#2) + session PIN/role (#3) + role-gated UI (#4). */
 
 export type {
   ShopDocument,
@@ -18,6 +18,7 @@ export {
   clearSessionAuth,
   clearShopSession,
   canAccessOffice,
+  canUseOfficeSurfaces,
   emptyShopSession,
   hasJoinedShop,
   isSessionAuthenticated,

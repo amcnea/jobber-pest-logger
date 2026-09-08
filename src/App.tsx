@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Export } from "./components/Export";
 import { FirstRunChecklist } from "./components/FirstRunChecklist";
 import { A2hsTip } from "./components/A2hsTip";
@@ -34,10 +34,12 @@ import {
 } from "./storage";
 import type { ApplicationLog, Person, Screen, ShopProduct, ShopSettings } from "./types";
 import {
+  canUseOfficeSurfaces,
   isFirebaseConfigured,
   loadShopSession,
   needsShopUnlock,
   resolveShopStore,
+  sessionRole,
   shopStoreStatusHint,
 } from "./shop";
 import { ShopSessionGate } from "./components/ShopSessionGate";
@@ -72,13 +74,30 @@ export default function App() {
     setShopSessionTick((n) => n + 1);
   }, []);
 
-  /** Navigate; clear flash when leaving Settings so remount cannot resurrect it. */
+  // Re-read session when tick bumps (create/join/leave/sign-in/sign-out).
+  const shopSession = loadShopSession();
+  const activeRole = sessionRole(shopSession);
+  /** Local-only + office: full UI. Authenticated tech: New log + History only (#4). */
+  const allowOfficeSurfaces = canUseOfficeSurfaces(shopSession);
+
+  /** Navigate; clear flash when leaving Settings so remount cannot resurrect it.
+   *  Tech deep-links to office screens redirect to New log. */
   function go(s: Screen) {
-    if (screen === "settings" && s !== "settings") {
+    const next =
+      !allowOfficeSurfaces && s !== "new" && s !== "history" ? "new" : s;
+    if (screen === "settings" && next !== "settings") {
       setSettingsFlash(null);
     }
-    setScreen(s);
+    setScreen(next);
   }
+
+  // If session flips to tech while on an office screen, snap to New log.
+  useEffect(() => {
+    if (!allowOfficeSurfaces && screen !== "new" && screen !== "history") {
+      setSettingsFlash(null);
+      setScreen("new");
+    }
+  }, [allowOfficeSurfaces, screen]);
 
   const peopleWarnings = useMemo(() => collectPeopleWarnings(people), [people]);
   const firstRunSteps = useMemo(
@@ -86,7 +105,9 @@ export default function App() {
     [settings, people, catalog, lastBackupAt],
   );
   const isEditing =
-    draftSeed !== null && logs.some((l) => l.id === draftSeed.id);
+    allowOfficeSurfaces &&
+    draftSeed !== null &&
+    logs.some((l) => l.id === draftSeed.id);
 
   function openNewLog(draft: ApplicationLog | null) {
     setDraftSeed(draft);
@@ -94,12 +115,21 @@ export default function App() {
     go("new");
   }
 
-  /** Open an existing saved log into New log form; upsert keeps the same id. */
+  /** Open an existing saved log into New log form; upsert keeps the same id. Office only. */
   function handleEdit(log: ApplicationLog) {
+    if (!allowOfficeSurfaces) {
+      openNewLog(null);
+      return;
+    }
     openNewLog(log);
   }
 
   function handleSave(log: ApplicationLog): boolean {
+    // Tech may create new logs; editing an existing id is office-only.
+    if (!allowOfficeSurfaces && logs.some((l) => l.id === log.id)) {
+      setStorageError("Tech sessions can create new logs but not edit saved ones. Ask office.");
+      return false;
+    }
     const result = upsertLog(log);
     setLogs(result.logs);
     if (!result.saved) {
@@ -113,6 +143,10 @@ export default function App() {
   }
 
   function handleDelete(id: string) {
+    if (!allowOfficeSurfaces) {
+      setStorageError("Tech sessions cannot delete saved logs. Ask office.");
+      return;
+    }
     // Confirm lives in History (includes date + address in the prompt).
     const result = deleteLog(id);
     setLogs(result.logs);
@@ -255,12 +289,20 @@ export default function App() {
           {/* shopSessionTick forces re-read after Settings create/join/leave/sign-in */}
           {shopSessionTick >= 0 && shopStoreStatusHint(resolveShopStore())}
         </p>
+        {activeRole && (
+          <p className="role-chrome" role="status">
+            Signed in as <strong>{activeRole}</strong>
+            {!allowOfficeSurfaces && (
+              <> · New log + History only (office manages catalog, people, settings, export)</>
+            )}
+          </p>
+        )}
       </header>
       <div className="banner">
         v1.6. Thin PWA polish (A2HS tip + manifest). Schema locked to 4 TAC § 7.144. Texas SPCS
         shops. Example seeds and incomplete records block real CSV/PDF export.
       </div>
-      <FirstRunChecklist steps={firstRunSteps} onGo={go} />
+      {allowOfficeSurfaces && <FirstRunChecklist steps={firstRunSteps} onGo={go} />}
       <ShopPilotCard />
       <A2hsTip />
       {shopSessionTick >= 0 &&
@@ -281,9 +323,13 @@ export default function App() {
           <ul className="warn-list">
             {peopleWarnings.map((w) => (
               <li key={w.personId}>
-                <button type="button" className="linkish" onClick={() => go("people")}>
-                  {w.personName}
-                </button>
+                {allowOfficeSurfaces ? (
+                  <button type="button" className="linkish" onClick={() => go("people")}>
+                    {w.personName}
+                  </button>
+                ) : (
+                  <strong>{w.personName}</strong>
+                )}
                 : {w.messages.join("; ")}
               </li>
             ))}
@@ -295,7 +341,7 @@ export default function App() {
           {storageError}
         </div>
       )}
-      <nav className="tabs">
+      <nav className={allowOfficeSurfaces ? "tabs" : "tabs tabs-tech"} aria-label="Main">
         <button
           type="button"
           className={screen === "new" ? "active" : ""}
@@ -314,30 +360,38 @@ export default function App() {
         >
           History
         </button>
-        <button
-          type="button"
-          className={screen === "products" ? "active" : ""}
-          onClick={() => go("products")}
-        >
-          Products
-        </button>
-        <button
-          type="button"
-          className={screen === "people" ? "active" : ""}
-          onClick={() => go("people")}
-        >
-          People
-        </button>
-        <button
-          type="button"
-          className={screen === "settings" ? "active" : ""}
-          onClick={() => go("settings")}
-        >
-          Settings
-        </button>
-        <button type="button" className={screen === "export" ? "active" : ""} onClick={() => go("export")}>
-          Export
-        </button>
+        {allowOfficeSurfaces && (
+          <>
+            <button
+              type="button"
+              className={screen === "products" ? "active" : ""}
+              onClick={() => go("products")}
+            >
+              Products
+            </button>
+            <button
+              type="button"
+              className={screen === "people" ? "active" : ""}
+              onClick={() => go("people")}
+            >
+              People
+            </button>
+            <button
+              type="button"
+              className={screen === "settings" ? "active" : ""}
+              onClick={() => go("settings")}
+            >
+              Settings
+            </button>
+            <button
+              type="button"
+              className={screen === "export" ? "active" : ""}
+              onClick={() => go("export")}
+            >
+              Export
+            </button>
+          </>
+        )}
       </nav>
       <main className="main">
         {screen === "new" && (
@@ -354,13 +408,14 @@ export default function App() {
         {screen === "history" && (
           <History
             logs={logs}
+            canEditDelete={allowOfficeSurfaces}
             onDelete={handleDelete}
             onEdit={handleEdit}
             onLogAgainHere={handleLogAgainHere}
             onDuplicateLastStop={handleDuplicateLastStop}
           />
         )}
-        {screen === "products" && (
+        {allowOfficeSurfaces && screen === "products" && (
           <Products
             catalog={catalog}
             onUpsert={handleUpsertProduct}
@@ -368,10 +423,10 @@ export default function App() {
             onRemoveExamples={handleRemoveExampleProducts}
           />
         )}
-        {screen === "people" && (
+        {allowOfficeSurfaces && screen === "people" && (
           <People people={people} onUpsert={handleUpsertPerson} onDelete={handleDeletePerson} />
         )}
-        {screen === "settings" && (
+        {allowOfficeSurfaces && screen === "settings" && (
           <Settings
             key={settingsFormKey}
             settings={settings}
@@ -387,7 +442,7 @@ export default function App() {
             onWipeAll={handleWipeAll}
           />
         )}
-        {screen === "export" && (
+        {allowOfficeSurfaces && screen === "export" && (
           <Export
             logs={logs}
             catalog={catalog}

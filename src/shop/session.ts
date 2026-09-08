@@ -91,13 +91,22 @@ export function isSessionAuthenticated(
   return !isSessionExpired(session, nowMs);
 }
 
-/** Office-only helper for #4 gates (and light Settings locks in #3). */
+/** Office-only helper for PIN change / leave / wipe (authenticated office). */
 export function canAccessOffice(session: ShopSession = loadShopSession()): boolean {
   return isSessionAuthenticated(session) && session.role === "office";
 }
 
 export function sessionRole(session: ShopSession = loadShopSession()): ShopRole | null {
   return isSessionAuthenticated(session) ? (session.role ?? null) : null;
+}
+
+/**
+ * Office UI surfaces (Products, People, Settings, Export, History edit/delete).
+ * Denied only when PIN-authenticated as tech (#4). Local-only and office keep full UI.
+ * Distinct from canAccessOffice(), which requires an authenticated office role.
+ */
+export function canUseOfficeSurfaces(session: ShopSession = loadShopSession()): boolean {
+  return sessionRole(session) !== "tech";
 }
 
 /**
