@@ -1,0 +1,64 @@
+rules:
+  - id: no-eval-or-function-constructor
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: Avoid eval() and new Function(). They execute untrusted strings.
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: new Function(...)
+    paths:
+      include:
+        - src/**
+
+  - id: no-document-write
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: document.write can clobber the page and is an XSS sink. Use DOM APIs instead.
+    pattern: document.write(...)
+    paths:
+      include:
+        - src/**
+
+  - id: no-dangerously-set-inner-html
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: dangerouslySetInnerHTML is an XSS sink. Prefer text children unless the HTML is sanitized.
+    pattern: dangerouslySetInnerHTML={...}
+    paths:
+      include:
+        - src/**
+
+  - id: no-inner-html-assignment
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: Assigning to innerHTML is an XSS sink.
+    pattern: $EL.innerHTML = $HTML
+    paths:
+      include:
+        - src/**
+
+  - id: no-private-key-in-source
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: Private key material in source. Client Firebase apiKey is fine; service-account keys are not.
+    pattern-regex: "-----BEGIN ([A-Z0-9]+ )?PRIVATE KEY-----"
+    paths:
+      include:
+        - src/**
+        - "*.ts"
+        - "*.js"
+        - "*.json"
+
+  - id: no-pin-password-in-logs
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: Avoid logging PIN, password, or token values.
+    pattern-either:
+      - pattern: console.$METHOD($MSG)
+      - pattern: console.$METHOD($MSG, ...)
+    metavariable-regex:
+      metavariable: $MSG
+      regex: (?i).*(pin|password|passwd|secret|idToken|sessionToken|refreshToken).*
+    paths:
+      include:
+        - src/**
