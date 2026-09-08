@@ -74,6 +74,8 @@ export default function App() {
   const [outboxFlushing, setOutboxFlushing] = useState(false);
   const [outboxMessage, setOutboxMessage] = useState<string | null>(null);
   const flushInFlight = useRef(false);
+  /** Set when a flush is requested while one is already in flight. */
+  const flushAgain = useRef(false);
 
   const consumeSettingsFlash = useCallback(() => {
     setSettingsFlash(null);
@@ -97,7 +99,11 @@ export default function App() {
       refreshOutboxBanner();
       return;
     }
-    if (flushInFlight.current) return;
+    if (flushInFlight.current) {
+      // e.g. shop A→B mid-flush: retry current shop after the active flush settles.
+      flushAgain.current = true;
+      return;
+    }
     flushInFlight.current = true;
     setOutboxFlushing(true);
     setOutboxMessage(null);
@@ -116,6 +122,12 @@ export default function App() {
       flushInFlight.current = false;
       setOutboxFlushing(false);
       refreshOutboxBanner();
+      if (flushAgain.current) {
+        flushAgain.current = false;
+        queueMicrotask(() => {
+          void flushPendingLogs();
+        });
+      }
     }
   }, [refreshOutboxBanner]);
 

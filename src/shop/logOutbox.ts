@@ -104,6 +104,22 @@ export function outboxEntriesForShop(shopId: string): LogOutboxEntry[] {
   return loadLogOutbox().filter((e) => e.shopId === id);
 }
 
+/** Attach lastError without changing queuedAt or the stored payload. */
+function annotateOutboxErrors(
+  shopId: string,
+  logIds: string[],
+  lastError?: string,
+): boolean {
+  const id = shopId.trim();
+  const msg = lastError?.trim();
+  if (!msg) return true;
+  const drop = new Set(logIds);
+  const next = loadLogOutbox().map((e) =>
+    e.shopId === id && drop.has(e.log.id) ? { ...e, lastError: msg } : e,
+  );
+  return writeOutbox(next);
+}
+
 /**
  * Merge pending outbox logs into remote shop.logs by id (idempotent).
  * One CAS conflict retry. Leaves remaining entries in outbox on failure.
@@ -119,8 +135,7 @@ export async function flushLogOutbox(
   conflict?: boolean;
 }> {
   const id = shopId.trim();
-  const pending = outboxEntriesForShop(id);
-  if (pending.length === 0) {
+  if (outboxEntriesForShop(id).length === 0) {
     return { ok: true, flushed: 0, remaining: 0 };
   }
 
@@ -131,11 +146,17 @@ export async function flushLogOutbox(
     error?: string;
     conflict?: boolean;
   }> => {
+    // Re-read each attempt so a payload queued during the previous await is included.
+    const pending = outboxEntriesForShop(id);
+    if (pending.length === 0) return { ok: true, flushed: 0, remaining: 0 };
+
     const got = await remote.getShop();
     if (!got.ok) {
-      for (const e of pending) {
-        enqueueLogOutbox(id, e.log, got.error);
-      }
+      annotateOutboxErrors(
+        id,
+        pending.map((e) => e.log.id),
+        got.error,
+      );
       return {
         ok: false,
         flushed: 0,
@@ -153,9 +174,11 @@ export async function flushLogOutbox(
 
     const put = await remote.putShop({ ...got.value, logs });
     if (!put.ok) {
-      for (const e of pending) {
-        enqueueLogOutbox(id, e.log, put.error);
-      }
+      annotateOutboxErrors(
+        id,
+        pending.map((e) => e.log.id),
+        put.error,
+      );
       return {
         ok: false,
         flushed: 0,
@@ -174,7 +197,7 @@ export async function flushLogOutbox(
 
   const first = await attempt();
   if (first.ok || !first.conflict) return first;
-  // One conflict retry with a fresh read.
+  // One conflict retry with a fresh read (and fresh pending/queuedAt).
   return attempt();
 }
 
@@ -198,7 +221,7 @@ export async function syncLogToRemote(
 
   const got = await remote.getShop();
   if (!got.ok) {
-    enqueueLogOutbox(id, log, got.error);
+    annotateOutboxErrors(id, [log.id], got.error);
     return { ok: false, error: got.error, queued: true };
   }
 
@@ -222,11 +245,11 @@ export async function syncLogToRemote(
           clearThisVersion();
           return { ok: true };
         }
-        enqueueLogOutbox(id, log, put2.error);
+        annotateOutboxErrors(id, [log.id], put2.error);
         return { ok: false, error: put2.error, queued: true };
       }
     }
-    enqueueLogOutbox(id, log, put.error);
+    annotateOutboxErrors(id, [log.id], put.error);
     return { ok: false, error: put.error, queued: true };
   }
 
