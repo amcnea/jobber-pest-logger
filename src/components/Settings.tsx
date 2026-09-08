@@ -33,6 +33,8 @@ interface Props {
   flash?: { slot: "backup" | "demo"; text: string } | null;
   /** App clears settingsFlash after Settings seeds local banners from flash. */
   onFlashConsumed?: () => void;
+  /** Bumps when App / banner unlock changes shop session — sync local UI without tick loop. */
+  sessionRevision?: number;
   /** Bump topbar / store status after create, join, or leave. */
   onShopSessionChange?: () => void;
   onSave: (settings: ShopSettings) => boolean;
@@ -55,6 +57,7 @@ export function Settings({
   lastBackupAt,
   flash = null,
   onFlashConsumed,
+  sessionRevision = 0,
   onShopSessionChange,
   onSave,
   onRestored,
@@ -99,13 +102,19 @@ export function Settings({
   const lastBackupLabel = formatLastBackupLabel(lastBackupAt);
   const nag = backupNagMessage(lastBackupAt);
 
-  function refreshShopSessionUi(nextShopId?: string) {
+  /** Sync local Settings state from session storage — does NOT bump App tick. */
+  function syncShopSessionUi(nextShopId?: string) {
     const session = loadShopSession();
     const id = nextShopId ?? session.shopId;
     setSessionShopId(id);
     setJoined(hasJoinedShop(session));
     setAuthenticated(isSessionAuthenticated(session));
     setRole(sessionRole(session));
+  }
+
+  /** Sync then notify App (create/join/leave/sign-out from Settings). */
+  function refreshShopSessionUi(nextShopId?: string) {
+    syncShopSessionUi(nextShopId);
     onShopSessionChange?.();
   }
 
@@ -230,6 +239,12 @@ export function Settings({
       onFlashConsumed?.();
     }
   }, [flash, onFlashConsumed]);
+
+  // Banner unlock bumps sessionRevision; sync without calling onShopSessionChange (no tick loop).
+  useEffect(() => {
+    syncShopSessionUi();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-sync when App bumps revision
+  }, [sessionRevision]);
 
   function submit(e: FormEvent) {
     e.preventDefault();

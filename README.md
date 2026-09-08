@@ -209,44 +209,6 @@ Cloud sync is **not** the Texas § 7.144 two-year premises retention path. Keep 
 
 Does not add Jobber OAuth, email SaaS, or inventory.
 
-## Stack choice
-
-- **Local (default):** existing `localStorage` via `LocalShopStore` wrapping `storage.ts` (logs, catalog, people, settings, last-backup stamp).
-- **Shared (optional):** `RemoteShopStore` writes `shops/{shopId}` in Firestore when Vite Firebase env is set **and** this device has joined a shop session (`jobber-pest-logger:shop-session:v1` with `{ shopId }`). Empty session ⇒ local only (office-desk single-device default).
-
-`resolveShopStore()` picks local vs shared. **Day-to-day screens still use `storage.ts`** in this slice. Create / join upload a shop snapshot to Firestore (create always; join migrates local once when the remote shop is empty/new). Live shared read/write across devices is a later slice (#3 / #6).
-
-### Create / join / leave (Settings → Shared shop)
-
-1. **Create shop** — generates a short uppercase shop code (passes `isValidShopId`), uploads this device’s local snapshot to `shops/{code}`, saves the session, and records a one-time migrate marker (`jobber-pest-logger:shop-migrated:v1` keyed by shopId). Show the code clearly for the office to share.
-2. **Join shop** — enter code; validate; load remote. Missing remote ⇒ clear error (does not invent a shop). If remote exists: save session. **Migrate once:** if this device has local data and remote is empty/new, upload local once then mark migrated. If remote already has data, do **not** overwrite with local — optional hint to backup local first.
-3. **Leave shop** — clears the session → local-only again. Does **not** wipe remote or local data.
-
-Shop code is the join secret until a later PIN / membership slice. No role theater in this slice.
-
-### Env vars (optional, required for create/join)
-
-Copy `.env.example` to `.env.local` (or `.env`) and rebuild. When **any** required key is missing, the app stays in **local-only** mode and Create / Join stay disabled. Firebase is **not** required for build, dev, or CI. The `firebase` package is lazy-imported so local-only loads do not need a project.
-
-- `VITE_FIREBASE_API_KEY`
-- `VITE_FIREBASE_AUTH_DOMAIN`
-- `VITE_FIREBASE_PROJECT_ID`
-- `VITE_FIREBASE_APP_ID`
-
-### Firestore security rules (caveat)
-
-In-repo `firestore.rules` allows read/write on `shops/{shopId}` only (everything else deny). **Shop code is obscurity, not authorization**, until PIN / Auth / membership (#3–#5). Deploy rules when you enable Firebase; do not treat them as production-ready access control.
-
-### Premises retention (unchanged)
-
-Cloud sync is **not** the Texas § 7.144 two-year premises retention path. Keep Export / JSON backup and the Lawgical disclaimer. This app does not run a retention engine.
-
-### Not in this slice (later PRs)
-
-PIN, role gates, office/tech UI, offline queue, live shared read/write for every screen, Jobber OAuth / email SaaS.
-
-Does not add Jobber OAuth, email SaaS, inventory, or role-gated UI.
-
 ## Stack
 
 React + Vite + TypeScript. CSV from the locked columns. PDF via jsPDF (print stylesheet as a fallback).

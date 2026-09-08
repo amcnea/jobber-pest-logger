@@ -21,6 +21,11 @@ export interface ShopDocument {
    * Never stores plaintext PINs.
    */
   auth?: ShopPinAuth;
+  /**
+   * Client-only: remote `auth` key was present but failed parse (corrupt / unreadable).
+   * Never write this field to Firestore — strip on put.
+   */
+  authUnreadable?: boolean;
 }
 
 /** Alias for read snapshots (same shape as ShopDocument). */

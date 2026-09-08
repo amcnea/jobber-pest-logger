@@ -378,6 +378,7 @@ export default function App() {
             lastBackupAt={lastBackupAt}
             flash={settingsFlash}
             onFlashConsumed={consumeSettingsFlash}
+            sessionRevision={shopSessionTick}
             onShopSessionChange={handleShopSessionChange}
             onSave={handleSaveSettings}
             onRestored={handleRestored}

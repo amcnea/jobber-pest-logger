@@ -124,8 +124,7 @@ function coerceShopDocument(raw: unknown): ShopDocument | null {
   if (!sectionsResult.ok) return null;
 
   const { logs, catalog, people, settings } = sectionsResult.sections;
-  const auth = parseShopPinAuth(raw.auth);
-  return {
+  const doc: ShopDocument = {
     version: raw.version.trim(),
     updatedAt: raw.updatedAt.trim(),
     logs,
@@ -133,8 +132,17 @@ function coerceShopDocument(raw: unknown): ShopDocument | null {
     people,
     settings,
     lastBackupAt,
-    ...(auth ? { auth } : {}),
   };
+  // auth key present and not undefined: parse or mark unreadable (client-only signal).
+  if ("auth" in raw && raw.auth !== undefined) {
+    const auth = parseShopPinAuth(raw.auth);
+    if (auth) {
+      doc.auth = auth;
+    } else {
+      doc.authUnreadable = true;
+    }
+  }
+  return doc;
 }
 
 export class RemoteShopStore implements ShopStore {
@@ -187,8 +195,11 @@ export class RemoteShopStore implements ShopStore {
   async putShop(doc: ShopDocument): Promise<ShopStoreResult<{ updatedAt: string }>> {
     try {
       const { putWithCas } = await this.fs();
+      // Strip client-only signals — never persist authUnreadable to Firestore.
+      const payload: ShopDocument = { ...doc };
+      delete payload.authUnreadable;
       // CAS against caller's snapshot updatedAt; return the committed stamp for next CAS.
-      const updatedAt = await putWithCas(doc.updatedAt, doc);
+      const updatedAt = await putWithCas(doc.updatedAt, payload);
       return { ok: true, value: { updatedAt } };
     } catch (err) {
       if (err instanceof ShopWriteConflictError || (err && (err as { conflict?: boolean }).conflict)) {

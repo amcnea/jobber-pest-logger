@@ -12,7 +12,6 @@ import {
   buildShopPinAuth,
   isShopRole,
   isValidPin,
-  parseShopPinAuth,
   pinRecordForRole,
   verifyPin,
   type ShopRole,
@@ -114,7 +113,7 @@ async function persistAuthenticatedSession(
 ): Promise<string | null> {
   const verifiedAt = new Date().toISOString();
   if (!saveShopSession({ shopId, role, verifiedAt })) {
-    return "Shop is ready in the cloud, but this device could not save the session (storage blocked).";
+    return "this device could not save the session (storage blocked).";
   }
   return null;
 }
@@ -260,6 +259,13 @@ export async function joinShop(
   }
 
   const remoteDoc = remoteResult.value;
+  if (remoteDoc.authUnreadable) {
+    return {
+      ok: false,
+      error:
+        "This shop's PIN auth is corrupt or unreadable. Ask the office to repair the shop document — join cannot treat this as missing PINs.",
+    };
+  }
   const pinErr = await verifyAgainstAuth(remoteDoc.auth, input.role, input.pin);
   if (pinErr) return { ok: false, error: pinErr };
 
@@ -296,7 +302,7 @@ export async function joinShop(
 
   const sessionErr = await persistAuthenticatedSession(shopId, input.role);
   if (sessionErr) {
-    return { ok: false, error: sessionErr };
+    return { ok: false, error: `Joined ${shopId}, but ${sessionErr}` };
   }
 
   return {
@@ -344,11 +350,20 @@ export async function signInShop(
     return { ok: false, error: remoteResult.error };
   }
 
+  if (remoteResult.value.authUnreadable) {
+    return {
+      ok: false,
+      error:
+        "This shop's PIN auth is corrupt or unreadable. Ask the office to repair the shop document — sign-in cannot treat this as missing PINs.",
+    };
+  }
   const pinErr = await verifyAgainstAuth(remoteResult.value.auth, input.role, input.pin);
   if (pinErr) return { ok: false, error: pinErr };
 
   const sessionErr = await persistAuthenticatedSession(shopId, input.role);
-  if (sessionErr) return { ok: false, error: sessionErr };
+  if (sessionErr) {
+    return { ok: false, error: `Signed in to ${shopId}, but ${sessionErr}` };
+  }
 
   return {
     ok: true,
@@ -383,10 +398,17 @@ export async function bootstrapShopPins(
   if (!remoteResult.ok) {
     return { ok: false, error: remoteResult.error };
   }
-  if (parseShopPinAuth(remoteResult.value.auth)) {
+  if (remoteResult.value.auth) {
     return {
       ok: false,
       error: "This shop already has PINs. Sign in with office or tech PIN instead.",
+    };
+  }
+  if (remoteResult.value.authUnreadable) {
+    return {
+      ok: false,
+      error:
+        "This shop's PIN auth is corrupt or unreadable and must not be overwritten. Fix the shop document auth field (or restore from backup) before unlocking — bootstrap is blocked.",
     };
   }
 
@@ -407,7 +429,9 @@ export async function bootstrapShopPins(
   }
 
   const sessionErr = await persistAuthenticatedSession(shopId, "office");
-  if (sessionErr) return { ok: false, error: sessionErr };
+  if (sessionErr) {
+    return { ok: false, error: `PINs were set for ${shopId}, but ${sessionErr}` };
+  }
   markShopMigrated(shopId);
 
   return {
@@ -458,7 +482,9 @@ export async function changeShopPins(pins: CreateShopPins): Promise<CreateJoinRe
 
   // Refresh verifiedAt so the office session stays active.
   const sessionErr = await persistAuthenticatedSession(shopId, "office");
-  if (sessionErr) return { ok: false, error: sessionErr };
+  if (sessionErr) {
+    return { ok: false, error: `PINs were updated, but ${sessionErr}` };
+  }
 
   return {
     ok: true,
