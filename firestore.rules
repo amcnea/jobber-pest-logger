@@ -1,9 +1,20 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Placeholder — deny all until join/PIN membership (#2–#5).
-    // Client shopId alone is not authorization.
-    // Do NOT deploy as "production ready" rules; replace when create/join ships.
+    // #2 create/join: allow read/write on shops/{shopId} only.
+    // Shop code is obscurity until PIN / Auth / membership in later slices (#3–#5).
+    // Anyone who knows the shopId can read and write the shop document.
+    // Do NOT treat this as production authorization.
+    match /shops/{shopId} {
+      allow read, write: if shopId.size() > 0
+        && shopId.size() <= 1500
+        && shopId != '.'
+        && shopId != '..'
+        && !shopId.matches('.*[/].*')
+        && !shopId.matches('__.*__');
+    }
+
+    // Everything else stays denied.
     match /{document=**} {
       allow read, write: if false;
     }

@@ -1,4 +1,4 @@
-/** Shared shop store foundation (slice #1). Create/join/PIN/roles come later. */
+/** Shared shop store — foundation (#1) + create/join/migrate (#2). PIN/roles later. */
 
 export type {
   ShopDocument,
@@ -33,3 +33,17 @@ export {
   shopStoreStatusHint,
   type ResolvedShopStoreInfo,
 } from "./resolveShopStore";
+
+export { generateShopCode, normalizeShopCode } from "./shopCode";
+export {
+  SHOP_MIGRATED_KEY,
+  hasMigratedShop,
+  markShopMigrated,
+} from "./migrateMarker";
+export {
+  createShop,
+  joinShop,
+  leaveShop,
+  shopDocumentHasMeaningfulData,
+  type CreateJoinResult,
+} from "./createJoin";

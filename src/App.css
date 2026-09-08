@@ -625,3 +625,19 @@ label.field {
   color: var(--danger);
   font-weight: 700;
 }
+
+.shop-code-display {
+  margin: 0.25rem 0;
+  font-size: 0.95rem;
+}
+
+.shop-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  letter-spacing: 0.08em;
+  font-size: 1.15rem;
+  color: var(--brand);
+}
+
+.shop-card .field {
+  margin-top: 0.25rem;
+}
