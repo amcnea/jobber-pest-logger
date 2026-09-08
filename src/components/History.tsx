@@ -7,7 +7,7 @@ import type { ApplicationLog } from "../types";
 interface Props {
   logs: ApplicationLog[];
   /** Office-only: Edit / Delete on saved logs. Tech keeps Log again / Duplicate (new logs). */
-  canEditDelete?: boolean;
+  canEditDelete: boolean;
   onDelete: (id: string) => void;
   onEdit: (log: ApplicationLog) => void;
   onLogAgainHere: (property: PropertyBookEntry) => void;
@@ -23,7 +23,7 @@ function productSummary(log: ApplicationLog): string {
 
 export function History({
   logs,
-  canEditDelete = true,
+  canEditDelete,
   onDelete,
   onEdit,
   onLogAgainHere,
