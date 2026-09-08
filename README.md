@@ -145,11 +145,71 @@ See package.json scripts. Install dependencies, then start the Vite "dev" script
 
 Production: "build" then "preview". Requires Node ^20.19 or Node >=22.12 (Vite 7). Data stays in the browser; nothing is uploaded.
 
-## Shared shop store + create / join (#2)
+## Shared shop store + session PIN / role (#3)
 
-Optional **Firebase Firestore** remote so multiple office devices can share one shop document. Still works as a static GitHub Pages app — no host migration. Local-only until Firebase env is set **and** this device creates or joins a shop.
+Optional **Firebase Firestore** remote so multiple devices can share one shop document, gated by **shop code + role (office|tech) + PIN**. Still works as a static GitHub Pages app — no host migration. Local-only (no PIN) until Firebase env is set **and** this device creates or joins / unlocks a shop.
 
 ### Stack choice
+
+- **Local (default):** existing `localStorage` via `LocalShopStore` wrapping `storage.ts` (logs, catalog, people, settings, last-backup stamp). No PIN when Firebase is unset or the device is not joined.
+- **Shared (optional):** `RemoteShopStore` writes `shops/{shopId}` in Firestore when Vite Firebase env is set **and** this device has a **PIN-authenticated** session (`jobber-pest-logger:shop-session:v1`).
+
+Session fields:
+
+| Field | Meaning |
+| --- | --- |
+| `shopId` | Remembered shop code / Firestore id |
+| `role` | `office` or `tech` — only after remote PIN verify |
+| `verifiedAt` | ISO time of last successful PIN verify (soft TTL **14 days**) |
+
+**Sign-out** clears `role` + `verifiedAt` but keeps `shopId` for convenient unlock. **Leave** clears the whole session (back to local-only). Raw PINs are **never** stored in localStorage.
+
+### PIN storage (design choice)
+
+Office and tech PINs are hashed in the browser with **Web Crypto PBKDF2-SHA-256** (100k iterations, random 16-byte salt) and stored on the shop document as:
+
+```text
+auth: { version: 1, officePin: { algorithm, iterations, saltB64, hashB64 }, techPin: { … } }
+```
+
+Sign-in / join / unlock loads the remote shop doc and verifies the entered PIN against the hash for the chosen role. Flipping `role` in localStorage alone does not count — `normalizeShopSession` drops orphan role flags, and shared mode requires a fresh `verifiedAt` from a successful verify. (Firestore rules still allow anyone who knows `shopId` to read/write until Auth / membership in a later slice — client PIN is a real UX gate, not server ACLs.)
+
+### Create / join / unlock / leave (Settings → Shared shop)
+
+1. **Create shop** — office sets office PIN + tech PIN (confirm fields), generates shop code, uploads local snapshot **with** `auth` hashes, signs in as **office**.
+2. **Join shop** — shop code + role pick + matching PIN. Cannot set PINs on join. Migrate-once rules from #2 still apply; migrate uploads preserve remote `auth`.
+3. **Unlock / sign-in** — when `shopId` is remembered but session expired/signed out: role + PIN (and code if needed). App shows a compact unlock gate while locked.
+4. **Sign out** — clear role/auth; keep shopId.
+5. **Leave shop** — clear session → local-only. Does **not** wipe remote or local data. (Authenticated **tech** uses Sign out; Leave is office-facing in Settings.)
+6. **Change PINs** — office-only after unlock. Pre-#3 shops with no `auth` can **bootstrap PINs** once from the unlock gate.
+
+Helpers for #4: `canAccessOffice()`, `sessionRole()`, `isSessionAuthenticated()`. This slice does **not** fully hide office screens yet.
+
+### Env vars (optional, required for create/join/unlock)
+
+Copy `.env.example` to `.env.local` (or `.env`) and rebuild. When **any** required key is missing, the app stays in **local-only** mode (no PIN). Firebase is **not** required for build, dev, or CI.
+
+- `VITE_FIREBASE_API_KEY`
+- `VITE_FIREBASE_AUTH_DOMAIN`
+- `VITE_FIREBASE_PROJECT_ID`
+- `VITE_FIREBASE_APP_ID`
+
+### Firestore security rules (caveat)
+
+In-repo `firestore.rules` allows read/write on `shops/{shopId}` only (everything else deny). **Shop code + client PIN hashes are obscurity, not server authorization**, until Auth / membership (#5). Deploy rules when you enable Firebase; do not treat them as production-ready access control.
+
+### Premises retention (unchanged)
+
+Cloud sync is **not** the Texas § 7.144 two-year premises retention path. Keep Export / JSON backup and the Lawgical disclaimer. This app does not run a retention engine.
+
+### Not in this slice (later PRs)
+
+- **#4** Role-gated UI / nav (hide office screens for tech) — session already stores `role`
+- Offline queue (#6), export rewrite (#7), Jobber OAuth / email SaaS, first-office-only bootstrap polish (#5)
+
+Does not add Jobber OAuth, email SaaS, or inventory.
+
+## Stack choice
 
 - **Local (default):** existing `localStorage` via `LocalShopStore` wrapping `storage.ts` (logs, catalog, people, settings, last-backup stamp).
 - **Shared (optional):** `RemoteShopStore` writes `shops/{shopId}` in Firestore when Vite Firebase env is set **and** this device has joined a shop session (`jobber-pest-logger:shop-session:v1` with `{ shopId }`). Empty session ⇒ local only (office-desk single-device default).

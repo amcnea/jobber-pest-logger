@@ -6,6 +6,7 @@
 
 import { parseShopSections } from "../storage";
 import type { FirebaseClientConfig } from "./firebaseConfig";
+import { parseShopPinAuth } from "./pinCrypto";
 import { isValidShopId } from "./session";
 import type { ShopDocument, ShopStore, ShopStoreResult } from "./types";
 
@@ -123,6 +124,7 @@ function coerceShopDocument(raw: unknown): ShopDocument | null {
   if (!sectionsResult.ok) return null;
 
   const { logs, catalog, people, settings } = sectionsResult.sections;
+  const auth = parseShopPinAuth(raw.auth);
   return {
     version: raw.version.trim(),
     updatedAt: raw.updatedAt.trim(),
@@ -131,6 +133,7 @@ function coerceShopDocument(raw: unknown): ShopDocument | null {
     people,
     settings,
     lastBackupAt,
+    ...(auth ? { auth } : {}),
   };
 }
 
@@ -201,7 +204,7 @@ export class RemoteShopStore implements ShopStore {
     }
   }
 
-  /** Stub — onSnapshot subscribe is a later slice. */
+  /** Stub — onSnapshot subscribe is a later offline/live slice. */
   subscribe(_onChange: (doc: ShopDocument) => void): () => void {
     return () => {};
   }

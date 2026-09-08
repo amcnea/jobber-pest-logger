@@ -10,14 +10,21 @@ import {
 } from "../storage";
 import type { ApplicationLog, Person, ShopProduct, ShopSettings } from "../types";
 import {
+  canAccessOffice,
+  changeShopPins,
   createShop,
   hasJoinedShop,
   isFirebaseConfigured,
+  isSessionAuthenticated,
   joinShop,
   leaveShop,
   loadShopSession,
+  sessionRole,
   shopStoreStatusHint,
+  signOutShop,
+  type ShopRole,
 } from "../shop";
+import { ShopSessionGate } from "./ShopSessionGate";
 
 interface Props {
   settings: ShopSettings;
@@ -65,16 +72,30 @@ export function Settings({
     flash?.slot === "demo" ? flash.text : null,
   );
   const [joinCode, setJoinCode] = useState("");
+  const [joinRole, setJoinRole] = useState<ShopRole>("tech");
+  const [joinPin, setJoinPin] = useState("");
+  const [officePin, setOfficePin] = useState("");
+  const [officePinConfirm, setOfficePinConfirm] = useState("");
+  const [techPin, setTechPin] = useState("");
+  const [techPinConfirm, setTechPinConfirm] = useState("");
+  const [changeOfficePin, setChangeOfficePin] = useState("");
+  const [changeOfficePinConfirm, setChangeOfficePinConfirm] = useState("");
+  const [changeTechPin, setChangeTechPin] = useState("");
+  const [changeTechPinConfirm, setChangeTechPinConfirm] = useState("");
+  const [showChangePins, setShowChangePins] = useState(false);
   const [shopBusy, setShopBusy] = useState(false);
   const [shopMsg, setShopMsg] = useState<string | null>(null);
   const [shopError, setShopError] = useState<string | null>(null);
   const [shopHint, setShopHint] = useState<string | null>(null);
   const [createdCode, setCreatedCode] = useState<string | null>(null);
   const [joined, setJoined] = useState(() => hasJoinedShop());
+  const [authenticated, setAuthenticated] = useState(() => isSessionAuthenticated());
+  const [role, setRole] = useState(() => sessionRole());
   const [sessionShopId, setSessionShopId] = useState(() => loadShopSession().shopId);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const firebaseOk = isFirebaseConfigured();
+  const officeOk = canAccessOffice();
   const lastBackupLabel = formatLastBackupLabel(lastBackupAt);
   const nag = backupNagMessage(lastBackupAt);
 
@@ -83,7 +104,21 @@ export function Settings({
     const id = nextShopId ?? session.shopId;
     setSessionShopId(id);
     setJoined(hasJoinedShop(session));
+    setAuthenticated(isSessionAuthenticated(session));
+    setRole(sessionRole(session));
     onShopSessionChange?.();
+  }
+
+  function clearPinDrafts() {
+    setOfficePin("");
+    setOfficePinConfirm("");
+    setTechPin("");
+    setTechPinConfirm("");
+    setJoinPin("");
+    setChangeOfficePin("");
+    setChangeOfficePinConfirm("");
+    setChangeTechPin("");
+    setChangeTechPinConfirm("");
   }
 
   async function handleCreateShop() {
@@ -93,7 +128,12 @@ export function Settings({
     setShopHint(null);
     setCreatedCode(null);
     try {
-      const result = await createShop();
+      const result = await createShop({
+        officePin,
+        officePinConfirm,
+        techPin,
+        techPinConfirm,
+      });
       if (!result.ok) {
         setShopError(result.error);
         return;
@@ -101,6 +141,7 @@ export function Settings({
       setCreatedCode(result.shopId);
       setShopMsg(result.message);
       if (result.hint) setShopHint(result.hint);
+      clearPinDrafts();
       refreshShopSessionUi(result.shopId);
     } finally {
       setShopBusy(false);
@@ -114,18 +155,58 @@ export function Settings({
     setShopHint(null);
     setCreatedCode(null);
     try {
-      const result = await joinShop(joinCode);
+      const result = await joinShop(joinCode, { role: joinRole, pin: joinPin });
       if (!result.ok) {
         setShopError(result.error);
         return;
       }
       setJoinCode("");
+      setJoinPin("");
       setShopMsg(result.message);
       if (result.hint) setShopHint(result.hint);
       refreshShopSessionUi(result.shopId);
     } finally {
       setShopBusy(false);
     }
+  }
+
+  async function handleChangePins() {
+    setShopBusy(true);
+    setShopMsg(null);
+    setShopError(null);
+    setShopHint(null);
+    try {
+      const result = await changeShopPins({
+        officePin: changeOfficePin,
+        officePinConfirm: changeOfficePinConfirm,
+        techPin: changeTechPin,
+        techPinConfirm: changeTechPinConfirm,
+      });
+      if (!result.ok) {
+        setShopError(result.error);
+        return;
+      }
+      setShopMsg(result.message);
+      clearPinDrafts();
+      setShowChangePins(false);
+      refreshShopSessionUi(result.shopId);
+    } finally {
+      setShopBusy(false);
+    }
+  }
+
+  function handleSignOut() {
+    setShopMsg(null);
+    setShopError(null);
+    setShopHint(null);
+    setCreatedCode(null);
+    const result = signOutShop();
+    if (!result.ok) {
+      setShopError(result.error);
+      return;
+    }
+    setShopMsg(result.message);
+    refreshShopSessionUi(result.shopId);
   }
 
   function handleLeaveShop() {
@@ -139,6 +220,7 @@ export function Settings({
       return;
     }
     setShopMsg(result.message);
+    clearPinDrafts();
     refreshShopSessionUi("");
   }
 
@@ -218,22 +300,34 @@ export function Settings({
 
       <h2>Shared shop</h2>
       <p className="hint">
-        Optional multi-device shop via Firebase. Local-only until you create or join. Requires
-        Firebase env from <code>.env.example</code>. Shop code is the join secret until a later PIN
-        slice. Cloud sync is <strong>not</strong> the 2-year premises retention path — keep Export /
-        backup and the Lawgical disclaimer.
+        Optional multi-device shop via Firebase. Local-only until you create or join with a PIN.
+        Requires Firebase env from <code>.env.example</code>. PINs are salted hashes on the shop
+        document — never stored plaintext in session. Cloud sync is <strong>not</strong> the 2-year
+        premises retention path — keep Export / backup and the Lawgical disclaimer.
       </p>
       <div className="card settings-backup-actions shop-card">
         {!firebaseOk && (
           <p className="hint" role="status">
-            Firebase is not configured on this build. Create / Join stay disabled; this device remains
-            local-only.
+            Firebase is not configured on this build. Create / Join / Unlock stay disabled; this
+            device remains local-only (no PIN gate).
           </p>
         )}
-        {joined && sessionShopId ? (
+        {firebaseOk && joined && !authenticated && (
+          <ShopSessionGate
+            initialShopCode={sessionShopId}
+            onSessionChange={() => refreshShopSessionUi()}
+          />
+        )}
+        {joined && sessionShopId && authenticated ? (
           <>
             <p className="hint" role="status">
               Mode: <strong>{firebaseOk ? "shared" : "local only"}</strong>
+              {role ? (
+                <>
+                  {" "}
+                  · role: <strong>{role}</strong>
+                </>
+              ) : null}
             </p>
             {!firebaseOk && (
               <p className="hint" role="status">
@@ -248,26 +342,180 @@ export function Settings({
               <p className="hint">
                 Day-to-day screens still read/write this device&apos;s localStorage. Create and first
                 migrate upload a shop snapshot to Firestore; live shared read/write is a later slice.
+                Full office/tech screen gates land in #4 — <code>canAccessOffice()</code> /{" "}
+                <code>session.role</code> are ready.
               </p>
             )}
-            <button
-              type="button"
-              className="btn btn-secondary"
-              disabled={shopBusy}
-              onClick={handleLeaveShop}
-            >
-              Leave shop
-            </button>
+            <div className="shop-session-actions">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={shopBusy}
+                onClick={handleSignOut}
+              >
+                Sign out
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={shopBusy || (authenticated && role === "tech")}
+                title={
+                  role === "tech"
+                    ? "Tech can sign out; leave shop is office-preferred (or unlock as office)."
+                    : undefined
+                }
+                onClick={handleLeaveShop}
+              >
+                Leave shop
+              </button>
+            </div>
+            {role === "tech" && (
+              <p className="hint">
+                Signed in as tech. Leave shop is disabled here — sign out, or ask office to leave from
+                an office session. Role-gated screens arrive in #4.
+              </p>
+            )}
+            {officeOk && firebaseOk && (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  disabled={shopBusy}
+                  onClick={() => setShowChangePins((v) => !v)}
+                >
+                  {showChangePins ? "Hide change PINs" : "Change office / tech PINs…"}
+                </button>
+                {showChangePins && (
+                  <div className="shop-bootstrap">
+                    <label className="field">
+                      New office PIN
+                      <input
+                        type="password"
+                        inputMode="numeric"
+                        value={changeOfficePin}
+                        onChange={(e) => setChangeOfficePin(e.target.value)}
+                        disabled={shopBusy}
+                        autoComplete="new-password"
+                      />
+                    </label>
+                    <label className="field">
+                      Confirm office PIN
+                      <input
+                        type="password"
+                        inputMode="numeric"
+                        value={changeOfficePinConfirm}
+                        onChange={(e) => setChangeOfficePinConfirm(e.target.value)}
+                        disabled={shopBusy}
+                        autoComplete="new-password"
+                      />
+                    </label>
+                    <label className="field">
+                      New tech PIN
+                      <input
+                        type="password"
+                        inputMode="numeric"
+                        value={changeTechPin}
+                        onChange={(e) => setChangeTechPin(e.target.value)}
+                        disabled={shopBusy}
+                        autoComplete="new-password"
+                      />
+                    </label>
+                    <label className="field">
+                      Confirm tech PIN
+                      <input
+                        type="password"
+                        inputMode="numeric"
+                        value={changeTechPinConfirm}
+                        onChange={(e) => setChangeTechPinConfirm(e.target.value)}
+                        disabled={shopBusy}
+                        autoComplete="new-password"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      disabled={shopBusy}
+                      onClick={() => {
+                        void handleChangePins();
+                      }}
+                    >
+                      Save new PINs
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
           </>
-        ) : (
+        ) : !joined ? (
           <>
             <p className="hint" role="status">
               Mode: <strong>local only</strong>
             </p>
+            {firebaseOk && (
+              <>
+                <h3 className="shop-subhead">Create shop (office)</h3>
+                <p className="hint">
+                  Sets salted office + tech PIN hashes on the new shop document. You stay signed in as
+                  office.
+                </p>
+                <label className="field">
+                  Office PIN (4–8 digits)
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    value={officePin}
+                    onChange={(e) => {
+                      setShopError(null);
+                      setOfficePin(e.target.value);
+                    }}
+                    disabled={!firebaseOk || shopBusy}
+                    autoComplete="new-password"
+                  />
+                </label>
+                <label className="field">
+                  Confirm office PIN
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    value={officePinConfirm}
+                    onChange={(e) => setOfficePinConfirm(e.target.value)}
+                    disabled={!firebaseOk || shopBusy}
+                    autoComplete="new-password"
+                  />
+                </label>
+                <label className="field">
+                  Tech PIN (4–8 digits)
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    value={techPin}
+                    onChange={(e) => setTechPin(e.target.value)}
+                    disabled={!firebaseOk || shopBusy}
+                    autoComplete="new-password"
+                  />
+                </label>
+                <label className="field">
+                  Confirm tech PIN
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    value={techPinConfirm}
+                    onChange={(e) => setTechPinConfirm(e.target.value)}
+                    disabled={!firebaseOk || shopBusy}
+                    autoComplete="new-password"
+                  />
+                </label>
+              </>
+            )}
             <button
               type="button"
               className="btn btn-primary"
-              disabled={!firebaseOk || shopBusy}
+              disabled={
+                !firebaseOk ||
+                shopBusy ||
+                !officePin.trim() ||
+                !techPin.trim()
+              }
               onClick={() => {
                 void handleCreateShop();
               }}
@@ -279,6 +527,12 @@ export function Settings({
                 Share this code with the office:{" "}
                 <strong className="shop-code">{createdCode}</strong>
               </p>
+            )}
+            {firebaseOk && (
+              <>
+                <h3 className="shop-subhead">Join shop</h3>
+                <p className="hint">Requires shop code + role + matching PIN from the office.</p>
+              </>
             )}
             <label className="field">
               Join with shop code
@@ -295,15 +549,73 @@ export function Settings({
                 aria-label="Shop code to join"
               />
             </label>
+            {firebaseOk && (
+              <>
+                <fieldset className="shop-role-fieldset" disabled={shopBusy}>
+                  <legend>Role</legend>
+                  <label className="shop-role-option">
+                    <input
+                      type="radio"
+                      name="shop-join-role"
+                      checked={joinRole === "office"}
+                      onChange={() => setJoinRole("office")}
+                    />
+                    Office
+                  </label>
+                  <label className="shop-role-option">
+                    <input
+                      type="radio"
+                      name="shop-join-role"
+                      checked={joinRole === "tech"}
+                      onChange={() => setJoinRole("tech")}
+                    />
+                    Tech
+                  </label>
+                </fieldset>
+                <label className="field">
+                  PIN for that role
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    value={joinPin}
+                    onChange={(e) => {
+                      setShopError(null);
+                      setJoinPin(e.target.value);
+                    }}
+                    placeholder="4–8 digits"
+                    disabled={shopBusy}
+                    autoComplete="one-time-code"
+                    aria-label="PIN for selected role"
+                  />
+                </label>
+              </>
+            )}
             <button
               type="button"
               className="btn btn-secondary"
-              disabled={!firebaseOk || shopBusy || !joinCode.trim()}
+              disabled={!firebaseOk || shopBusy || !joinCode.trim() || !joinPin.trim()}
               onClick={() => {
                 void handleJoinShop();
               }}
             >
               Join shop
+            </button>
+          </>
+        ) : (
+          <>
+            <p className="hint" role="status">
+              Mode: <strong>locked</strong> — shop code remembered
+            </p>
+            <p className="shop-code-display" role="status">
+              Shop code: <strong className="shop-code">{sessionShopId}</strong>
+            </p>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={shopBusy}
+              onClick={handleLeaveShop}
+            >
+              Leave shop
             </button>
           </>
         )}
@@ -463,8 +775,15 @@ export function Settings({
         <button
           type="button"
           className="btn btn-ghost danger-wipe"
+          disabled={authenticated && role === "tech"}
+          title={
+            authenticated && role === "tech"
+              ? "Wipe is office-only while signed into a shared shop as tech."
+              : undefined
+          }
           onClick={() => {
             setDemoMsg(null);
+            if (authenticated && role === "tech") return;
             if (
               !confirm(
                 "Wipe ALL Jobber Pest Logger data on this device? Logs, real products, people, and settings will be deleted. Example seeds will be re-added. This cannot be undone.",
@@ -486,6 +805,9 @@ export function Settings({
         >
           Wipe all data on this device…
         </button>
+        {authenticated && role === "tech" && (
+          <p className="hint">Wipe is disabled for tech sessions (office helper stub for #4).</p>
+        )}
         {demoMsg && (
           <p className="hint" role="status">
             {demoMsg}

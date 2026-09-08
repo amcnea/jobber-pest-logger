@@ -33,7 +33,14 @@ import {
   type PropertyBookEntry,
 } from "./storage";
 import type { ApplicationLog, Person, Screen, ShopProduct, ShopSettings } from "./types";
-import { resolveShopStore, shopStoreStatusHint } from "./shop";
+import {
+  isFirebaseConfigured,
+  loadShopSession,
+  needsShopUnlock,
+  resolveShopStore,
+  shopStoreStatusHint,
+} from "./shop";
+import { ShopSessionGate } from "./components/ShopSessionGate";
 import "./App.css";
 
 export default function App() {
@@ -245,7 +252,7 @@ export default function App() {
         <div className="eyebrow">Texas TDA · Jobber sidecar</div>
         <h1>Jobber Pest Logger</h1>
         <p className="store-status" role="status">
-          {/* shopSessionTick forces re-read after Settings create/join/leave */}
+          {/* shopSessionTick forces re-read after Settings create/join/leave/sign-in */}
           {shopSessionTick >= 0 && shopStoreStatusHint(resolveShopStore())}
         </p>
       </header>
@@ -256,6 +263,17 @@ export default function App() {
       <FirstRunChecklist steps={firstRunSteps} onGo={go} />
       <ShopPilotCard />
       <A2hsTip />
+      {shopSessionTick >= 0 &&
+        isFirebaseConfigured() &&
+        needsShopUnlock(loadShopSession()) && (
+          <div className="shop-unlock-banner" role="region" aria-label="Shared shop unlock">
+            <ShopSessionGate
+              initialShopCode={loadShopSession().shopId}
+              onSessionChange={handleShopSessionChange}
+              compact
+            />
+          </div>
+        )}
       {peopleWarnings.length > 0 && (
         <div className="banner banner-due" role="status">
           <strong>License / CE reminders</strong> (in-app only; not TDA-required; no SMS). License:

@@ -641,3 +641,68 @@ label.field {
 .shop-card .field {
   margin-top: 0.25rem;
 }
+
+
+.shop-subhead {
+  font-size: 0.9rem;
+  margin: 0.85rem 0 0.35rem;
+  color: var(--brand);
+}
+
+.shop-role-fieldset {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.55rem 0.75rem;
+  margin: 0.4rem 0 0.65rem;
+}
+
+.shop-role-fieldset legend {
+  padding: 0 0.35rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.shop-role-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-right: 1rem;
+  font-size: 0.9rem;
+  min-height: var(--tap);
+}
+
+.shop-session-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+}
+
+.shop-gate {
+  margin: 0.5rem 0 0.75rem;
+}
+
+.shop-gate-compact {
+  padding: 0.65rem 0.75rem;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: #faf8f2;
+}
+
+.shop-gate-title {
+  font-size: 0.95rem;
+  margin: 0 0 0.35rem;
+  color: var(--brand);
+}
+
+.shop-bootstrap {
+  margin-top: 0.65rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed var(--line);
+}
+
+.shop-unlock-banner {
+  padding: 0.65rem 1rem 0.85rem;
+  background: #f3efe4;
+  border-bottom: 1px solid var(--line);
+}
