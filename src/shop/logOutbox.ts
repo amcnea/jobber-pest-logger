@@ -57,7 +57,7 @@ function writeOutbox(entries: LogOutboxEntry[]): boolean {
     localStorage.setItem(LOG_OUTBOX_KEY, JSON.stringify(entries));
     return true;
   } catch (err) {
-    console.error("jobber-pest-logger: could not save log outbox", err);
+    console.error("jpl: could not persist offline outbox", err);
     return false;
   }
 }
