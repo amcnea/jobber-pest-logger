@@ -71,8 +71,7 @@ function writeOutbox(entries: LogOutboxEntry[]): boolean {
   try {
     localStorage.setItem(LOG_OUTBOX_KEY, JSON.stringify(entries));
     return true;
-  } catch (err) {
-    console.error("jpl: could not persist offline outbox", err);
+  } catch {
     return false;
   }
 }
