@@ -234,7 +234,7 @@ Cloud sync is **not** the Texas § 7.144 two-year premises retention path. Keep 
 
 ### Offline log outbox (#6)
 
-Shared-mode application logs still save on-device first (`upsertLog`). A durable **localStorage outbox** (`jobber-pest-logger:log-outbox:v1`) holds full § 7.144(a) log payloads when a Firestore put fails or the network blips. Flush runs on online / visibility and via **Retry sync now**. Idempotent merge by `log.id`. Local-only mode is unchanged (already durable). Live subscribe / multi-device pull remains later.
+Shared-mode application logs still save on-device first (`upsertLog`). A durable **localStorage outbox** (`jobber-pest-logger:log-outbox:v1`) holds full § 7.144(a) log payloads when a Firestore put fails or the network blips. Flush runs on app mount, online / visibility, and via **Retry sync now**. Idempotent merge by `log.id`. Local-only mode is unchanged (already durable). Live subscribe / multi-device pull remains later.
 
 ### Not in this slice (later PRs)
 

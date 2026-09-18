@@ -249,6 +249,13 @@ export async function syncLogToRemote(
       // One conflict retry.
       const again = await remote.getShop();
       if (again.ok) {
+        // Newer save for same log.id may have superseded this attempt's outbox entry.
+        const isCurrent =
+          !!entryId &&
+          outboxEntriesForShop(id).some((entry) => entry.entryId === entryId);
+        if (queued && !isCurrent) {
+          return { ok: true };
+        }
         const logs2 = [...again.value.logs];
         const i2 = logs2.findIndex((l) => l.id === log.id);
         if (i2 === -1) logs2.unshift(log);
