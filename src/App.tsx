@@ -72,7 +72,12 @@ export default function App() {
   /** Bumps outbox banner after enqueue / flush. */
   const [outboxTick, setOutboxTick] = useState(0);
   const [outboxFlushing, setOutboxFlushing] = useState(false);
-  const [outboxMessage, setOutboxMessage] = useState<string | null>(null);
+  type OutboxBannerMessage = {
+    text: string;
+    /** `shared:<shopId>` or `local` — ignore stale async updates after session change. */
+    shopKey: string;
+  };
+  const [outboxMessage, setOutboxMessage] = useState<OutboxBannerMessage | null>(null);
   const flushInFlight = useRef(false);
   /** Set when a flush is requested while one is already in flight. */
   const flushAgain = useRef(false);
@@ -84,18 +89,26 @@ export default function App() {
   const handleShopSessionChange = useCallback(() => {
     setShopSessionTick((n) => n + 1);
     setOutboxTick((n) => n + 1);
+    setOutboxMessage(null);
   }, []);
 
   const refreshOutboxBanner = useCallback(() => {
     setOutboxTick((n) => n + 1);
   }, []);
 
+  const outboxShopKey = (info: ReturnType<typeof resolveShopStore>): string =>
+    info.mode === "shared" && info.shopId ? `shared:${info.shopId}` : "local";
+
   const flushPendingLogs = useCallback(async () => {
     const info = resolveShopStore();
+    const shopKey = outboxShopKey(info);
     if (info.mode !== "shared" || !info.shopId || !(info.store instanceof RemoteShopStore)) {
+      setOutboxMessage(null);
+      refreshOutboxBanner();
       return;
     }
     if (outboxEntriesForShop(info.shopId).length === 0) {
+      setOutboxMessage((prev) => (prev?.shopKey === shopKey ? null : prev));
       refreshOutboxBanner();
       return;
     }
@@ -109,14 +122,22 @@ export default function App() {
     setOutboxMessage(null);
     try {
       const result = await flushLogOutbox(info.store, info.shopId);
+      const still = resolveShopStore();
+      if (outboxShopKey(still) !== shopKey) return;
       if (result.ok) {
         setOutboxMessage(
           result.flushed > 0
-            ? `Synced ${result.flushed} queued log${result.flushed === 1 ? "" : "s"} to the shop.`
+            ? {
+                text: `Synced ${result.flushed} queued log${result.flushed === 1 ? "" : "s"} to the shop.`,
+                shopKey,
+              }
             : null,
         );
       } else {
-        setOutboxMessage(result.error ?? "Could not sync queued logs. Will retry when online.");
+        setOutboxMessage({
+          text: result.error ?? "Could not sync queued logs. Will retry when online.",
+          shopKey,
+        });
       }
     } finally {
       flushInFlight.current = false;
@@ -218,13 +239,20 @@ export default function App() {
       const remote = info.store;
       const shopId = info.shopId;
       void (async () => {
+        const shopKey = outboxShopKey(info);
         const sync = await syncLogToRemote(remote, shopId, log);
+        const still = resolveShopStore();
+        if (outboxShopKey(still) !== shopKey) {
+          refreshOutboxBanner();
+          return;
+        }
         if (!sync.ok) {
-          setOutboxMessage(
-            sync.queued
+          setOutboxMessage({
+            text: sync.queued
               ? "Saved on this device. Cloud sync pending — will retry when online."
               : `Saved on this device, but could not queue cloud sync: ${sync.error}`,
-          );
+            shopKey,
+          });
         } else {
           setOutboxMessage(null);
         }
@@ -441,7 +469,11 @@ export default function App() {
             info.mode === "shared" && info.shopId
               ? outboxEntriesForShop(info.shopId).length
               : 0;
-          if (pending === 0 && !outboxMessage) return null;
+          const scopedMessage =
+            outboxMessage && outboxMessage.shopKey === outboxShopKey(info)
+              ? outboxMessage.text
+              : null;
+          if (pending === 0 && !scopedMessage) return null;
           return (
             <div className="banner banner-due" role="status">
               {pending > 0 ? (
@@ -465,11 +497,11 @@ export default function App() {
                   </div>
                 </>
               ) : (
-                outboxMessage
+                scopedMessage
               )}
-              {pending > 0 && outboxMessage ? (
+              {pending > 0 && scopedMessage ? (
                 <p className="hint" style={{ marginTop: "0.35rem" }}>
-                  {outboxMessage}
+                  {scopedMessage}
                 </p>
               ) : null}
             </div>

@@ -58,7 +58,7 @@ rules:
       - pattern: console.$METHOD($MSG, ...)
     metavariable-regex:
       metavariable: $MSG
-      regex: (?i).*(\bpin\b|pin_|_pin|[a-z0-9]Pin\b|\bpassword\b|passwd|\bsecret\b|idToken|sessionToken|refreshToken).*
+      regex: .*(?:(?i:\bpin\b|pin_|_pin|\bpassword\b|passwd|\bsecret\b|idToken|sessionToken|refreshToken|accessToken|authToken)|pin[A-Z][A-Za-z0-9]*|[a-z0-9]Pin\b).*
     paths:
       include:
         - src/**

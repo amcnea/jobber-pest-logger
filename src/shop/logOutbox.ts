@@ -177,8 +177,15 @@ export async function flushLogOutbox(
       };
     }
 
+    // Drop entries superseded while getShop awaited.
+    const currentIds = new Set(outboxEntriesForShop(id).map((e) => e.entryId));
+    const live = pending.filter((e) => currentIds.has(e.entryId));
+    if (live.length === 0) {
+      return { ok: true, flushed: 0, remaining: 0 };
+    }
+
     let logs = [...got.value.logs];
-    for (const entry of pending) {
+    for (const entry of live) {
       const idx = logs.findIndex((l) => l.id === entry.log.id);
       if (idx === -1) logs = [entry.log, ...logs];
       else logs[idx] = entry.log;
@@ -188,13 +195,13 @@ export async function flushLogOutbox(
     if (!put.ok) {
       annotateOutboxErrors(
         id,
-        pending.map((e) => e.log.id),
+        live.map((e) => e.log.id),
         put.error,
       );
       return {
         ok: false,
         flushed: 0,
-        remaining: pending.length,
+        remaining: live.length,
         error: put.error,
         conflict: put.conflict,
       };
@@ -202,9 +209,9 @@ export async function flushLogOutbox(
 
     removeOutboxVersions(
       id,
-      pending.map((e) => e.entryId),
+      live.map((e) => e.entryId),
     );
-    return { ok: true, flushed: pending.length, remaining: 0 };
+    return { ok: true, flushed: live.length, remaining: 0 };
   };
 
   const first = await attempt();
@@ -236,6 +243,13 @@ export async function syncLogToRemote(
   if (!got.ok) {
     if (queued) annotateOutboxErrors(id, [log.id], got.error);
     return { ok: false, error: got.error, queued };
+  }
+
+  // Newer save may have superseded this attempt while getShop awaited.
+  const isCurrentBeforePut =
+    !!entryId && outboxEntriesForShop(id).some((entry) => entry.entryId === entryId);
+  if (queued && !isCurrentBeforePut) {
+    return { ok: true };
   }
 
   const logs = [...got.value.logs];
