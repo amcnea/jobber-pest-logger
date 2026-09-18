@@ -5,6 +5,7 @@
  */
 
 import type { ApplicationLog } from "../types";
+import { normalizeLog } from "../storage";
 import type { RemoteShopStore } from "./RemoteShopStore";
 
 export const LOG_OUTBOX_KEY = "jobber-pest-logger:log-outbox:v1";
@@ -21,16 +22,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Light shape check: we wrote these; reject garbage without reimplementing normalizeLog. */
+/** Validate persisted outbox rows; reject garbage before remote merge. */
 function coerceEntry(raw: unknown): LogOutboxEntry | null {
   if (!isRecord(raw)) return null;
   if (typeof raw.shopId !== "string" || !raw.shopId.trim()) return null;
   if (typeof raw.queuedAt !== "string" || !raw.queuedAt.trim()) return null;
-  if (!isRecord(raw.log) || typeof raw.log.id !== "string" || !raw.log.id.trim()) return null;
+  const log = normalizeLog(raw.log);
+  if (!log) return null;
   const entry: LogOutboxEntry = {
     shopId: raw.shopId.trim(),
     queuedAt: raw.queuedAt.trim(),
-    log: raw.log as unknown as ApplicationLog,
+    log,
   };
   if (typeof raw.lastError === "string" && raw.lastError.trim()) {
     entry.lastError = raw.lastError.trim();
@@ -212,7 +214,7 @@ export async function syncLogToRemote(
 ): Promise<{ ok: true } | { ok: false; error: string; queued: boolean }> {
   const id = shopId.trim();
   // Queue before the network round-trip so a discarded tab cannot lose the cloud copy.
-  enqueueLogOutbox(id, log);
+  const queued = enqueueLogOutbox(id, log);
   const versionKey = outboxEntriesForShop(id).find((e) => e.log.id === log.id)?.queuedAt;
   const clearThisVersion = () => {
     if (!versionKey) return removeOutboxLogIds(id, [log.id]);
@@ -221,8 +223,8 @@ export async function syncLogToRemote(
 
   const got = await remote.getShop();
   if (!got.ok) {
-    annotateOutboxErrors(id, [log.id], got.error);
-    return { ok: false, error: got.error, queued: true };
+    if (queued) annotateOutboxErrors(id, [log.id], got.error);
+    return { ok: false, error: got.error, queued };
   }
 
   const logs = [...got.value.logs];
@@ -245,12 +247,12 @@ export async function syncLogToRemote(
           clearThisVersion();
           return { ok: true };
         }
-        annotateOutboxErrors(id, [log.id], put2.error);
-        return { ok: false, error: put2.error, queued: true };
+        if (queued) annotateOutboxErrors(id, [log.id], put2.error);
+        return { ok: false, error: put2.error, queued };
       }
     }
-    annotateOutboxErrors(id, [log.id], put.error);
-    return { ok: false, error: put.error, queued: true };
+    if (queued) annotateOutboxErrors(id, [log.id], put.error);
+    return { ok: false, error: put.error, queued };
   }
 
   clearThisVersion();
