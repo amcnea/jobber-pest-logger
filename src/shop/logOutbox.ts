@@ -13,9 +13,18 @@ export const LOG_OUTBOX_KEY = "jobber-pest-logger:log-outbox:v1";
 export interface LogOutboxEntry {
   shopId: string;
   queuedAt: string;
+  /** Stable per-enqueue id for versioned remove (queuedAt stays a timestamp only). */
+  entryId: string;
   /** Full application log — do not strip fields. */
   log: ApplicationLog;
   lastError?: string;
+}
+
+function newEntryId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `e-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -29,9 +38,15 @@ function coerceEntry(raw: unknown): LogOutboxEntry | null {
   if (typeof raw.queuedAt !== "string" || !raw.queuedAt.trim()) return null;
   const log = normalizeLog(raw.log);
   if (!log) return null;
+  const queuedAt = raw.queuedAt.trim();
+  const entryId =
+    typeof raw.entryId === "string" && raw.entryId.trim()
+      ? raw.entryId.trim()
+      : `legacy:${queuedAt}`;
   const entry: LogOutboxEntry = {
     shopId: raw.shopId.trim(),
-    queuedAt: raw.queuedAt.trim(),
+    queuedAt,
+    entryId,
     log,
   };
   if (typeof raw.lastError === "string" && raw.lastError.trim()) {
@@ -74,22 +89,18 @@ export function enqueueLogOutbox(
   const entry: LogOutboxEntry = {
     shopId: id,
     queuedAt: new Date().toISOString(),
+    entryId: newEntryId(),
     log,
   };
   if (lastError?.trim()) entry.lastError = lastError.trim();
   return writeOutbox([entry, ...rest]);
 }
 
-/** Remove only exact shopId + log.id + queuedAt versions (preserve newer re-queues). */
-export function removeOutboxVersions(
-  shopId: string,
-  versions: Array<{ logId: string; queuedAt: string }>,
-): boolean {
+/** Remove only exact entryId versions (preserve newer re-queues). */
+export function removeOutboxVersions(shopId: string, entryIds: string[]): boolean {
   const id = shopId.trim();
-  const drop = new Set(versions.map((v) => `${v.logId}\0${v.queuedAt}`));
-  const next = loadLogOutbox().filter(
-    (e) => !(e.shopId === id && drop.has(`${e.log.id}\0${e.queuedAt}`)),
-  );
+  const drop = new Set(entryIds.filter(Boolean));
+  const next = loadLogOutbox().filter((e) => !(e.shopId === id && drop.has(e.entryId)));
   return writeOutbox(next);
 }
 
@@ -192,7 +203,7 @@ export async function flushLogOutbox(
 
     removeOutboxVersions(
       id,
-      pending.map((e) => ({ logId: e.log.id, queuedAt: e.queuedAt })),
+      pending.map((e) => e.entryId),
     );
     return { ok: true, flushed: pending.length, remaining: 0 };
   };
@@ -215,10 +226,11 @@ export async function syncLogToRemote(
   const id = shopId.trim();
   // Queue before the network round-trip so a discarded tab cannot lose the cloud copy.
   const queued = enqueueLogOutbox(id, log);
-  const versionKey = outboxEntriesForShop(id).find((e) => e.log.id === log.id)?.queuedAt;
+  const entryId = outboxEntriesForShop(id).find((e) => e.log.id === log.id)?.entryId;
   const clearThisVersion = () => {
-    if (!versionKey) return removeOutboxLogIds(id, [log.id]);
-    return removeOutboxVersions(id, [{ logId: log.id, queuedAt: versionKey }]);
+    // If enqueue failed, do not fall back to log.id — that can wipe a newer re-queue.
+    if (!entryId) return true;
+    return removeOutboxVersions(id, [entryId]);
   };
 
   const got = await remote.getShop();

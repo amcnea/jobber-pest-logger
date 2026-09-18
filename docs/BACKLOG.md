@@ -18,3 +18,7 @@ Client Anonymous Auth + Firestore rules cannot prove a PIN check. Until a truste
 
 - Shop code + client PIN remain a UX gate; treat rules as incomplete ACL until the above ships.
 - Refresh README pre-#5 “until Auth/membership” wording where still wrong; note #6 done / #7–#8 next if you touch the roadmap section.
+
+## Offline outbox — cross-tab atomicity (#6 follow-up)
+
+`localStorage` outbox read-modify-write is not atomic across browser tabs. Two tabs can enqueue different logs and overwrite each other. Fix with IndexedDB transactions or a cross-tab lock (`navigator.locks`) when we harden multi-device desk use. Single-tab tech phones are the primary #6 path.
