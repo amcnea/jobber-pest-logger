@@ -207,11 +207,20 @@ export async function flushLogOutbox(
       };
     }
 
-    removeOutboxVersions(
+    const cleared = removeOutboxVersions(
       id,
       live.map((e) => e.entryId),
     );
-    return { ok: true, flushed: live.length, remaining: 0 };
+    const remaining = outboxEntriesForShop(id).length;
+    if (!cleared) {
+      return {
+        ok: false,
+        flushed: live.length,
+        remaining,
+        error: "Synced to shop but could not update the local outbox.",
+      };
+    }
+    return { ok: true, flushed: live.length, remaining };
   };
 
   const first = await attempt();
@@ -276,7 +285,13 @@ export async function syncLogToRemote(
         else logs2[i2] = log;
         const put2 = await remote.putShop({ ...again.value, logs: logs2 });
         if (put2.ok) {
-          clearThisVersion();
+          if (!clearThisVersion()) {
+            return {
+              ok: false,
+              error: "Synced to shop but could not update the local outbox.",
+              queued: true,
+            };
+          }
           return { ok: true };
         }
         if (queued) annotateOutboxErrors(id, [log.id], put2.error);
@@ -287,6 +302,12 @@ export async function syncLogToRemote(
     return { ok: false, error: put.error, queued };
   }
 
-  clearThisVersion();
+  if (!clearThisVersion()) {
+    return {
+      ok: false,
+      error: "Synced to shop but could not update the local outbox.",
+      queued: true,
+    };
+  }
   return { ok: true };
 }
