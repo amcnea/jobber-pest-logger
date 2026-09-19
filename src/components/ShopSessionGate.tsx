@@ -12,6 +12,7 @@ import {
   hasJoinedShop,
   isSessionAuthenticated,
   loadShopSession,
+  sessionAuthIdentityChanged,
   SHOP_SESSION_KEY,
   signInShop,
   touchSessionActivity,
@@ -76,7 +77,10 @@ export function ShopSessionTimeoutWatcher({
     const onStorage = (e: StorageEvent) => {
       if (e.key !== null && e.key !== SHOP_SESSION_KEY) return;
       // Other tab leave/sign-out only bumps that tab's in-memory epoch — invalidate here too.
-      bumpSessionMutationEpoch();
+      // Activity-only lastActiveAt rewrites must not bump (would abort in-flight signInShop).
+      if (sessionAuthIdentityChanged(e.oldValue, e.newValue)) {
+        bumpSessionMutationEpoch();
+      }
       check();
     };
 

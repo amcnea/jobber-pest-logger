@@ -17,7 +17,7 @@ Client Anonymous Auth + Firestore rules cannot prove a PIN check. Until a truste
 ## Notes
 
 - Shop code + client PIN remain a UX gate; treat rules as incomplete ACL until the above ships.
-- Refresh README pre-#5 “until Auth/membership” wording where still wrong; note #6 done / #7–#8 next if you touch the roadmap section.
+- Refresh README pre-#5 “until Auth/membership” wording where still wrong; #6–#8 shipped (export pull on #7).
 
 ## Offline outbox — cross-tab atomicity (#6 follow-up)
 
@@ -28,7 +28,7 @@ Client Anonymous Auth + Firestore rules cannot prove a PIN check. Until a truste
 From CodeRabbit on PR #40 (`bundle-20260919-1210` @ `5861be7`). Majors are owner-backport only; these stay backlog unless Charles says fix now.
 
 ### Binder (#30 `feat/harden-timeout-premises` @ `d2bec3d`)
-- `src/components/ShopSessionGate.tsx:79` — activity-only `SHOP_SESSION_KEY` updates must not bump `sessionMutationEpoch` / invalidate in-flight `signInShop`. https://github.com/amcnea/jobber-pest-logger/pull/40#discussion_r4053979439
+- ~~`src/components/ShopSessionGate.tsx` — activity-only `SHOP_SESSION_KEY` updates must not bump `sessionMutationEpoch`~~ **Done** on `#7` / `feat/shared-export-backup` (compare old/new identity fingerprint; ignore `lastActiveAt`).
 
 ### Catalog (#33 `feat/texas-starter-catalog` @ `4767bea`)
 - `src/components/Products.tsx:63-64` — ref write in render / delete effect; use `clearPendingLabel` helper. https://github.com/amcnea/jobber-pest-logger/pull/40#discussion_r4053979434
