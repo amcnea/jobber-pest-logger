@@ -23,12 +23,16 @@ Client Anonymous Auth + Firestore rules cannot prove a PIN check. Until a truste
 
 `localStorage` outbox read-modify-write is not atomic across browser tabs. Two tabs can enqueue different logs and overwrite each other. Fix with IndexedDB transactions or a cross-tab lock (`navigator.locks`) when we harden multi-device desk use. Single-tab tech phones are the primary #6 path.
 
-## Session mutation epoch — activity-only storage events (#8 follow-up)
+## Bundle #40 one-shot (2026-09-19) — deferred Minors / nitpicks
 
-CodeRabbit Bundle #40 Minor on `ShopSessionGate` (`feat/harden-timeout-premises` @ `d2bec3d`):
+From CodeRabbit on PR #40 (`bundle-20260919-1210` @ `5861be7`). Majors are owner-backport only; these stay backlog unless Charles says fix now.
 
-- `touchSessionActivity` rewrites `SHOP_SESSION_KEY` ~once/min while active; other tabs' `storage` listeners currently call `bumpSessionMutationEpoch()` on every change.
-- That can cancel an in-flight `signInShop` even when shopId/role/auth identity did not change.
-- Fix: compare `oldValue`/`newValue` (or fingerprint shop + auth identity) and bump epoch only when shop/auth identity changes or is cleared — not on `lastActiveAt`-only updates.
+### Binder (#30 `feat/harden-timeout-premises` @ `d2bec3d`)
+- `src/components/ShopSessionGate.tsx:79` — activity-only `SHOP_SESSION_KEY` updates must not bump `sessionMutationEpoch` / invalidate in-flight `signInShop`. https://github.com/amcnea/jobber-pest-logger/pull/40#discussion_r4053979439
 
-Deferred as non-security Minor per Charles (2026-09-19); do not auto-cycle Bundle for this alone.
+### Catalog (#33 `feat/texas-starter-catalog` @ `4767bea`)
+- `src/components/Products.tsx:63-64` — ref write in render / delete effect; use `clearPendingLabel` helper. https://github.com/amcnea/jobber-pest-logger/pull/40#discussion_r4053979434
+- `src/starterCatalog/labelConfirmStore.ts:21-25` — recovery must preserve pending IDs on malformed array (fail closed, don’t wipe to `[]`). https://github.com/amcnea/jobber-pest-logger/pull/40#discussion_r4053979440
+
+Note: Catalog Major EPA fix (`texasCommon.ts` Demand CS `100-1063` → `100-1066`) is **not** backlog — owner must backport on #33.
+
