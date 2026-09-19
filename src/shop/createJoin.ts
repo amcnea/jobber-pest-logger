@@ -118,7 +118,7 @@ async function persistAuthenticatedSession(
   role: ShopRole,
 ): Promise<string | null> {
   const verifiedAt = new Date().toISOString();
-  if (!saveShopSession({ shopId, role, verifiedAt })) {
+  if (!saveShopSession({ shopId, role, verifiedAt, lastActiveAt: verifiedAt })) {
     return "this device could not save the session (storage blocked).";
   }
   return null;
