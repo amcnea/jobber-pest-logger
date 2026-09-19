@@ -190,9 +190,17 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
       return;
     }
     const pending = starterToPendingShopProduct(starter, newId());
+    // Persist guard before catalog row so reload cannot unarchive without confirm.
+    if (!addPendingLabelConfirm(pending.id)) {
+      setLabelConfirmStoreUnavailable(true);
+      return;
+    }
     const saved = onUpsert(pending);
-    if (!saved) return;
-    markPendingLabel(pending.id);
+    if (!saved) {
+      if (!clearPendingLabelConfirm(pending.id)) setLabelConfirmStoreUnavailable(true);
+      return;
+    }
+    setPendingLabelIds((ids) => (ids.includes(pending.id) ? ids : [...ids, pending.id]));
     beginLabelConfirm(pending.id);
     // Show pending rows even when the Active filter is on.
     setListFilter("all");
@@ -201,12 +209,15 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   function activateAfterLabelConfirm(product: ShopProduct) {
     if (!labelConfirmed) return;
     if (labelConfirmStoreUnavailable) return;
-    // Persist-clear first so we do not activate while the guard cannot be dropped safely.
-    if (!clearPendingLabel(product.id)) return;
+    // Activate first; only clear the durable guard after a successful upsert.
     const saved = onUpsert({ ...product, archived: false });
     if (!saved) {
-      markPendingLabel(product.id);
+      // Leave durable pending intact — no clear was attempted.
       return;
+    }
+    // Prefer keep in-memory + try clear; if clear fails mark unavailable.
+    if (!clearPendingLabel(product.id)) {
+      setLabelConfirmStoreUnavailable(true);
     }
     cancelLabelConfirm();
   }
