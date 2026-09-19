@@ -108,7 +108,7 @@ function isLogShape(value: unknown): value is Record<string, unknown> {
   );
 }
 
-function normalizeLog(value: unknown): ApplicationLog | null {
+export function normalizeLog(value: unknown): ApplicationLog | null {
   if (!isLogShape(value)) return null;
   const rawProducts = value.products as unknown[];
   const products = rawProducts.map(normalizeProduct).filter((p): p is AppliedProduct => p !== null);

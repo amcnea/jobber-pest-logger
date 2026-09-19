@@ -76,7 +76,7 @@ export function shopStoreStatusHint(
     return `Shop ${info.shopId} remembered — enter role + PIN to unlock`;
   }
   if (info.mode === "shared" && info.shopId && info.role) {
-    return `Shop ${info.shopId} · ${info.role} — snapshot on create/migrate; day-to-day still device-local until live sync`;
+    return `Shop ${info.shopId} · ${info.role} — logs sync to cloud (outbox retries if offline)`;
   }
   return "This device: local only (shared shop not joined)";
 }

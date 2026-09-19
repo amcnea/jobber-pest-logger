@@ -79,3 +79,16 @@ export {
   parseShopPinAuth,
   verifyPin,
 } from "./pinCrypto";
+
+export {
+  LOG_OUTBOX_KEY,
+  enqueueLogOutbox,
+  flushLogOutbox,
+  loadLogOutbox,
+  outboxEntriesForShop,
+  removeOutboxLogIds,
+  removeOutboxVersions,
+  syncLogToRemote,
+  type LogOutboxEntry,
+} from "./logOutbox";
+
