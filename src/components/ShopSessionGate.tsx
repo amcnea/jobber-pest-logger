@@ -2,14 +2,17 @@
  * Minimal shared-shop sign-in / unlock gate (#3 + #5).
  * Anonymous Auth + PIN verify against remote hashes, then membership for this uid.
  * Role cannot be flipped locally alone.
+ * #8: idle/TTL watcher clears auth and forces unlock without wiping local data.
  */
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   bootstrapShopPins,
+  enforceSessionExpiry,
   hasJoinedShop,
   isSessionAuthenticated,
   loadShopSession,
   signInShop,
+  touchSessionActivity,
   type ShopRole,
 } from "../shop";
 
@@ -19,6 +22,78 @@ interface Props {
   onSessionChange: () => void;
   /** Compact banner style vs full card fields. */
   compact?: boolean;
+}
+
+/** Roles are app access only — not TDA / SPCS compliance status (#8). */
+const ROLES_NOT_TDA =
+  "Office and tech are app access roles only (which screens and PINs). They are not TDA or SPCS compliance status, license class, or certified-applicator standing.";
+
+/**
+ * Watches absolute TTL + idle activity. On expiry, clears auth (keeps shopId + local data)
+ * and notifies App so the unlock gate appears.
+ */
+export function ShopSessionTimeoutWatcher({
+  onSessionChange,
+}: {
+  onSessionChange: () => void;
+}) {
+  const lastTouchMs = useRef(0);
+
+  useEffect(() => {
+    const check = () => {
+      if (enforceSessionExpiry()) {
+        onSessionChange();
+      }
+    };
+
+    const touch = () => {
+      const session = loadShopSession();
+      if (!isSessionAuthenticated(session)) {
+        check();
+        return;
+      }
+      const now = Date.now();
+      // Throttle localStorage writes (~1/min while active).
+      if (now - lastTouchMs.current < 60_000) return;
+      lastTouchMs.current = now;
+      if (!touchSessionActivity(now)) return;
+      // Expiry clear during touch: refresh so unlock gate appears.
+      if (!isSessionAuthenticated(loadShopSession())) {
+        onSessionChange();
+      }
+    };
+
+    check();
+    touch();
+
+    const onVis = () => {
+      if (document.visibilityState === "visible") {
+        check();
+        touch();
+      }
+    };
+    const onFocus = () => {
+      check();
+      touch();
+    };
+
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("pointerdown", touch, { passive: true });
+    window.addEventListener("keydown", touch);
+    // Catch idle expiry while the tab stays open without interaction.
+    const interval = window.setInterval(check, 60_000);
+
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("pointerdown", touch);
+      window.removeEventListener("keydown", touch);
+      window.clearInterval(interval);
+    };
+  }, [onSessionChange]);
+
+  return null;
 }
 
 export function ShopSessionGate({
@@ -101,7 +176,8 @@ export function ShopSessionGate({
       <h3 className="shop-gate-title">{title}</h3>
       <p className="hint">
         Choose office or tech and enter the matching PIN. Role is stored only after remote PIN
-        verify — editing localStorage alone is not enough.
+        verify — editing localStorage alone is not enough. Idle or session TTL expiry signs you out
+        and shows this unlock again; local logs and backups are not wiped.
       </p>
       <label className="field">
         Shop code
@@ -139,6 +215,7 @@ export function ShopSessionGate({
           Tech
         </label>
       </fieldset>
+      <p className="hint roles-not-tda">{ROLES_NOT_TDA}</p>
       <label className="field">
         PIN
         <input
