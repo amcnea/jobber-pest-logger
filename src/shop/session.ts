@@ -4,8 +4,14 @@ import type { ShopSession } from "./types";
 /** Small meta key — not part of backup/wipe payload in #1. */
 export const SHOP_SESSION_KEY = "jobber-pest-logger:shop-session:v1";
 
-/** Soft session lifetime after PIN verify (re-enter PIN when stale). */
+/** Soft absolute lifetime after PIN verify (re-enter PIN when stale). */
 export const SESSION_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * Idle lifetime after last UI activity (#8).
+ * Shared desk / phone: inactivity clears auth without wiping local shop data.
+ */
+export const SESSION_IDLE_MS = 8 * 60 * 60 * 1000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -37,6 +43,21 @@ function parseVerifiedAt(value: unknown): string | undefined {
   return iso;
 }
 
+/** Human-readable duration for Settings chrome (idle / TTL labels). */
+export function formatDurationMs(ms: number): string {
+  if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))}s`;
+  if (ms < 3_600_000) {
+    const m = Math.round(ms / 60_000);
+    return `${m} minute${m === 1 ? "" : "s"}`;
+  }
+  if (ms < 48 * 3_600_000) {
+    const h = Math.round(ms / 3_600_000);
+    return `${h} hour${h === 1 ? "" : "s"}`;
+  }
+  const d = Math.round(ms / (24 * 3_600_000));
+  return `${d} day${d === 1 ? "" : "s"}`;
+}
+
 /**
  * Normalize a session object. Drops role/verifiedAt unless both are valid together.
  * Does not treat a hand-edited role alone as authenticated.
@@ -50,7 +71,8 @@ export function normalizeShopSession(raw: unknown): ShopSession {
   const role = isShopRole(raw.role) ? raw.role : undefined;
   const verifiedAt = parseVerifiedAt(raw.verifiedAt);
   if (role && verifiedAt) {
-    return { shopId, role, verifiedAt };
+    const lastActiveAt = parseVerifiedAt(raw.lastActiveAt) ?? verifiedAt;
+    return { shopId, role, verifiedAt, lastActiveAt };
   }
   // Remembered shop only (signed out) — never keep a lone role flag.
   return { shopId };
@@ -67,15 +89,26 @@ export function loadShopSession(): ShopSession {
   }
 }
 
+/**
+ * True when absolute TTL (from verifiedAt) or idle (from lastActiveAt) has elapsed.
+ * Missing verifiedAt ⇒ expired. Future timestamps ⇒ treat as expired (clock skew).
+ */
 export function isSessionExpired(
   session: ShopSession = loadShopSession(),
   nowMs: number = Date.now(),
 ): boolean {
   if (!session.verifiedAt) return true;
-  const t = Date.parse(session.verifiedAt);
-  if (Number.isNaN(t)) return true;
-  if (t > nowMs) return true;
-  return nowMs - t > SESSION_TTL_MS;
+  const verifiedMs = Date.parse(session.verifiedAt);
+  if (Number.isNaN(verifiedMs)) return true;
+  if (verifiedMs > nowMs) return true;
+  if (nowMs - verifiedMs > SESSION_TTL_MS) return true;
+
+  const activeIso = session.lastActiveAt ?? session.verifiedAt;
+  const activeMs = Date.parse(activeIso);
+  if (Number.isNaN(activeMs)) return true;
+  if (activeMs > nowMs) return true;
+  if (nowMs - activeMs > SESSION_IDLE_MS) return true;
+  return false;
 }
 
 /**
@@ -102,10 +135,13 @@ export function sessionRole(session: ShopSession = loadShopSession()): ShopRole 
 
 /**
  * Office UI surfaces (Products, People, Settings, Export, History edit/delete).
- * Denied only when PIN-authenticated as tech (#4). Local-only and office keep full UI.
+ * Denied for PIN-authenticated tech (#4) and for a remembered shared shop that still
+ * needs unlock (expired/missing PIN) — that is not local-only mode.
+ * Local-only (no shopId) and authenticated office keep full UI.
  * Distinct from canAccessOffice(), which requires an authenticated office role.
  */
 export function canUseOfficeSurfaces(session: ShopSession = loadShopSession()): boolean {
+  if (hasJoinedShop(session) && !isSessionAuthenticated(session)) return false;
   return sessionRole(session) !== "tech";
 }
 
@@ -128,6 +164,7 @@ export function saveShopSession(session: ShopSession): boolean {
     ) {
       payload.role = normalized.role;
       payload.verifiedAt = normalized.verifiedAt;
+      payload.lastActiveAt = normalized.lastActiveAt ?? normalized.verifiedAt;
     }
     localStorage.setItem(SHOP_SESSION_KEY, JSON.stringify(payload));
     return true;
@@ -143,7 +180,8 @@ export function clearShopSession(): boolean {
 }
 
 /**
- * Sign out: drop role + verifiedAt, keep shopId so unlock can skip re-typing the code.
+ * Sign out: drop role + verifiedAt (+ lastActiveAt), keep shopId so unlock can skip re-typing the code.
+ * Does not wipe logs, catalog, people, or settings.
  */
 export function clearSessionAuth(session: ShopSession = loadShopSession()): boolean {
   const shopId = session.shopId.trim();
@@ -162,3 +200,37 @@ export function needsShopUnlock(session: ShopSession = loadShopSession()): boole
   return hasJoinedShop(session) && !isSessionAuthenticated(session);
 }
 
+/**
+ * If role/verifiedAt are present but idle or absolute TTL elapsed, clear auth (keep shopId).
+ * Local data is untouched. Returns true when auth was cleared.
+ */
+export function enforceSessionExpiry(
+  session: ShopSession = loadShopSession(),
+  nowMs: number = Date.now(),
+): boolean {
+  if (!hasJoinedShop(session)) return false;
+  if (!session.role && !session.verifiedAt) return false;
+  if (!isSessionExpired(session, nowMs)) return false;
+  return clearSessionAuth(session);
+}
+
+/**
+ * Bump lastActiveAt for an authenticated session (throttled by callers).
+ * If already expired, clears auth instead. Returns false only on storage failure.
+ */
+export function touchSessionActivity(nowMs: number = Date.now()): boolean {
+  const session = loadShopSession();
+  if (!hasJoinedShop(session) || !session.role || !session.verifiedAt) {
+    return true;
+  }
+  if (isSessionExpired(session, nowMs)) {
+    return clearSessionAuth(session);
+  }
+  const iso = new Date(nowMs).toISOString();
+  return saveShopSession({
+    shopId: session.shopId,
+    role: session.role,
+    verifiedAt: session.verifiedAt,
+    lastActiveAt: iso,
+  });
+}
