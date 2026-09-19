@@ -97,6 +97,10 @@ export function Export({
         people: [],
         settings,
       });
+      if (pulled.kind === "canceled") {
+        setPullError(pulled.error);
+        return { ok: false, logs: [], shopName: "" };
+      }
       if (pulled.kind === "shared-fallback-local") {
         setPullError(
           `Shared shop pull failed (${pulled.shopId}): ${pulled.error} Using this device's local data instead — it may not match the full shop.`,

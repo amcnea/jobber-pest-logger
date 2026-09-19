@@ -796,6 +796,10 @@ export function Settings({
                   people: loadPeople(),
                   settings,
                 });
+                if (pulled.kind === "canceled") {
+                  setBackupError(pulled.error);
+                  return;
+                }
                 if (pulled.kind === "shared-fallback-local") {
                   setBackupError(
                     `Shared shop pull failed (${pulled.shopId}): ${pulled.error} Downloaded this device's local copy instead — it may not match the full shop.`,

@@ -5,7 +5,12 @@
  */
 
 import type { ShopSections } from "../storage";
-import { canAccessOffice, canUseOfficeSurfaces } from "./session";
+import {
+  canAccessOffice,
+  canUseOfficeSurfaces,
+  getSessionMutationEpoch,
+  loadShopSession,
+} from "./session";
 import { resolveShopStore, type ResolvedShopStoreInfo } from "./resolveShopStore";
 
 export type ExportPullResult =
@@ -16,7 +21,8 @@ export type ExportPullResult =
       sections: ShopSections;
       shopId: string;
       error: string;
-    };
+    }
+  | { kind: "canceled"; error: string };
 
 /**
  * True when Export / Settings backup should pull remote before download:
@@ -38,6 +44,8 @@ export function shouldPullSharedExport(
  * Local-only (or non-office): returns the provided device sections unchanged.
  * Shared office: remote.getShop(); on failure falls back to local with error
  * (caller must show a clear banner — do not present local as the shop).
+ * If the session/shop changes while getShop awaits, cancel — do not download
+ * either snapshot.
  */
 export async function resolveExportSections(
   localSections: ShopSections,
@@ -47,8 +55,37 @@ export async function resolveExportSections(
     return { kind: "local", sections: localSections };
   }
 
-  const shopId = info.shopId;
+  const shopId = info.shopId.trim();
+  const epoch = getSessionMutationEpoch();
+  const before = loadShopSession();
+  if (
+    !canAccessOffice(before) ||
+    !canUseOfficeSurfaces(before) ||
+    before.shopId.trim() !== shopId
+  ) {
+    return {
+      kind: "canceled",
+      error:
+        "Shop session is no longer an authenticated office session for this shop — export canceled.",
+    };
+  }
+
   const got = await info.store.getShop();
+
+  const after = loadShopSession();
+  if (
+    epoch !== getSessionMutationEpoch() ||
+    !canAccessOffice(after) ||
+    !canUseOfficeSurfaces(after) ||
+    after.shopId.trim() !== shopId
+  ) {
+    return {
+      kind: "canceled",
+      error:
+        "Shop session changed during the shared pull — export canceled. Unlock and try again.",
+    };
+  }
+
   if (!got.ok) {
     return {
       kind: "shared-fallback-local",
