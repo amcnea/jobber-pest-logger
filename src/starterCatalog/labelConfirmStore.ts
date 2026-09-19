@@ -18,11 +18,11 @@ function readIds(): LabelConfirmReadResult {
     const raw = localStorage.getItem(STARTER_LABEL_CONFIRM_KEY);
     if (!raw) return { ok: true, ids: [] };
     const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return { ok: true, ids: [] };
+    if (!Array.isArray(parsed)) return { ok: false };
     const out: string[] = [];
     const seen = new Set<string>();
     for (const item of parsed) {
-      if (typeof item !== "string") continue;
+      if (typeof item !== "string") return { ok: false };
       const id = item.trim();
       if (!id || seen.has(id)) continue;
       seen.add(id);
