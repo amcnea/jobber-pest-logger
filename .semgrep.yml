@@ -54,14 +54,15 @@ rules:
     severity: WARNING
     message: Avoid logging PIN, password, or token values.
     # Regression cases (must match): pin, officePin, officePIN, pinCode, PINCode,
-    #   password, passwordHash, secret, secretKey, token, accessToken, authToken, idToken.
+    #   password, passwordHash, password_hash, secret, secretKey, secret_key,
+    #   token, token_value, accessToken, authToken, idToken.
     # Must not match: retyping, tokenizer (mid-word).
     pattern-either:
       - pattern: console.$METHOD($MSG)
       - pattern: console.$METHOD($MSG, ...)
     metavariable-regex:
       metavariable: $MSG
-      regex: .*(?:(?i:\bpin\b|pin_|_pin|\bpassword\b|passwd|\bsecret\b|\btoken\b|idToken|sessionToken|refreshToken|accessToken|authToken)|pin[A-Z][A-Za-z0-9]*|[a-z0-9]Pin\b|[a-z0-9]PIN\b|PIN[A-Z][A-Za-z0-9]*|password[A-Z][A-Za-z0-9]*|[a-z0-9]Password\b|secret[A-Z][A-Za-z0-9]*|[a-z0-9]Secret\b|token[A-Z][A-Za-z0-9]*|[a-z0-9]Token\b).*
+      regex: .*(?:(?i:\bpin\b|pin_|_pin|\bpassword\b|password_|passwd|\bsecret\b|secret_|\btoken\b|token_|idToken|sessionToken|refreshToken|accessToken|authToken)|pin[A-Z][A-Za-z0-9]*|[a-z0-9]Pin\b|[a-z0-9]PIN\b|PIN[A-Z][A-Za-z0-9]*|password[A-Z][A-Za-z0-9]*|[a-z0-9]Password\b|secret[A-Z][A-Za-z0-9]*|[a-z0-9]Secret\b|token[A-Z][A-Za-z0-9]*|[a-z0-9]Token\b).*
     paths:
       include:
         - src/**
