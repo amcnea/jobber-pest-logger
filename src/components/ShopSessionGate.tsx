@@ -56,7 +56,11 @@ export function ShopSessionTimeoutWatcher({
       // Throttle localStorage writes (~1/min while active).
       if (now - lastTouchMs.current < 60_000) return;
       lastTouchMs.current = now;
-      touchSessionActivity(now);
+      if (!touchSessionActivity(now)) return;
+      // Expiry clear during touch: refresh so unlock gate appears.
+      if (!isSessionAuthenticated(loadShopSession())) {
+        onSessionChange();
+      }
     };
 
     check();

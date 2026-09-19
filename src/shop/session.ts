@@ -211,8 +211,7 @@ export function enforceSessionExpiry(
   if (!hasJoinedShop(session)) return false;
   if (!session.role && !session.verifiedAt) return false;
   if (!isSessionExpired(session, nowMs)) return false;
-  clearSessionAuth(session);
-  return true;
+  return clearSessionAuth(session);
 }
 
 /**
@@ -225,8 +224,7 @@ export function touchSessionActivity(nowMs: number = Date.now()): boolean {
     return true;
   }
   if (isSessionExpired(session, nowMs)) {
-    clearSessionAuth(session);
-    return true;
+    return clearSessionAuth(session);
   }
   const iso = new Date(nowMs).toISOString();
   return saveShopSession({

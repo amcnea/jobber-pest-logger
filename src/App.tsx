@@ -450,7 +450,7 @@ export default function App() {
             />
           </div>
         )}
-      {peopleWarnings.length > 0 && (
+      {!shopLocked && peopleWarnings.length > 0 && (
         <div className="banner banner-due" role="status">
           <strong>License / CE reminders</strong> (in-app only; not TDA-required; no SMS). License:
           past due or within 30 days. CE: overdue or year-end (Nov/Dec) for calendar-year CEUs.
