@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   EXAMPLE_EPA_LABEL,
   catalogHasExampleProducts,
@@ -6,7 +6,20 @@ import {
   looksLikeSampleEpa,
   productEpaCaption,
 } from "../catalog";
+import { newId } from "../ids";
 import { emptyShopProduct } from "../storage";
+import {
+  STARTER_CATALOG_DISCLAIMER,
+  TEXAS_STARTER_CATALOG_VERSION,
+  addPendingLabelConfirm,
+  clearPendingLabelConfirm,
+  findShopMatchForStarter,
+  listPendingLabelConfirmIds,
+  searchTexasStarterCatalog,
+  starterEpaCaption,
+  starterToPendingShopProduct,
+  type StarterProduct,
+} from "../starterCatalog";
 import type { ShopProduct } from "../types";
 
 interface Props {
@@ -40,6 +53,19 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   const [query, setQuery] = useState("");
   const [listFilter, setListFilter] = useState<ListFilter>("active");
   const [kindFilter, setKindFilter] = useState<KindFilter>("all");
+  const [starterQuery, setStarterQuery] = useState("");
+  const [labelConfirmId, setLabelConfirmId] = useState<string | null>(null);
+  const [labelConfirmed, setLabelConfirmed] = useState(false);
+  const [pendingLabelIds, setPendingLabelIds] = useState<string[]>(() => {
+    const read = listPendingLabelConfirmIds();
+    return read.ok ? read.ids : [];
+  });
+  const [labelConfirmStoreUnavailable, setLabelConfirmStoreUnavailable] = useState(() => {
+    const read = listPendingLabelConfirmIds();
+    return !read.ok;
+  });
+  /** Ids we asked App to delete; clear pending store only after they leave catalog. */
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<string[]>([]);
 
   function startAdd() {
     setAdding(true);
@@ -99,11 +125,118 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
     cancel();
   }
 
+  function markPendingLabel(id: string) {
+    // Always keep an in-memory guard; any failed persist → fail closed.
+    setPendingLabelIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
+    const persisted = addPendingLabelConfirm(id);
+    if (!persisted) {
+      setLabelConfirmStoreUnavailable(true);
+    }
+  }
+
+  function clearPendingLabel(id: string) {
+    const cleared = clearPendingLabelConfirm(id);
+    if (!cleared) {
+      // Retain in-memory guard when persist clear fails.
+      const read = listPendingLabelConfirmIds();
+      if (!read.ok) setLabelConfirmStoreUnavailable(true);
+      return false;
+    }
+    setPendingLabelIds((ids) => ids.filter((x) => x !== id));
+    return true;
+  }
+
+  function needsLabelConfirm(id: string): boolean {
+    return pendingLabelIds.includes(id);
+  }
+
   function setArchived(product: ShopProduct, archived: boolean) {
+    // Fail closed: block all unarchive/activate while pending-id storage is unreadable.
+    if (!archived && labelConfirmStoreUnavailable) {
+      return;
+    }
+    // Never activate a starter-pending row without label confirmation.
+    if (!archived && needsLabelConfirm(product.id)) {
+      beginLabelConfirm(product.id);
+      return;
+    }
     const saved = onUpsert({ ...product, archived });
     if (!saved) return;
     if (editingId === product.id) cancel();
   }
+
+  function beginLabelConfirm(productId: string) {
+    setLabelConfirmId(productId);
+    setLabelConfirmed(false);
+    setAdding(false);
+    setEditingId(null);
+  }
+
+  function cancelLabelConfirm() {
+    setLabelConfirmId(null);
+    setLabelConfirmed(false);
+  }
+
+  function addStarterToCatalog(starter: StarterProduct) {
+    const existing = findShopMatchForStarter(catalog, starter);
+    if (existing) {
+      if (existing.archived) {
+        markPendingLabel(existing.id);
+        beginLabelConfirm(existing.id);
+      } else {
+        alert(`${existing.name} is already on your shop list.`);
+      }
+      return;
+    }
+    const pending = starterToPendingShopProduct(starter, newId());
+    // Persist guard before catalog row so reload cannot unarchive without confirm.
+    if (!addPendingLabelConfirm(pending.id)) {
+      setLabelConfirmStoreUnavailable(true);
+      return;
+    }
+    const saved = onUpsert(pending);
+    if (!saved) {
+      if (!clearPendingLabelConfirm(pending.id)) setLabelConfirmStoreUnavailable(true);
+      return;
+    }
+    setPendingLabelIds((ids) => (ids.includes(pending.id) ? ids : [...ids, pending.id]));
+    beginLabelConfirm(pending.id);
+    // Show pending rows even when the Active filter is on.
+    setListFilter("all");
+  }
+
+  function activateAfterLabelConfirm(product: ShopProduct) {
+    if (!labelConfirmed) return;
+    if (labelConfirmStoreUnavailable) return;
+    // Do not expose until upsert AND clearPending both succeed.
+    const saved = onUpsert({ ...product, archived: false });
+    if (!saved) {
+      // Leave durable pending intact — no clear was attempted.
+      return;
+    }
+    if (!clearPendingLabel(product.id)) {
+      // Clear failed: re-archive so NewLogForm cannot pick it; keep confirm open.
+      onUpsert({ ...product, archived: true });
+      setLabelConfirmStoreUnavailable(true);
+      return;
+    }
+    cancelLabelConfirm();
+  }
+
+
+  // Clear pending store ids only after a delete we requested and the row is actually gone.
+  useEffect(() => {
+    if (pendingDeleteIds.length === 0) return;
+    const present = new Set(catalog.map((p) => p.id));
+    const gone = pendingDeleteIds.filter((id) => !present.has(id));
+    if (gone.length === 0) return;
+    for (const id of gone) {
+      clearPendingLabelConfirm(id);
+    }
+    const goneSet = new Set(gone);
+    setPendingLabelIds((ids) => ids.filter((id) => !goneSet.has(id)));
+    setPendingDeleteIds((ids) => ids.filter((id) => present.has(id)));
+  }, [catalog, pendingDeleteIds]);
 
   const form = (adding || editingId) && (
     <form className="card" onSubmit={submit} noValidate>
@@ -204,8 +337,10 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return catalog.filter((p) => {
-      // Keep the product being edited visible even if filters would hide it.
+      // Keep the product being edited / label-confirmed visible even if filters would hide it.
       if (editingId && p.id === editingId) return true;
+      if (labelConfirmId && p.id === labelConfirmId) return true;
+      if (pendingLabelIds.includes(p.id)) return true;
       if (listFilter === "active" && p.archived) return false;
       if (listFilter === "archived" && !p.archived) return false;
       if (kindFilter !== "all" && p.kind !== kindFilter) return false;
@@ -215,7 +350,9 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
       }`.toLowerCase();
       return hay.includes(q);
     });
-  }, [catalog, query, listFilter, kindFilter, editingId]);
+  }, [catalog, query, listFilter, kindFilter, editingId, labelConfirmId, pendingLabelIds]);
+
+  const starterResults = useMemo(() => searchTexasStarterCatalog(starterQuery), [starterQuery]);
 
   return (
     <div>
@@ -226,6 +363,74 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
         examples. Real CSV/PDF export stays disabled until examples are removed from the catalog and
         from any saved logs that still reference them.
       </p>
+
+      {labelConfirmStoreUnavailable && (
+        <div className="nag" role="alert">
+          <p>
+            Label-confirm storage is unavailable on this device. Activating or unarchiving products is
+            blocked until storage works again.
+          </p>
+        </div>
+      )}
+
+      {!adding && editingId === null && (
+        <div className="card catalog-filters">
+          <h3>Texas starter catalog</h3>
+          <p className="hint" role="note">
+            {STARTER_CATALOG_DISCLAIMER} Version {TEXAS_STARTER_CATALOG_VERSION}.
+          </p>
+          <label className="field">
+            Search starter list
+            <input
+              type="search"
+              value={starterQuery}
+              onChange={(e) => setStarterQuery(e.target.value)}
+              placeholder="Name or EPA #"
+              autoComplete="off"
+              disabled={labelConfirmId !== null}
+            />
+          </label>
+          <p className="hint" role="status">
+            Showing {starterResults.length} starter row{starterResults.length === 1 ? "" : "s"}. Add
+            copies into your shop list; techs still only pick shop-owned active rows.
+          </p>
+          <div className="starter-results">
+            {starterResults.map((starter) => {
+              const match = findShopMatchForStarter(catalog, starter);
+              const alreadyActive = match && !match.archived;
+              const alreadyPending = match && match.archived;
+              return (
+                <div className="card-head" key={starter.id} style={{ marginBottom: "0.65rem" }}>
+                  <div>
+                    <strong>{starter.name}</strong>
+                    <div>
+                      <span className="chip">{starter.kind}</span>{" "}
+                      <span className="chip">{starterEpaCaption(starter)}</span>
+                      {alreadyActive && <span className="chip">on shop list</span>}
+                      {alreadyPending && <span className="chip">pending label confirm</span>}
+                    </div>
+                  </div>
+                  <div className="card-actions">
+                    {alreadyActive ? (
+                      <span className="hint">Already in catalog</span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        disabled={labelConfirmId !== null}
+                        onClick={() => addStarterToCatalog(starter)}
+                      >
+                        {alreadyPending ? "Confirm label…" : "Add to my catalog"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {hasExamples && !adding && (
         <div className="nag" role="status">
           <p>
@@ -251,7 +456,13 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
         </div>
       )}
       {!adding && (
-        <button type="button" className="btn btn-primary" onClick={startAdd} style={{ marginBottom: "0.85rem" }}>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={startAdd}
+          style={{ marginBottom: "0.85rem" }}
+          disabled={labelConfirmId !== null}
+        >
           Add product
         </button>
       )}
@@ -313,6 +524,42 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
         <article className={`card${product.archived ? " card-archived" : ""}`} key={product.id}>
           {editingId === product.id ? (
             form
+          ) : labelConfirmId === product.id ? (
+            <div>
+              <h3>Confirm label before activate</h3>
+              <p className="hint">
+                Check the physical product label. Name and EPA # on your shop list must match the
+                label before this row becomes available on New log.
+              </p>
+              <p>
+                <strong>{product.name}</strong>
+              </p>
+              <p className="hint">
+                <span className="chip">{product.kind}</span>{" "}
+                <span className="chip">{productEpaCaption(product)}</span>
+              </p>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={labelConfirmed}
+                  onChange={(e) => setLabelConfirmed(e.target.checked)}
+                />
+                I confirmed the product name and EPA # against the product label
+              </label>
+              <div className="sticky-save sticky-actions row">
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={!labelConfirmed || labelConfirmStoreUnavailable}
+                  onClick={() => activateAfterLabelConfirm(product)}
+                >
+                  Confirm label &amp; activate
+                </button>
+                <button type="button" className="btn btn-secondary" onClick={cancelLabelConfirm}>
+                  Leave archived
+                </button>
+              </div>
+            </div>
           ) : (
             <>
               <div className="card-head">
@@ -320,31 +567,76 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                   <strong>{product.name}</strong>
                   <div>
                     {product.archived && <span className="chip">archived</span>}{" "}
+                    {needsLabelConfirm(product.id) && (
+                      <span className="chip sample">needs label confirm</span>
+                    )}{" "}
                     {product.isExample && <span className="chip sample">example</span>}{" "}
                     <span className="chip">{product.kind}</span>{" "}
                     <span className="chip">{productEpaCaption(product)}</span>
                   </div>
                 </div>
                 <div className="card-actions">
-                  <button type="button" className="btn btn-secondary" onClick={() => startEdit(product)}>
+                  {product.archived && needsLabelConfirm(product.id) && (
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => beginLabelConfirm(product.id)}
+                      disabled={labelConfirmId !== null}
+                    >
+                      Confirm label
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => startEdit(product)}
+                    disabled={labelConfirmId !== null}
+                  >
                     Edit
                   </button>
                   {!product.isExample && (
                     <button
                       type="button"
                       className="btn btn-secondary"
-                      onClick={() => setArchived(product, !product.archived)}
+                      disabled={
+                        labelConfirmId !== null ||
+                        (product.archived &&
+                          labelConfirmStoreUnavailable &&
+                          !needsLabelConfirm(product.id))
+                      }
+                      onClick={() => {
+                        if (product.archived && labelConfirmStoreUnavailable && !needsLabelConfirm(product.id)) {
+                          return;
+                        }
+                        if (product.archived && needsLabelConfirm(product.id)) {
+                          beginLabelConfirm(product.id);
+                          return;
+                        }
+                        setArchived(product, !product.archived);
+                      }}
                     >
-                      {product.archived ? "Unarchive" : "Archive"}
+                      {product.archived
+                        ? needsLabelConfirm(product.id)
+                          ? "Confirm label…"
+                          : labelConfirmStoreUnavailable
+                            ? "Unarchive blocked"
+                            : "Unarchive"
+                        : "Archive"}
                     </button>
                   )}
                   <button
                     type="button"
                     className="btn btn-ghost"
+                    disabled={labelConfirmId !== null}
                     onClick={() => {
                       if (!confirm(`Delete ${product.name} from the shop list?`)) return;
                       onDelete(product.id);
+                      setPendingDeleteIds((ids) =>
+                        ids.includes(product.id) ? ids : [...ids, product.id],
+                      );
+                      // Pending clear waits until catalog no longer contains this id (effect above).
                       if (editingId === product.id) cancel();
+                      if (labelConfirmId === product.id) cancelLabelConfirm();
                     }}
                   >
                     Delete
