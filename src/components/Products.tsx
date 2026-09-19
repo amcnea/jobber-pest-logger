@@ -126,12 +126,11 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   }
 
   function markPendingLabel(id: string) {
-    // Always keep an in-memory guard; persist is best-effort.
+    // Always keep an in-memory guard; any failed persist → fail closed.
     setPendingLabelIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
     const persisted = addPendingLabelConfirm(id);
     if (!persisted) {
-      const read = listPendingLabelConfirmIds();
-      if (!read.ok) setLabelConfirmStoreUnavailable(true);
+      setLabelConfirmStoreUnavailable(true);
     }
   }
 
