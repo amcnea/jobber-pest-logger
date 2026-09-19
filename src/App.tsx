@@ -276,6 +276,12 @@ export default function App() {
       setStorageError("Unlock the shared shop with a PIN before changing logs.");
       return;
     }
+    // Confirm can outlive idle TTL — revalidate before mutating.
+    if (needsShopUnlock(loadShopSession())) {
+      setStorageError("Unlock the shared shop with a PIN before changing logs.");
+      handleShopSessionChange();
+      return;
+    }
     if (!allowOfficeSurfaces) {
       setStorageError("Tech sessions cannot delete saved logs. Ask office.");
       return;

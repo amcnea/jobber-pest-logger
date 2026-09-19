@@ -7,6 +7,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import {
   bootstrapShopPins,
+  bumpSessionMutationEpoch,
   enforceSessionExpiry,
   hasJoinedShop,
   isSessionAuthenticated,
@@ -74,6 +75,8 @@ export function ShopSessionTimeoutWatcher({
 
     const onStorage = (e: StorageEvent) => {
       if (e.key !== null && e.key !== SHOP_SESSION_KEY) return;
+      // Other tab leave/sign-out only bumps that tab's in-memory epoch — invalidate here too.
+      bumpSessionMutationEpoch();
       check();
     };
 

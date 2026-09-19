@@ -20,6 +20,7 @@ import {
   joinShop,
   leaveShop,
   loadShopSession,
+  needsShopUnlock,
   SESSION_IDLE_MS,
   SESSION_TTL_MS,
   sessionRole,
@@ -290,6 +291,13 @@ export function Settings({
       "Restore this backup? It replaces all logs, catalog, people, and settings currently saved on this device.",
     );
     if (!confirmed) return;
+
+    // Confirm can outlive idle TTL — revalidate before mutating.
+    if (needsShopUnlock(loadShopSession())) {
+      setBackupError("Unlock the shared shop with a PIN before restoring a backup.");
+      onShopSessionChange?.();
+      return;
+    }
 
     const applied = applyBackup(result.backup);
     if (!applied) {
@@ -845,6 +853,12 @@ export function Settings({
                 "Last chance: permanently wipe real shop data (logs, products, people, settings) on this device?",
               )
             ) {
+              return;
+            }
+            // Confirm can outlive idle TTL — revalidate before mutating.
+            if (needsShopUnlock(loadShopSession())) {
+              setDemoMsg("Unlock the shared shop with a PIN before wiping.");
+              onShopSessionChange?.();
               return;
             }
             const result = onWipeAll();

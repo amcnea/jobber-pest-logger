@@ -238,11 +238,21 @@ export function touchSessionActivity(nowMs: number = Date.now()): boolean {
   if (isSessionExpired(session, nowMs)) {
     return clearSessionAuth(session);
   }
+  // Re-read: another tab may have signed out/left — do not rewrite cleared auth.
+  const live = loadShopSession();
+  if (
+    !isSessionAuthenticated(live, nowMs) ||
+    live.shopId.trim() !== session.shopId.trim() ||
+    live.role !== session.role ||
+    live.verifiedAt !== session.verifiedAt
+  ) {
+    return true;
+  }
   const iso = new Date(nowMs).toISOString();
   return saveShopSession({
-    shopId: session.shopId,
-    role: session.role,
-    verifiedAt: session.verifiedAt,
+    shopId: live.shopId,
+    role: live.role,
+    verifiedAt: live.verifiedAt,
     lastActiveAt: iso,
   });
 }
