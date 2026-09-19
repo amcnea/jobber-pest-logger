@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   EXAMPLE_EPA_LABEL,
   catalogHasExampleProducts,
@@ -60,12 +60,70 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
     const read = listPendingLabelConfirmIds();
     return read.ok ? read.ids : [];
   });
+  const pendingLabelIdsRef = useRef(pendingLabelIds);
+  pendingLabelIdsRef.current = pendingLabelIds;
   const [labelConfirmStoreUnavailable, setLabelConfirmStoreUnavailable] = useState(() => {
     const read = listPendingLabelConfirmIds();
     return !read.ok;
   });
   /** Ids we asked App to delete; clear pending store only after they leave catalog. */
   const [pendingDeleteIds, setPendingDeleteIds] = useState<string[]>([]);
+
+  /**
+   * After every successful storage read, sync durable IDs with pendingLabelIds.
+   * Keep unavailable set while any in-memory pending ID is not durably represented.
+   * Clear unavailable only when durable and in-memory pending state fully match.
+   */
+  function reconcilePendingLabelState() {
+    const read = listPendingLabelConfirmIds();
+    if (!read.ok) {
+      setLabelConfirmStoreUnavailable(true);
+      return;
+    }
+
+    const durableIds = read.ids;
+    const durableSet = new Set(durableIds);
+    const memoryIds = pendingLabelIdsRef.current;
+
+    // Union: all durable ids must be in memory.
+    const union = Array.from(new Set([...memoryIds, ...durableIds]));
+
+    // Persist any in-memory id not yet durable.
+    let persistFailed = false;
+    for (const id of memoryIds) {
+      if (!durableSet.has(id)) {
+        if (!addPendingLabelConfirm(id)) {
+          persistFailed = true;
+        }
+      }
+    }
+
+    const after = listPendingLabelConfirmIds();
+    if (!after.ok) {
+      setLabelConfirmStoreUnavailable(true);
+      pendingLabelIdsRef.current = union;
+      setPendingLabelIds(union);
+      return;
+    }
+
+    // Prefer durable set ∪ any in-memory ids that still could not be persisted.
+    const stillOnlyInMemory = memoryIds.filter((id) => !after.ids.includes(id));
+    const reconciled = Array.from(new Set([...after.ids, ...stillOnlyInMemory]));
+    pendingLabelIdsRef.current = reconciled;
+    setPendingLabelIds(reconciled);
+
+    if (!persistFailed && stillOnlyInMemory.length === 0) {
+      setLabelConfirmStoreUnavailable(false);
+    } else {
+      setLabelConfirmStoreUnavailable(true);
+    }
+  }
+
+  // Recover: re-read durable pending and clear unavailable only when fully reconciled.
+  useEffect(() => {
+    reconcilePendingLabelState();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount recovery only
+  }, []);
 
   function startAdd() {
     setAdding(true);
@@ -127,22 +185,38 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
 
   function markPendingLabel(id: string) {
     // Always keep an in-memory guard; any failed persist → fail closed.
-    setPendingLabelIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
+    const next = pendingLabelIdsRef.current.includes(id)
+      ? pendingLabelIdsRef.current
+      : [...pendingLabelIdsRef.current, id];
+    pendingLabelIdsRef.current = next;
+    setPendingLabelIds(next);
     const persisted = addPendingLabelConfirm(id);
     if (!persisted) {
       setLabelConfirmStoreUnavailable(true);
     }
+    // Do not clear unavailable merely because one add returned true — reconcile decides.
+    reconcilePendingLabelState();
   }
 
   function clearPendingLabel(id: string) {
     const cleared = clearPendingLabelConfirm(id);
     if (!cleared) {
-      // Retain in-memory guard when persist clear fails.
+      // Retain in-memory guard when persist clear fails; do not clear unavailable here.
+      setLabelConfirmStoreUnavailable(true);
+      // Opportunistically pull durable ids into memory without clearing the flag.
       const read = listPendingLabelConfirmIds();
-      if (!read.ok) setLabelConfirmStoreUnavailable(true);
+      if (read.ok) {
+        const union = Array.from(new Set([...pendingLabelIdsRef.current, ...read.ids]));
+        pendingLabelIdsRef.current = union;
+        setPendingLabelIds(union);
+      }
       return false;
     }
-    setPendingLabelIds((ids) => ids.filter((x) => x !== id));
+    const next = pendingLabelIdsRef.current.filter((x) => x !== id);
+    pendingLabelIdsRef.current = next;
+    setPendingLabelIds(next);
+    // Do not clear unavailable merely because one clear returned true — reconcile decides.
+    reconcilePendingLabelState();
     return true;
   }
 
@@ -199,7 +273,12 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
       if (!clearPendingLabelConfirm(pending.id)) setLabelConfirmStoreUnavailable(true);
       return;
     }
-    setPendingLabelIds((ids) => (ids.includes(pending.id) ? ids : [...ids, pending.id]));
+    const nextPending = pendingLabelIdsRef.current.includes(pending.id)
+      ? pendingLabelIdsRef.current
+      : [...pendingLabelIdsRef.current, pending.id];
+    pendingLabelIdsRef.current = nextPending;
+    setPendingLabelIds(nextPending);
+    reconcilePendingLabelState();
     beginLabelConfirm(pending.id);
     // Show pending rows even when the Active filter is on.
     setListFilter("all");
@@ -216,9 +295,14 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
     }
     if (!clearPendingLabel(product.id)) {
       // Clear failed: re-archive so NewLogForm cannot pick it; keep confirm open.
-      onUpsert({ ...product, archived: true });
+      const reArchived = onUpsert({ ...product, archived: true });
       setLabelConfirmStoreUnavailable(true);
-      return;
+      if (!reArchived) {
+        alert(
+          `${product.name} is active but label confirmation could not be saved. Archive this product manually before techs use it.`,
+        );
+      }
+      return; // keep confirm open
     }
     cancelLabelConfirm();
   }
@@ -234,7 +318,11 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
       clearPendingLabelConfirm(id);
     }
     const goneSet = new Set(gone);
-    setPendingLabelIds((ids) => ids.filter((id) => !goneSet.has(id)));
+    setPendingLabelIds((ids) => {
+      const next = ids.filter((id) => !goneSet.has(id));
+      pendingLabelIdsRef.current = next;
+      return next;
+    });
     setPendingDeleteIds((ids) => ids.filter((id) => present.has(id)));
   }, [catalog, pendingDeleteIds]);
 
