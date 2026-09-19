@@ -31,6 +31,8 @@ import {
   isValidShopId,
   loadShopSession,
   saveShopSession,
+  bumpSessionMutationEpoch,
+  getSessionMutationEpoch,
 } from "./session";
 import { generateShopCode, normalizeShopCode } from "./shopCode";
 import type { ShopDocument, ShopPinAuth } from "./types";
@@ -118,7 +120,7 @@ async function persistAuthenticatedSession(
   role: ShopRole,
 ): Promise<string | null> {
   const verifiedAt = new Date().toISOString();
-  if (!saveShopSession({ shopId, role, verifiedAt })) {
+  if (!saveShopSession({ shopId, role, verifiedAt, lastActiveAt: verifiedAt })) {
     return "this device could not save the session (storage blocked).";
   }
   return null;
@@ -410,6 +412,7 @@ export async function signInShop(
   rawCode: string,
   input: RolePinInput,
 ): Promise<CreateJoinResult> {
+  const opEpoch = getSessionMutationEpoch();
   const fb = requireFirebase();
   if (!fb.ok) return fb;
 
@@ -464,6 +467,10 @@ export async function signInShop(
     input.role,
   );
   if (!membership.ok) return { ok: false, error: membership.error };
+
+  if (opEpoch !== getSessionMutationEpoch()) {
+    return { ok: false, error: "Sign-in cancelled — shop session was left on this device." };
+  }
 
   const sessionErr = await persistAuthenticatedSession(shopId, input.role);
   if (sessionErr) {
@@ -676,6 +683,8 @@ export function leaveShop(): CreateJoinResult {
   if (!hasJoinedShop(session)) {
     return { ok: false, error: "This device is not joined to a shared shop." };
   }
+  // Invalidate in-flight signInShop / bootstrap that might still persist a session.
+  bumpSessionMutationEpoch();
   const shopId = session.shopId.trim();
   if (!clearShopSession()) {
     return { ok: false, error: "Could not clear shop session on this device." };

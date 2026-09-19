@@ -13,12 +13,16 @@ import {
   canAccessOffice,
   changeShopPins,
   createShop,
+  formatDurationMs,
   hasJoinedShop,
   isFirebaseConfigured,
   isSessionAuthenticated,
   joinShop,
   leaveShop,
   loadShopSession,
+  needsShopUnlock,
+  SESSION_IDLE_MS,
+  SESSION_TTL_MS,
   sessionRole,
   shopStoreStatusHint,
   signOutShop,
@@ -288,6 +292,13 @@ export function Settings({
     );
     if (!confirmed) return;
 
+    // Confirm can outlive idle TTL — revalidate before mutating.
+    if (needsShopUnlock(loadShopSession())) {
+      setBackupError("Unlock the shared shop with a PIN before restoring a backup.");
+      onShopSessionChange?.();
+      return;
+    }
+
     const applied = applyBackup(result.backup);
     if (!applied) {
       setBackupError("Could not write restored data (storage full or blocked).");
@@ -319,8 +330,17 @@ export function Settings({
         create, join, or unlock with a PIN. Requires Firebase env from <code>.env.example</code>, Anonymous
         Auth enabled in the console, and in-repo <code>firestore.rules</code> deployed before
         membership enforcement. First create makes this device the office owner. PINs are salted
-        hashes — never stored plaintext in session. Cloud sync is <strong>not</strong> the 2-year
-        premises retention path — keep Export / backup and the Lawgical disclaimer.
+        hashes — never stored plaintext in session.
+      </p>
+      <p className="hint roles-not-tda" role="note">
+        <strong>Roles ≠ TDA.</strong> Office and tech control app access only (screens + PINs). They
+        are not TDA/SPCS compliance status, license class, or certified-applicator standing.
+      </p>
+      <p className="hint premises-keepalive" role="note">
+        <strong>Premises keep-alive:</strong> Cloud sync is <strong>not</strong> the Texas § 7.144
+        two-year on-premises retention path. Keep Export (CSV/PDF) and Settings → Download backup
+        JSON visible on this device; the Lawgical disclaimer below still applies. This app does not
+        run a retention engine.
       </p>
       <div className="card settings-backup-actions shop-card">
         {!firebaseOk && (
@@ -363,6 +383,21 @@ export function Settings({
                 export, and edit/delete.
               </p>
             )}
+            <p className="hint session-timeout-chrome" role="status">
+              Session timeout: signs out after{" "}
+              <strong>{formatDurationMs(SESSION_IDLE_MS)}</strong> idle or{" "}
+              <strong>{formatDurationMs(SESSION_TTL_MS)}</strong> since last PIN unlock.
+              {firebaseOk ? (
+                <> Unlock again with role + PIN.</>
+              ) : (
+                <>
+                  {" "}
+                  Firebase is unavailable, so PIN unlock is not offered here — leave shop to return
+                  to local-only.
+                </>
+              )}{" "}
+              Local logs, catalog, people, and backups stay on this device.
+            </p>
             <div className="shop-session-actions">
               <button
                 type="button"
@@ -721,6 +756,8 @@ export function Settings({
       <p className="hint">
         Download one JSON file with logs, catalog, people, settings, and a version stamp. Restore
         replaces everything on this device after you confirm. Invalid or garbage files are rejected.
+        Prefer this JSON backup (and Export CSV/PDF) for the shop&apos;s 2-year premises retention
+        path — cloud sync alone does not meet that duty.
       </p>
       <p className="hint" role="status">
         {lastBackupLabel}
@@ -816,6 +853,12 @@ export function Settings({
                 "Last chance: permanently wipe real shop data (logs, products, people, settings) on this device?",
               )
             ) {
+              return;
+            }
+            // Confirm can outlive idle TTL — revalidate before mutating.
+            if (needsShopUnlock(loadShopSession())) {
+              setDemoMsg("Unlock the shared shop with a PIN before wiping.");
+              onShopSessionChange?.();
               return;
             }
             const result = onWipeAll();

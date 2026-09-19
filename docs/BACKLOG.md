@@ -35,3 +35,4 @@ From CodeRabbit on PR #40 (`bundle-20260919-1210` @ `5861be7`). Majors are owner
 - `src/starterCatalog/labelConfirmStore.ts:21-25` — recovery must preserve pending IDs on malformed array (fail closed, don’t wipe to `[]`). https://github.com/amcnea/jobber-pest-logger/pull/40#discussion_r4053979440
 
 Note: Catalog Major EPA fix (`texasCommon.ts` Demand CS `100-1063` → `100-1066`) is **not** backlog — owner must backport on #33.
+
