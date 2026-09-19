@@ -3,6 +3,7 @@ import { TEXAS_COMMON_STARTER, TEXAS_STARTER_CATALOG_VERSION } from "./texasComm
 import type { StarterProduct } from "./types";
 
 export type { StarterProduct } from "./types";
+export type { LabelConfirmReadResult } from "./labelConfirmStore";
 export { TEXAS_COMMON_STARTER, TEXAS_STARTER_CATALOG_VERSION };
 
 export const STARTER_CATALOG_DISCLAIMER =
