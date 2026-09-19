@@ -378,9 +378,17 @@ export function Settings({
             <p className="hint session-timeout-chrome" role="status">
               Session timeout: signs out after{" "}
               <strong>{formatDurationMs(SESSION_IDLE_MS)}</strong> idle or{" "}
-              <strong>{formatDurationMs(SESSION_TTL_MS)}</strong> since last PIN unlock. Unlock again
-              with shop code + role + PIN. Local logs, catalog, people, and backups stay on this
-              device.
+              <strong>{formatDurationMs(SESSION_TTL_MS)}</strong> since last PIN unlock.
+              {firebaseOk ? (
+                <> Unlock again with shop code + role + PIN.</>
+              ) : (
+                <>
+                  {" "}
+                  Firebase is unavailable, so PIN unlock is not offered here — leave shop to return
+                  to local-only.
+                </>
+              )}{" "}
+              Local logs, catalog, people, and backups stay on this device.
             </p>
             <div className="shop-session-actions">
               <button

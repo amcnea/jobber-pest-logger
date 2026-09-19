@@ -11,6 +11,7 @@ import {
   hasJoinedShop,
   isSessionAuthenticated,
   loadShopSession,
+  SHOP_SESSION_KEY,
   signInShop,
   touchSessionActivity,
   type ShopRole,
@@ -40,8 +41,18 @@ export function ShopSessionTimeoutWatcher({
   const lastTouchMs = useRef(0);
 
   useEffect(() => {
+    const sessionFingerprint = () => {
+      const s = loadShopSession();
+      return `${s.shopId.trim()}:${isSessionAuthenticated(s) ? "1" : "0"}`;
+    };
+    let lastFp = sessionFingerprint();
+
     const check = () => {
-      if (enforceSessionExpiry()) {
+      enforceSessionExpiry();
+      const fp = sessionFingerprint();
+      // Notify on auth/shopId change (expiry clear, other-tab sign-out/leave, failed clear no-op).
+      if (fp !== lastFp) {
+        lastFp = fp;
         onSessionChange();
       }
     };
@@ -57,10 +68,12 @@ export function ShopSessionTimeoutWatcher({
       if (now - lastTouchMs.current < 60_000) return;
       lastTouchMs.current = now;
       if (!touchSessionActivity(now)) return;
-      // Expiry clear during touch: refresh so unlock gate appears.
-      if (!isSessionAuthenticated(loadShopSession())) {
-        onSessionChange();
-      }
+      check();
+    };
+
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== null && e.key !== SHOP_SESSION_KEY) return;
+      check();
     };
 
     check();
@@ -81,6 +94,7 @@ export function ShopSessionTimeoutWatcher({
     document.addEventListener("visibilitychange", onVis);
     window.addEventListener("pointerdown", touch, { passive: true });
     window.addEventListener("keydown", touch);
+    window.addEventListener("storage", onStorage);
     // Catch idle expiry while the tab stays open without interaction.
     const interval = window.setInterval(check, 60_000);
 
@@ -89,6 +103,7 @@ export function ShopSessionTimeoutWatcher({
       document.removeEventListener("visibilitychange", onVis);
       window.removeEventListener("pointerdown", touch);
       window.removeEventListener("keydown", touch);
+      window.removeEventListener("storage", onStorage);
       window.clearInterval(interval);
     };
   }, [onSessionChange]);

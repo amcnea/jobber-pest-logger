@@ -37,6 +37,7 @@ import {
   canUseOfficeSurfaces,
   flushLogOutbox,
   isFirebaseConfigured,
+  leaveShop,
   loadShopSession,
   needsShopUnlock,
   outboxEntriesForShop,
@@ -450,6 +451,32 @@ export default function App() {
             />
           </div>
         )}
+      {shopLocked && !isFirebaseConfigured() && (
+        <div className="banner banner-due" role="region" aria-label="Shared shop recovery">
+          <strong>Shared shop remembered, but Firebase is not configured</strong>
+          <p>
+            PIN unlock needs Firebase. Leave the remembered shop to use this device local-only.
+            Local logs, catalog, people, and backups stay on this device.
+          </p>
+          <div style={{ marginTop: "0.5rem" }}>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                const result = leaveShop();
+                if (!result.ok) {
+                  setStorageError(result.error ?? "Could not leave the remembered shop.");
+                  return;
+                }
+                setStorageError(null);
+                handleShopSessionChange();
+              }}
+            >
+              Leave shop (local-only)
+            </button>
+          </div>
+        </div>
+      )}
       {!shopLocked && peopleWarnings.length > 0 && (
         <div className="banner banner-due" role="status">
           <strong>License / CE reminders</strong> (in-app only; not TDA-required; no SMS). License:
