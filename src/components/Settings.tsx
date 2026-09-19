@@ -5,7 +5,10 @@ import {
   backupNagMessage,
   downloadBackup,
   formatLastBackupLabel,
+  loadCatalog,
   loadLastBackupAt,
+  loadLogs,
+  loadPeople,
   parseBackup,
 } from "../storage";
 import type { ApplicationLog, Person, ShopProduct, ShopSettings } from "../types";
@@ -21,9 +24,11 @@ import {
   leaveShop,
   loadShopSession,
   needsShopUnlock,
+  resolveExportSections,
   SESSION_IDLE_MS,
   SESSION_TTL_MS,
   sessionRole,
+  sharedExportPullHint,
   shopStoreStatusHint,
   signOutShop,
   type ShopRole,
@@ -75,6 +80,7 @@ export function Settings({
     flash?.slot === "backup" ? flash.text : null,
   );
   const [backupError, setBackupError] = useState<string | null>(null);
+  const [backupBusy, setBackupBusy] = useState(false);
   const [demoMsg, setDemoMsg] = useState<string | null>(
     flash?.slot === "demo" ? flash.text : null,
   );
@@ -105,6 +111,7 @@ export function Settings({
   const officeOk = canAccessOffice();
   const lastBackupLabel = formatLastBackupLabel(lastBackupAt);
   const nag = backupNagMessage(lastBackupAt);
+  const sharedPullHint = sharedExportPullHint();
 
   /** Sync local Settings state from session storage — does NOT bump App tick. */
   function syncShopSessionUi(nextShopId?: string) {
@@ -759,6 +766,11 @@ export function Settings({
         Prefer this JSON backup (and Export CSV/PDF) for the shop&apos;s 2-year premises retention
         path — cloud sync alone does not meet that duty.
       </p>
+      {sharedPullHint && (
+        <p className="hint premises-keepalive" role="note">
+          {sharedPullHint}
+        </p>
+      )}
       <p className="hint" role="status">
         {lastBackupLabel}
       </p>
@@ -771,14 +783,40 @@ export function Settings({
         <button
           type="button"
           className="btn btn-primary"
+          disabled={backupBusy}
           onClick={() => {
-            setBackupError(null);
-            downloadBackup();
-            onBackupStampChange(loadLastBackupAt());
-            setBackupMsg("Backup downloaded.");
+            void (async () => {
+              setBackupError(null);
+              setBackupMsg(null);
+              setBackupBusy(true);
+              try {
+                const pulled = await resolveExportSections({
+                  logs: loadLogs(),
+                  catalog: loadCatalog(),
+                  people: loadPeople(),
+                  settings,
+                });
+                if (pulled.kind === "shared-fallback-local") {
+                  setBackupError(
+                    `Shared shop pull failed (${pulled.shopId}): ${pulled.error} Downloaded this device's local copy instead — it may not match the full shop.`,
+                  );
+                }
+                downloadBackup(pulled.sections);
+                onBackupStampChange(loadLastBackupAt());
+                setBackupMsg(
+                  pulled.kind === "shared"
+                    ? "Backup downloaded from shared shop snapshot."
+                    : pulled.kind === "shared-fallback-local"
+                      ? "Local backup downloaded (shared pull failed — see alert)."
+                      : "Backup downloaded.",
+                );
+              } finally {
+                setBackupBusy(false);
+              }
+            })();
           }}
         >
-          Download backup JSON
+          {backupBusy ? "Preparing…" : "Download backup JSON"}
         </button>
         <input
           ref={fileRef}
