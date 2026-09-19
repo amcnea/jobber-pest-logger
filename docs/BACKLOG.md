@@ -22,3 +22,14 @@ Client Anonymous Auth + Firestore rules cannot prove a PIN check. Until a truste
 ## Offline outbox — cross-tab atomicity (#6 follow-up)
 
 `localStorage` outbox read-modify-write is not atomic across browser tabs. Two tabs can enqueue different logs and overwrite each other. Fix with IndexedDB transactions or a cross-tab lock (`navigator.locks`) when we harden multi-device desk use. Single-tab tech phones are the primary #6 path.
+
+## Catalog / starter label-confirm — deferred Minors (Bundle #40)
+
+From CodeRabbit on tip `4767bea` / Bundle #40. Non-security Minors — do not auto-cycle Bundle for these alone (Charles process). Ping Charles when picking up.
+
+1. **Products.tsx ~63–64** — Keep ref writes out of render / state updaters (`pendingLabelIdsRef`); use `clearPendingLabel` in the delete effect.  
+   https://github.com/amcnea/jobber-pest-logger/pull/40#discussion_r4053979434
+
+2. **labelConfirmStore.ts ~21–25** — Malformed-array recovery must preserve or re-mark pending IDs (fail closed stays; no silent clear-to-empty that drops confirm guards).  
+   https://github.com/amcnea/jobber-pest-logger/pull/40#discussion_r4053979440
+

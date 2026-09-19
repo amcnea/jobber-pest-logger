@@ -4,7 +4,7 @@ import type { StarterProduct } from "./types";
  * Version stamp for the bundled Texas-common starter list.
  * Bump when rows are added/changed so offices can see which pack they searched.
  */
-export const TEXAS_STARTER_CATALOG_VERSION = "2026.09.1";
+export const TEXAS_STARTER_CATALOG_VERSION = "2026.09.2";
 
 /**
  * Curated, incomplete Texas structural-pest starter/reference list.
@@ -35,7 +35,7 @@ export const TEXAS_COMMON_STARTER: StarterProduct[] = [
   {
     id: "tx-demand-cs",
     name: "Demand CS Insecticide",
-    epaRegNo: "100-1063",
+    epaRegNo: "100-1066",
     is25b: false,
     kind: "pesticide",
   },
