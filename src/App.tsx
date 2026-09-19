@@ -457,7 +457,7 @@ export default function App() {
           <p>
             {isFirebaseConfigured() ? (
               <>
-                Unlock with shop code + role + PIN above, or leave to use this device local-only.
+                Unlock with role + PIN above, or leave to use this device local-only.
               </>
             ) : (
               <>

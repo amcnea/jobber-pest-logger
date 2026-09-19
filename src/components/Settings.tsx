@@ -380,7 +380,7 @@ export function Settings({
               <strong>{formatDurationMs(SESSION_IDLE_MS)}</strong> idle or{" "}
               <strong>{formatDurationMs(SESSION_TTL_MS)}</strong> since last PIN unlock.
               {firebaseOk ? (
-                <> Unlock again with shop code + role + PIN.</>
+                <> Unlock again with role + PIN.</>
               ) : (
                 <>
                   {" "}

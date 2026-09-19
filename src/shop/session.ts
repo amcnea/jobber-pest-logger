@@ -4,6 +4,18 @@ import type { ShopSession } from "./types";
 /** Small meta key — not part of backup/wipe payload in #1. */
 export const SHOP_SESSION_KEY = "jobber-pest-logger:shop-session:v1";
 
+/** Bumped by leaveShop so in-flight signInShop cannot restore a left session. */
+let sessionMutationEpoch = 0;
+
+export function bumpSessionMutationEpoch(): number {
+  sessionMutationEpoch += 1;
+  return sessionMutationEpoch;
+}
+
+export function getSessionMutationEpoch(): number {
+  return sessionMutationEpoch;
+}
+
 /** Soft absolute lifetime after PIN verify (re-enter PIN when stale). */
 export const SESSION_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 

@@ -173,7 +173,7 @@ Session fields:
 | `verifiedAt` | ISO time of last successful PIN verify (absolute soft TTL **14 days**) |
 | `lastActiveAt` | ISO time of last UI activity (idle soft TTL **8 hours**, #8) |
 
-**Sign-out** clears `role` + `verifiedAt` (+ `lastActiveAt`) but keeps `shopId` for convenient unlock. Idle or absolute TTL expiry does the same — unlock again with shop code + role + PIN; local data is not wiped. **Leave** clears the whole session (back to local-only). Raw PINs are **never** stored in localStorage. Firebase Anonymous uid is kept across sign-out/leave so re-join is stable.
+**Sign-out** clears `role` + `verifiedAt` (+ `lastActiveAt`) but keeps `shopId` for convenient unlock. Idle or absolute TTL expiry does the same — unlock again with role + PIN; local data is not wiped. **Leave** clears the whole session (back to local-only). Raw PINs are **never** stored in localStorage. Firebase Anonymous uid is kept across sign-out/leave so re-join is stable.
 
 **#8 Harden:** office/tech are **app access only** (not TDA/SPCS compliance status). Cloud sync is **not** the § 7.144 two-year premises retention path — keep Export + JSON backup.
 

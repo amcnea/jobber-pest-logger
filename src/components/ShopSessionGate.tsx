@@ -94,6 +94,7 @@ export function ShopSessionTimeoutWatcher({
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVis);
     window.addEventListener("pointerdown", touch, { passive: true });
+    window.addEventListener("wheel", touch, { passive: true });
     window.addEventListener("keydown", touch);
     window.addEventListener("storage", onStorage);
     // Catch idle expiry while the tab stays open without interaction.
@@ -103,6 +104,7 @@ export function ShopSessionTimeoutWatcher({
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVis);
       window.removeEventListener("pointerdown", touch);
+      window.removeEventListener("wheel", touch);
       window.removeEventListener("keydown", touch);
       window.removeEventListener("storage", onStorage);
       window.clearInterval(interval);
