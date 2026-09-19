@@ -46,7 +46,7 @@ import {
   shopStoreStatusHint,
   syncLogToRemote,
 } from "./shop";
-import { ShopSessionGate } from "./components/ShopSessionGate";
+import { ShopSessionGate, ShopSessionTimeoutWatcher } from "./components/ShopSessionGate";
 import "./App.css";
 
 export default function App() {
@@ -416,6 +416,7 @@ export default function App() {
             {!allowOfficeSurfaces && (
               <> · New log + History only (office manages catalog, people, settings, export)</>
             )}
+            <> · app access only (not TDA/SPCS status)</>
           </p>
         )}
       </header>
@@ -426,6 +427,7 @@ export default function App() {
       {allowOfficeSurfaces && <FirstRunChecklist steps={firstRunSteps} onGo={go} />}
       <ShopPilotCard />
       <A2hsTip />
+      <ShopSessionTimeoutWatcher onSessionChange={handleShopSessionChange} />
       {shopSessionTick >= 0 &&
         isFirebaseConfigured() &&
         needsShopUnlock(loadShopSession()) && (

@@ -84,6 +84,8 @@ export interface ShopSession {
   shopId: string;
   /** Set only after successful PIN verification (or create as office). */
   role?: ShopRole;
-  /** ISO timestamp of last successful PIN verify — used for soft expiry. */
+  /** ISO timestamp of last successful PIN verify — used for absolute soft TTL. */
   verifiedAt?: string;
+  /** ISO timestamp of last UI activity — used for idle expiry (#8). */
+  lastActiveAt?: string;
 }
