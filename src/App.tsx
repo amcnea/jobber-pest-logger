@@ -451,11 +451,19 @@ export default function App() {
             />
           </div>
         )}
-      {shopLocked && !isFirebaseConfigured() && (
+      {shopLocked && (
         <div className="banner banner-due" role="region" aria-label="Shared shop recovery">
-          <strong>Shared shop remembered, but Firebase is not configured</strong>
+          <strong>Shared shop locked</strong>
           <p>
-            PIN unlock needs Firebase. Leave the remembered shop to use this device local-only.
+            {isFirebaseConfigured() ? (
+              <>
+                Unlock with shop code + role + PIN above, or leave to use this device local-only.
+              </>
+            ) : (
+              <>
+                PIN unlock needs Firebase. Leave the remembered shop to use this device local-only.
+              </>
+            )}{" "}
             Local logs, catalog, people, and backups stay on this device.
           </p>
           <div style={{ marginTop: "0.5rem" }}>
