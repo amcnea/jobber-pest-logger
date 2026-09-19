@@ -15,12 +15,17 @@ export type {
 
 export {
   SHOP_SESSION_KEY,
+  SESSION_IDLE_MS,
   SESSION_TTL_MS,
+  bumpSessionMutationEpoch,
   clearSessionAuth,
   clearShopSession,
   canAccessOffice,
   canUseOfficeSurfaces,
   emptyShopSession,
+  enforceSessionExpiry,
+  formatDurationMs,
+  getSessionMutationEpoch,
   hasJoinedShop,
   isSessionAuthenticated,
   isSessionExpired,
@@ -30,6 +35,7 @@ export {
   normalizeShopSession,
   saveShopSession,
   sessionRole,
+  touchSessionActivity,
 } from "./session";
 
 export {
