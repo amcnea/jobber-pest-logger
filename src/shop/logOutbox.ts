@@ -7,7 +7,7 @@
 import type { ApplicationLog } from "../types";
 import { normalizeLog } from "../storage";
 import type { RemoteShopStore } from "./RemoteShopStore";
-import { isSessionAuthenticated } from "./session";
+import { isSessionAuthenticated, loadShopSession } from "./session";
 
 export const LOG_OUTBOX_KEY = "jobber-pest-logger:log-outbox:v1";
 
@@ -192,13 +192,14 @@ export async function flushLogOutbox(
       else logs[idx] = entry.log;
     }
 
-    // Session may expire while getShop awaited — do not put or clear outbox.
-    if (!isSessionAuthenticated()) {
+    // Session may expire or switch shops while getShop awaited — do not put or clear outbox.
+    const session = loadShopSession();
+    if (!isSessionAuthenticated(session) || session.shopId.trim() !== id) {
       return {
         ok: false,
         flushed: 0,
         remaining: live.length,
-        error: "Session expired — unlock to sync queued logs.",
+        error: "Session expired or shop changed — unlock to sync queued logs.",
       };
     }
 

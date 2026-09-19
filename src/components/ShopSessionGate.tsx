@@ -43,7 +43,8 @@ export function ShopSessionTimeoutWatcher({
   useEffect(() => {
     const sessionFingerprint = () => {
       const s = loadShopSession();
-      return `${s.shopId.trim()}:${isSessionAuthenticated(s) ? "1" : "0"}`;
+      const authenticated = isSessionAuthenticated(s);
+      return `${s.shopId.trim()}:${authenticated ? s.role : "locked"}`;
     };
     let lastFp = sessionFingerprint();
 
