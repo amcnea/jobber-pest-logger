@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   EXAMPLE_EPA_LABEL,
   catalogHasExampleProducts,
@@ -56,7 +56,16 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   const [starterQuery, setStarterQuery] = useState("");
   const [labelConfirmId, setLabelConfirmId] = useState<string | null>(null);
   const [labelConfirmed, setLabelConfirmed] = useState(false);
-  const [pendingLabelIds, setPendingLabelIds] = useState<string[]>(() => listPendingLabelConfirmIds());
+  const [pendingLabelIds, setPendingLabelIds] = useState<string[]>(() => {
+    const read = listPendingLabelConfirmIds();
+    return read.ok ? read.ids : [];
+  });
+  const [labelConfirmStoreUnavailable, setLabelConfirmStoreUnavailable] = useState(() => {
+    const read = listPendingLabelConfirmIds();
+    return !read.ok;
+  });
+  /** Ids we asked App to delete; clear pending store only after they leave catalog. */
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<string[]>([]);
 
   function startAdd() {
     setAdding(true);
@@ -117,13 +126,25 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   }
 
   function markPendingLabel(id: string) {
-    addPendingLabelConfirm(id);
+    // Always keep an in-memory guard; persist is best-effort.
     setPendingLabelIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
+    const persisted = addPendingLabelConfirm(id);
+    if (!persisted) {
+      const read = listPendingLabelConfirmIds();
+      if (!read.ok) setLabelConfirmStoreUnavailable(true);
+    }
   }
 
   function clearPendingLabel(id: string) {
-    clearPendingLabelConfirm(id);
+    const cleared = clearPendingLabelConfirm(id);
+    if (!cleared) {
+      // Retain in-memory guard when persist clear fails.
+      const read = listPendingLabelConfirmIds();
+      if (!read.ok) setLabelConfirmStoreUnavailable(true);
+      return false;
+    }
     setPendingLabelIds((ids) => ids.filter((x) => x !== id));
+    return true;
   }
 
   function needsLabelConfirm(id: string): boolean {
@@ -131,6 +152,10 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   }
 
   function setArchived(product: ShopProduct, archived: boolean) {
+    // Fail closed: block all unarchive/activate while pending-id storage is unreadable.
+    if (!archived && labelConfirmStoreUnavailable) {
+      return;
+    }
     // Never activate a starter-pending row without label confirmation.
     if (!archived && needsLabelConfirm(product.id)) {
       beginLabelConfirm(product.id);
@@ -175,11 +200,31 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
 
   function activateAfterLabelConfirm(product: ShopProduct) {
     if (!labelConfirmed) return;
+    if (labelConfirmStoreUnavailable) return;
+    // Persist-clear first so we do not activate while the guard cannot be dropped safely.
+    if (!clearPendingLabel(product.id)) return;
     const saved = onUpsert({ ...product, archived: false });
-    if (!saved) return;
-    clearPendingLabel(product.id);
+    if (!saved) {
+      markPendingLabel(product.id);
+      return;
+    }
     cancelLabelConfirm();
   }
+
+
+  // Clear pending store ids only after a delete we requested and the row is actually gone.
+  useEffect(() => {
+    if (pendingDeleteIds.length === 0) return;
+    const present = new Set(catalog.map((p) => p.id));
+    const gone = pendingDeleteIds.filter((id) => !present.has(id));
+    if (gone.length === 0) return;
+    for (const id of gone) {
+      clearPendingLabelConfirm(id);
+    }
+    const goneSet = new Set(gone);
+    setPendingLabelIds((ids) => ids.filter((id) => !goneSet.has(id)));
+    setPendingDeleteIds((ids) => ids.filter((id) => present.has(id)));
+  }, [catalog, pendingDeleteIds]);
 
   const form = (adding || editingId) && (
     <form className="card" onSubmit={submit} noValidate>
@@ -306,6 +351,15 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
         examples. Real CSV/PDF export stays disabled until examples are removed from the catalog and
         from any saved logs that still reference them.
       </p>
+
+      {labelConfirmStoreUnavailable && (
+        <div className="nag" role="alert">
+          <p>
+            Label-confirm storage is unavailable on this device. Activating or unarchiving products is
+            blocked until storage works again.
+          </p>
+        </div>
+      )}
 
       {!adding && editingId === null && (
         <div className="card catalog-filters">
@@ -484,7 +538,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                 <button
                   type="button"
                   className="btn btn-primary"
-                  disabled={!labelConfirmed}
+                  disabled={!labelConfirmed || labelConfirmStoreUnavailable}
                   onClick={() => activateAfterLabelConfirm(product)}
                 >
                   Confirm label &amp; activate
@@ -532,8 +586,16 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                     <button
                       type="button"
                       className="btn btn-secondary"
-                      disabled={labelConfirmId !== null}
+                      disabled={
+                        labelConfirmId !== null ||
+                        (product.archived &&
+                          labelConfirmStoreUnavailable &&
+                          !needsLabelConfirm(product.id))
+                      }
                       onClick={() => {
+                        if (product.archived && labelConfirmStoreUnavailable && !needsLabelConfirm(product.id)) {
+                          return;
+                        }
                         if (product.archived && needsLabelConfirm(product.id)) {
                           beginLabelConfirm(product.id);
                           return;
@@ -544,7 +606,9 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                       {product.archived
                         ? needsLabelConfirm(product.id)
                           ? "Confirm label…"
-                          : "Unarchive"
+                          : labelConfirmStoreUnavailable
+                            ? "Unarchive blocked"
+                            : "Unarchive"
                         : "Archive"}
                     </button>
                   )}
@@ -555,7 +619,10 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                     onClick={() => {
                       if (!confirm(`Delete ${product.name} from the shop list?`)) return;
                       onDelete(product.id);
-                      clearPendingLabel(product.id);
+                      setPendingDeleteIds((ids) =>
+                        ids.includes(product.id) ? ids : [...ids, product.id],
+                      );
+                      // Pending clear waits until catalog no longer contains this id (effect above).
                       if (editingId === product.id) cancel();
                       if (labelConfirmId === product.id) cancelLabelConfirm();
                     }}
