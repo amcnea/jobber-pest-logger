@@ -37,6 +37,7 @@ import {
   canUseOfficeSurfaces,
   flushLogOutbox,
   isFirebaseConfigured,
+  leaveShop,
   loadShopSession,
   needsShopUnlock,
   outboxEntriesForShop,
@@ -46,7 +47,7 @@ import {
   shopStoreStatusHint,
   syncLogToRemote,
 } from "./shop";
-import { ShopSessionGate } from "./components/ShopSessionGate";
+import { ShopSessionGate, ShopSessionTimeoutWatcher } from "./components/ShopSessionGate";
 import "./App.css";
 
 export default function App() {
@@ -172,12 +173,15 @@ export default function App() {
   // Re-read session when tick bumps (create/join/leave/sign-in/sign-out).
   const shopSession = loadShopSession();
   const activeRole = sessionRole(shopSession);
+  /** Shared shop remembered but PIN expired/missing — block all app surfaces until unlock. */
+  const shopLocked = needsShopUnlock(shopSession);
   /** Local-only + office: full UI. Authenticated tech: New log + History only (#4). */
   const allowOfficeSurfaces = canUseOfficeSurfaces(shopSession);
 
   /** Navigate; clear flash when leaving Settings so remount cannot resurrect it.
    *  Tech deep-links to office screens redirect to New log. */
   function go(s: Screen) {
+    if (shopLocked) return;
     const next =
       !allowOfficeSurfaces && s !== "new" && s !== "history" ? "new" : s;
     if (screen === "settings" && next !== "settings") {
@@ -220,6 +224,10 @@ export default function App() {
   }
 
   function handleSave(log: ApplicationLog): boolean {
+    if (shopLocked) {
+      setStorageError("Unlock the shared shop with a PIN before saving.");
+      return false;
+    }
     // Tech may create new logs; editing an existing id is office-only.
     if (!allowOfficeSurfaces && logs.some((l) => l.id === log.id)) {
       setStorageError("Tech sessions can create new logs but not edit saved ones. Ask office.");
@@ -264,6 +272,10 @@ export default function App() {
   }
 
   function handleDelete(id: string) {
+    if (shopLocked) {
+      setStorageError("Unlock the shared shop with a PIN before changing logs.");
+      return;
+    }
     if (!allowOfficeSurfaces) {
       setStorageError("Tech sessions cannot delete saved logs. Ask office.");
       return;
@@ -416,6 +428,7 @@ export default function App() {
             {!allowOfficeSurfaces && (
               <> · New log + History only (office manages catalog, people, settings, export)</>
             )}
+            <> · app access only (not TDA/SPCS status)</>
           </p>
         )}
       </header>
@@ -426,6 +439,7 @@ export default function App() {
       {allowOfficeSurfaces && <FirstRunChecklist steps={firstRunSteps} onGo={go} />}
       <ShopPilotCard />
       <A2hsTip />
+      <ShopSessionTimeoutWatcher onSessionChange={handleShopSessionChange} />
       {shopSessionTick >= 0 &&
         isFirebaseConfigured() &&
         needsShopUnlock(loadShopSession()) && (
@@ -437,7 +451,41 @@ export default function App() {
             />
           </div>
         )}
-      {peopleWarnings.length > 0 && (
+      {shopLocked && (
+        <div className="banner banner-due" role="region" aria-label="Shared shop recovery">
+          <strong>Shared shop locked</strong>
+          <p>
+            {isFirebaseConfigured() ? (
+              <>
+                Unlock with role + PIN above, or leave to use this device local-only.
+              </>
+            ) : (
+              <>
+                PIN unlock needs Firebase. Leave the remembered shop to use this device local-only.
+              </>
+            )}{" "}
+            Local logs, catalog, people, and backups stay on this device.
+          </p>
+          <div style={{ marginTop: "0.5rem" }}>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                const result = leaveShop();
+                if (!result.ok) {
+                  setStorageError(result.error ?? "Could not leave the remembered shop.");
+                  return;
+                }
+                setStorageError(null);
+                handleShopSessionChange();
+              }}
+            >
+              Leave shop (local-only)
+            </button>
+          </div>
+        </div>
+      )}
+      {!shopLocked && peopleWarnings.length > 0 && (
         <div className="banner banner-due" role="status">
           <strong>License / CE reminders</strong> (in-app only; not TDA-required; no SMS). License:
           past due or within 30 days. CE: overdue or year-end (Nov/Dec) for calendar-year CEUs.
@@ -507,6 +555,8 @@ export default function App() {
             </div>
           );
         })()}
+      {!shopLocked && (
+      <>
       <nav className={allowOfficeSurfaces ? "tabs" : "tabs tabs-tech"} aria-label="Main">
         <button
           type="button"
@@ -619,6 +669,8 @@ export default function App() {
           />
         )}
       </main>
+      </>
+      )}
     </div>
   );
 }
