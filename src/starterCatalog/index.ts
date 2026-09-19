@@ -62,3 +62,11 @@ export function starterEpaCaption(starter: StarterProduct): string {
   if (starter.is25b || !starter.epaRegNo) return "25(b) · no EPA #";
   return `EPA ${starter.epaRegNo}`;
 }
+
+export {
+  STARTER_LABEL_CONFIRM_KEY,
+  addPendingLabelConfirm,
+  clearPendingLabelConfirm,
+  listPendingLabelConfirmIds,
+  requiresLabelConfirm,
+} from "./labelConfirmStore";
