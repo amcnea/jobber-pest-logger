@@ -208,15 +208,17 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   function activateAfterLabelConfirm(product: ShopProduct) {
     if (!labelConfirmed) return;
     if (labelConfirmStoreUnavailable) return;
-    // Activate first; only clear the durable guard after a successful upsert.
+    // Do not expose until upsert AND clearPending both succeed.
     const saved = onUpsert({ ...product, archived: false });
     if (!saved) {
       // Leave durable pending intact — no clear was attempted.
       return;
     }
-    // Prefer keep in-memory + try clear; if clear fails mark unavailable.
     if (!clearPendingLabel(product.id)) {
+      // Clear failed: re-archive so NewLogForm cannot pick it; keep confirm open.
+      onUpsert({ ...product, archived: true });
       setLabelConfirmStoreUnavailable(true);
+      return;
     }
     cancelLabelConfirm();
   }
