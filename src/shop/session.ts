@@ -135,10 +135,13 @@ export function sessionRole(session: ShopSession = loadShopSession()): ShopRole 
 
 /**
  * Office UI surfaces (Products, People, Settings, Export, History edit/delete).
- * Denied only when PIN-authenticated as tech (#4). Local-only and office keep full UI.
+ * Denied for PIN-authenticated tech (#4) and for a remembered shared shop that still
+ * needs unlock (expired/missing PIN) — that is not local-only mode.
+ * Local-only (no shopId) and authenticated office keep full UI.
  * Distinct from canAccessOffice(), which requires an authenticated office role.
  */
 export function canUseOfficeSurfaces(session: ShopSession = loadShopSession()): boolean {
+  if (hasJoinedShop(session) && !isSessionAuthenticated(session)) return false;
   return sessionRole(session) !== "tech";
 }
 
