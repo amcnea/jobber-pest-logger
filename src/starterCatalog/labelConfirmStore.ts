@@ -3,8 +3,14 @@
  * before activate / unarchive (starter-catalog add flow).
  * Separate from ShopProduct — do not invent TDA fields on the catalog row.
  *
- * Reads fail closed: a storage/parse failure is an explicit `{ ok: false }`
- * so callers can block activation rather than treating pending ids as empty.
+ * Reads fail closed: a storage/parse failure (including a parseable but malformed
+ * array / invalid element shape) is an explicit `{ ok: false }` so callers can
+ * block activation rather than treating pending ids as empty.
+ *
+ * Recovery must NOT reset this key to `[]` while pending confirmations may still
+ * exist — wiping would drop those IDs and allow unarchive without label confirm.
+ * Leave fail-closed until storage is readable again; if a future reset API is
+ * added, only clear after re-marking pending ids from in-memory / catalog heuristic.
  */
 
 export const STARTER_LABEL_CONFIRM_KEY = "jobber-pest-logger:starter-label-confirm:v1";
@@ -18,6 +24,7 @@ function readIds(): LabelConfirmReadResult {
     const raw = localStorage.getItem(STARTER_LABEL_CONFIRM_KEY);
     if (!raw) return { ok: true, ids: [] };
     const parsed = JSON.parse(raw) as unknown;
+    // Malformed shape → fail closed. Do not coerce / repair by writing [].
     if (!Array.isArray(parsed)) return { ok: false };
     const out: string[] = [];
     const seen = new Set<string>();
