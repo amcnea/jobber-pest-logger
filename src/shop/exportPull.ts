@@ -116,6 +116,22 @@ export async function resolveExportSections(
       err instanceof Error ? err.message : "Could not verify Firebase identity for export.";
     return { kind: "canceled", error: message };
   }
+
+  // ensureUid can await Auth — revalidate before trusting remote membership.
+  const afterUid = loadShopSession();
+  if (
+    epoch !== getSessionMutationEpoch() ||
+    !canAccessOffice(afterUid) ||
+    !canUseOfficeSurfaces(afterUid) ||
+    afterUid.shopId.trim() !== shopId
+  ) {
+    return {
+      kind: "canceled",
+      error:
+        "Shop session changed during identity check — export canceled. Unlock and try again.",
+    };
+  }
+
   const members = got.value.members ?? {};
   const isRemoteOffice =
     got.value.ownerUid === uid || members[uid] === "office";
