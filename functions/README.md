@@ -1,0 +1,22 @@
+# Shop PIN + membership Cloud Functions (cf1)
+
+Callable functions that move PIN verify and membership/owner grants off the client
+(see `docs/BACKLOG.md`, Cloud Functions item 1). Every call requires Firebase Auth.
+
+| Callable | Input | Server-side checks | Writes |
+| --- | --- | --- | --- |
+| `joinShopWithPin` | `shopId, role, pin` | auth; valid shopId/role; shop exists; PIN auth present + well-formed; PBKDF2 verify of the role PIN (`timingSafeEqual`) | `members[uid]=role`; `ownerUid=uid` only when missing and role is office |
+| `bootstrapShopPins` | `shopId, officePin, techPin` | auth; shop has no PIN auth; if owner/members exist, caller must be owner or office; PIN pair rules | PIN hashes, `members[uid]=office`, `ownerUid` if missing |
+| `changeShopPins` | `shopId, officePin, techPin` | auth; caller must be owner or office member on the doc; PIN pair rules | new PIN hashes |
+
+All reads/writes run in a Firestore transaction via the Admin SDK. Hash format matches
+`src/shop/pinCrypto.ts`, so existing shops keep working.
+
+```sh
+cd functions && npm ci && npm test   # typecheck/build + offline unit tests
+```
+
+The web client uses these only when built with `VITE_SHOP_PIN_FUNCTIONS=1`, so nothing
+changes until the functions are deployed (`firebase deploy --only functions`, done by
+the owner — not by CI). Tightening `firestore.rules` to deny client writes to
+`members`/`ownerUid` is backlog item 3 (cf3); not rate-limited yet (cf2).

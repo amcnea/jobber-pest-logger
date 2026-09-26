@@ -22,6 +22,12 @@ import {
   verifyPin,
   type ShopRole,
 } from "./pinCrypto";
+import {
+  bootstrapShopPinsFn,
+  changeShopPinsFn,
+  joinShopWithPinFn,
+  shopPinFunctionsEnabled,
+} from "./pinFunctions";
 import { RemoteShopStore } from "./RemoteShopStore";
 import {
   clearSessionAuth,
@@ -192,6 +198,45 @@ async function ensureMembershipAfterPin(
 }
 
 /**
+ * Verify role PIN + grant membership. cf1: with VITE_SHOP_PIN_FUNCTIONS=1 the
+ * Cloud Function verifies the PIN against stored hashes and writes members
+ * server-side; otherwise the legacy client verify + join-self write runs.
+ */
+async function verifyPinAndGrant(
+  config: NonNullable<ReturnType<typeof getFirebaseConfig>>,
+  remote: RemoteShopStore,
+  doc: ShopDocument,
+  shopId: string,
+  uid: string,
+  input: RolePinInput,
+): Promise<
+  | { ok: true; doc: ShopDocument }
+  | { ok: false; error: string; reason?: "pins-missing" }
+> {
+  if (!shopPinFunctionsEnabled()) {
+    const pinErr = await verifyAgainstAuth(doc.auth, input.role, input.pin);
+    if (pinErr) return { ok: false, error: pinErr.error, reason: pinErr.reason };
+    return ensureMembershipAfterPin(remote, doc, uid, input.role);
+  }
+  if (!doc.auth) {
+    const missing = await verifyAgainstAuth(undefined, input.role, input.pin);
+    return { ok: false, error: missing?.error ?? "This shop has no PINs yet.", reason: "pins-missing" };
+  }
+  if (!isValidPin(input.pin)) return { ok: false, error: "PIN must be 4–8 digits." };
+  const grant = await joinShopWithPinFn(config, shopId, input.role, input.pin);
+  if (!grant.ok) return grant;
+  return {
+    ok: true,
+    doc: {
+      ...doc,
+      updatedAt: grant.value.updatedAt,
+      members: grant.value.members,
+      ownerUid: grant.value.ownerUid ?? doc.ownerUid,
+    },
+  };
+}
+
+/**
  * Create a new shared shop: Anonymous Auth, generate code, set owner + PIN hashes,
  * upload local snapshot, save authenticated office session, mark migrated once.
  */
@@ -347,11 +392,8 @@ export async function joinShop(
         "This shop's PIN auth is corrupt or unreadable. Ask the office to repair the shop document — join cannot treat this as missing PINs.",
     };
   }
-  const pinErr = await verifyAgainstAuth(remoteDoc.auth, input.role, input.pin);
-  if (pinErr) return { ok: false, error: pinErr.error, reason: pinErr.reason };
-
-  const membership = await ensureMembershipAfterPin(remote, remoteDoc, uid, input.role);
-  if (!membership.ok) return { ok: false, error: membership.error };
+  const membership = await verifyPinAndGrant(fb.config, remote, remoteDoc, shopId, uid, input);
+  if (!membership.ok) return membership;
   remoteDoc = membership.doc;
 
   const localResult = await getLocalShopStore().getShop();
@@ -457,16 +499,15 @@ export async function signInShop(
         "This shop's PIN auth is corrupt or unreadable. Ask the office to repair the shop document — sign-in cannot treat this as missing PINs.",
     };
   }
-  const pinErr = await verifyAgainstAuth(remoteResult.value.auth, input.role, input.pin);
-  if (pinErr) return { ok: false, error: pinErr.error, reason: pinErr.reason };
-
-  const membership = await ensureMembershipAfterPin(
+  const membership = await verifyPinAndGrant(
+    fb.config,
     remote,
     remoteResult.value,
+    shopId,
     uid,
-    input.role,
+    input,
   );
-  if (!membership.ok) return { ok: false, error: membership.error };
+  if (!membership.ok) return membership;
 
   if (opEpoch !== getSessionMutationEpoch()) {
     return { ok: false, error: "Sign-in cancelled — shop session was left on this device." };
@@ -551,26 +592,12 @@ export async function bootstrapShopPins(
     }
   }
 
-  let auth: ShopPinAuth;
-  try {
-    auth = await buildShopPinAuth(pins.officePin, pins.techPin);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Could not hash PINs.";
-    return { ok: false, error: message };
-  }
-
-  const members = {
-    ...(remoteResult.value.members ?? {}),
-    [uid]: "office" as const,
-  };
-  const put = await remote.putShop({
-    ...remoteResult.value,
-    auth,
-    ownerUid: remoteResult.value.ownerUid ?? uid,
-    members,
-  });
-  if (!put.ok) {
-    return { ok: false, error: put.error };
+  if (shopPinFunctionsEnabled()) {
+    const res = await bootstrapShopPinsFn(fb.config, shopId, pins.officePin, pins.techPin);
+    if (!res.ok) return res;
+  } else {
+    const legacy = await legacyBootstrapWrite(remote, remoteResult.value, uid, pins);
+    if (legacy) return { ok: false, error: legacy };
   }
 
   const sessionErr = await persistAuthenticatedSession(shopId, "office");
@@ -585,6 +612,32 @@ export async function bootstrapShopPins(
     role: "office",
     message: `PINs set for ${shopId}. You are signed in as office owner. Share the tech PIN with field devices.`,
   };
+}
+
+/** Pre-cf1 client bootstrap write (rules isLegacyPinBootstrap). Returns an error or null. */
+async function legacyBootstrapWrite(
+  remote: RemoteShopStore,
+  doc: ShopDocument,
+  uid: string,
+  pins: CreateShopPins,
+): Promise<string | null> {
+  let auth: ShopPinAuth;
+  try {
+    auth = await buildShopPinAuth(pins.officePin, pins.techPin);
+  } catch (err) {
+    return err instanceof Error ? err.message : "Could not hash PINs.";
+  }
+  const members = {
+    ...(doc.members ?? {}),
+    [uid]: "office" as const,
+  };
+  const put = await remote.putShop({
+    ...doc,
+    auth,
+    ownerUid: doc.ownerUid ?? uid,
+    members,
+  });
+  return put.ok ? null : put.error;
 }
 
 /**
@@ -629,22 +682,28 @@ export async function changeShopPins(pins: CreateShopPins): Promise<CreateJoinRe
     return { ok: false, error: "Only the office owner/members can change PINs." };
   }
 
-  let auth: ShopPinAuth;
-  try {
-    auth = await buildShopPinAuth(pins.officePin, pins.techPin);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Could not hash PINs.";
-    return { ok: false, error: message };
-  }
+  if (shopPinFunctionsEnabled()) {
+    // Server re-checks owner/office membership (no "no members yet" client bypass).
+    const res = await changeShopPinsFn(fb.config, shopId, pins.officePin, pins.techPin);
+    if (!res.ok) return res;
+  } else {
+    let auth: ShopPinAuth;
+    try {
+      auth = await buildShopPinAuth(pins.officePin, pins.techPin);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Could not hash PINs.";
+      return { ok: false, error: message };
+    }
 
-  const put = await remote.putShop({
-    ...doc,
-    auth,
-    ownerUid: doc.ownerUid ?? uid,
-    members: doc.members ?? { [uid]: "office" },
-  });
-  if (!put.ok) {
-    return { ok: false, error: put.error };
+    const put = await remote.putShop({
+      ...doc,
+      auth,
+      ownerUid: doc.ownerUid ?? uid,
+      members: doc.members ?? { [uid]: "office" },
+    });
+    if (!put.ok) {
+      return { ok: false, error: put.error };
+    }
   }
 
   const sessionErr = await persistAuthenticatedSession(shopId, "office");
