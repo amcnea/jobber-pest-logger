@@ -4,6 +4,10 @@ import { downloadCsv } from "../csv";
 import { filterLogsByDateUsed, monthRangeLocal } from "../dates";
 import { LAWGICAL_DISCLAIMER } from "../disclaimer";
 import { exportCompletenessIssues } from "../formDefaults";
+import {
+  resolveExportSections,
+  sharedExportPullHint,
+} from "../shop";
 import { backupNagMessage, formatLastBackupLabel } from "../storage";
 import type { ApplicationLog, Screen, ShopProduct, ShopSettings } from "../types";
 
@@ -28,9 +32,13 @@ export function Export({
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [exampleMsg, setExampleMsg] = useState<string | null>(null);
+  const [pullError, setPullError] = useState<string | null>(null);
+  const [pullBusy, setPullBusy] = useState(false);
+  const [gateMsg, setGateMsg] = useState<string | null>(null);
 
   const lastBackupLabel = formatLastBackupLabel(lastBackupAt);
   const nag = backupNagMessage(lastBackupAt);
+  const sharedPullHint = sharedExportPullHint();
 
   const filtered = useMemo(
     () => filterLogsByDateUsed(logs, dateFrom, dateTo),
@@ -46,7 +54,12 @@ export function Export({
     [filtered],
   );
   const completenessBlocked = completenessIssues.length > 0;
-  const exportBlocked = exampleGate.blocked || completenessBlocked;
+  // Shared office: gates apply to the pulled snapshot at download time (local UI
+  // may be stale). Local-only: keep today's disable-on-gate behavior.
+  const sharedPull = Boolean(sharedPullHint);
+  const exportBlocked = sharedPull
+    ? false
+    : exampleGate.blocked || completenessBlocked;
 
   const shopName = settings.shopName.trim();
   const ymd = /^\d{4}-\d{2}-\d{2}$/;
@@ -64,12 +77,87 @@ export function Export({
     setDateTo("");
   }
 
-  async function handlePdf() {
-    if (exportBlocked) return;
+  /**
+   * Pull shared shop when applicable, re-check example + § 7.144 gates on the
+   * payload that will actually download, then return filtered logs + shop name.
+   */
+  async function prepareExportPayload(): Promise<{
+    ok: boolean;
+    logs: ApplicationLog[];
+    shopName: string;
+  } | null> {
+    setPullError(null);
+    setGateMsg(null);
     setPdfError(null);
+    // Freeze range for this prep (controls also disabled while pullBusy).
+    const rangeFrom = dateFrom;
+    const rangeTo = dateTo;
+    setPullBusy(true);
+    try {
+      const pulled = await resolveExportSections({
+        logs,
+        catalog,
+        people: [],
+        settings,
+      });
+      if (pulled.kind === "canceled") {
+        setPullError(pulled.error);
+        return { ok: false, logs: [], shopName: "" };
+      }
+      if (pulled.kind === "shared-fallback-local") {
+        setPullError(
+          `Shared shop pull failed (${pulled.shopId}): ${pulled.error} Using this device's local data instead — it may not match the full shop.`,
+        );
+      }
+      const sections = pulled.sections;
+      const example = exportBlockedByExamples(sections.catalog, sections.logs);
+      const rangeLogs = filterLogsByDateUsed(sections.logs, rangeFrom, rangeTo);
+      const issues = exportCompletenessIssues(rangeLogs);
+      if (example.blocked || issues.length > 0) {
+        const parts: string[] = [];
+        if (example.blocked) {
+          parts.push("example seeds still present on the export set");
+        }
+        if (issues.length > 0) {
+          parts.push(`${issues.length} incomplete § 7.144 record(s) in range`);
+        }
+        setGateMsg(
+          `Export blocked after ${pulled.kind === "shared" ? "shared shop pull" : "preparing export"}: ${parts.join("; ")}. Clear gates, then try again.`,
+        );
+        return { ok: false, logs: rangeLogs, shopName: sections.settings.shopName.trim() };
+      }
+      return {
+        ok: true,
+        logs: rangeLogs,
+        shopName: sections.settings.shopName.trim(),
+      };
+    } finally {
+      setPullBusy(false);
+    }
+  }
+
+  async function handleCsv() {
+    if (exportBlocked || pullBusy) return;
+    const prepared = await prepareExportPayload();
+    if (!prepared || !prepared.ok) return;
+    if (prepared.logs.length === 0) {
+      setGateMsg("No logs in range to export.");
+      return;
+    }
+    downloadCsv(prepared.logs, prepared.shopName || undefined);
+  }
+
+  async function handlePdf() {
+    if (exportBlocked || pullBusy) return;
+    const prepared = await prepareExportPayload();
+    if (!prepared || !prepared.ok) return;
+    if (prepared.logs.length === 0) {
+      setGateMsg("No logs in range to export.");
+      return;
+    }
     try {
       const mod = await import("../pdf");
-      mod.downloadPdf(filtered, shopName || undefined);
+      mod.downloadPdf(prepared.logs, prepared.shopName || undefined);
     } catch (err) {
       console.error("jobber-pest-logger: PDF export failed", err);
       setPdfError(
@@ -101,6 +189,11 @@ export function Export({
         not TDA-required and are omitted. Texas only.
       </p>
       <p className="hint">Records are kept 2 years. This app does not enforce retention.</p>
+      {sharedPullHint && (
+        <p className="hint premises-keepalive" role="note">
+          {sharedPullHint}
+        </p>
+      )}
       <p className="disclaimer">{LAWGICAL_DISCLAIMER}</p>
       <p className="hint" role="status">
         {lastBackupLabel}
@@ -108,6 +201,16 @@ export function Export({
       {nag && (
         <p className="nag" role="status">
           {nag} Use Settings → Download backup JSON.
+        </p>
+      )}
+      {pullError && (
+        <p className="nag" role="alert">
+          {pullError}
+        </p>
+      )}
+      {gateMsg && (
+        <p className="nag" role="alert">
+          {gateMsg}
         </p>
       )}
 
@@ -195,22 +298,33 @@ export function Export({
               type="date"
               value={dateFrom}
               onChange={(e) => setDateFrom(e.target.value)}
+              disabled={pullBusy}
             />
           </label>
           <label className="field">
             To
-            <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <input
+              type="date"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              disabled={pullBusy}
+            />
           </label>
         </div>
         <div className="row export-date-row">
-          <button type="button" className="btn btn-secondary" onClick={applyThisMonth}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={applyThisMonth}
+            disabled={pullBusy}
+          >
             This month
           </button>
           <button
             type="button"
             className="btn btn-secondary"
             onClick={clearDates}
-            disabled={!hasDateInput}
+            disabled={!hasDateInput || pullBusy}
           >
             Clear dates
           </button>
@@ -239,23 +353,22 @@ export function Export({
           <button
             type="button"
             className="btn btn-primary"
-            disabled={filtered.length === 0 || exportBlocked}
+            disabled={(filtered.length === 0 && !sharedPull) || exportBlocked || pullBusy}
             onClick={() => {
-              if (exportBlocked) return;
-              downloadCsv(filtered, shopName || undefined);
+              void handleCsv();
             }}
           >
-            Download Texas TDA CSV
+            {pullBusy ? "Preparing…" : "Download Texas TDA CSV"}
           </button>
           <button
             type="button"
             className="btn btn-secondary"
-            disabled={filtered.length === 0 || exportBlocked}
+            disabled={(filtered.length === 0 && !sharedPull) || exportBlocked || pullBusy}
             onClick={() => {
               void handlePdf();
             }}
           >
-            Download PDF
+            {pullBusy ? "Preparing…" : "Download PDF"}
           </button>
           {pdfError && (
             <p className="hint" role="alert">

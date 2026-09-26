@@ -16,6 +16,34 @@ export function getSessionMutationEpoch(): number {
   return sessionMutationEpoch;
 }
 
+/**
+ * Fingerprint shop + auth identity for cross-tab storage listeners.
+ * Ignores lastActiveAt so activity-only rewrites do not look like identity changes.
+ * Uses role + verifiedAt *presence* (not the timestamp value).
+ */
+export function sessionAuthIdentityFingerprint(raw: string | null): string {
+  if (raw == null) return "";
+  try {
+    const session = normalizeShopSession(JSON.parse(raw) as unknown);
+    const shopId = session.shopId.trim();
+    if (!shopId) return "";
+    const role = session.role ?? "";
+    const hasVerified = session.verifiedAt ? "1" : "0";
+    return `${shopId}|${role}|${hasVerified}`;
+  } catch {
+    // Unparseable blob — treat whole string as identity so corrupt clears still bump.
+    return `raw:${raw}`;
+  }
+}
+
+/** True when storage event old/new differ in shop or auth identity (not activity-only). */
+export function sessionAuthIdentityChanged(
+  oldValue: string | null,
+  newValue: string | null,
+): boolean {
+  return sessionAuthIdentityFingerprint(oldValue) !== sessionAuthIdentityFingerprint(newValue);
+}
+
 /** Soft absolute lifetime after PIN verify (re-enter PIN when stale). */
 export const SESSION_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 

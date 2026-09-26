@@ -34,6 +34,8 @@ export {
   needsShopUnlock,
   normalizeShopSession,
   saveShopSession,
+  sessionAuthIdentityChanged,
+  sessionAuthIdentityFingerprint,
   sessionRole,
   touchSessionActivity,
 } from "./session";
@@ -98,3 +100,9 @@ export {
   type LogOutboxEntry,
 } from "./logOutbox";
 
+export {
+  resolveExportSections,
+  sharedExportPullHint,
+  shouldPullSharedExport,
+  type ExportPullResult,
+} from "./exportPull";
