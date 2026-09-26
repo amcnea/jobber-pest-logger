@@ -763,8 +763,21 @@ export function backupNagMessage(iso: string | null, now = new Date()): string |
   return null;
 }
 
-export function downloadBackup(): void {
-  const backup = buildBackup();
+/**
+ * Download backup JSON. Optional `sections` override (shared-shop pull #7);
+ * omitted ⇒ build from this device's localStorage (local-only path).
+ */
+export function downloadBackup(sections?: ShopSections): void {
+  const backup: DeviceBackup = sections
+    ? {
+        version: BACKUP_VERSION,
+        exportedAt: new Date().toISOString(),
+        logs: sections.logs,
+        catalog: sections.catalog,
+        people: sections.people,
+        settings: sections.settings,
+      }
+    : buildBackup();
   const blob = new Blob([JSON.stringify(backup, null, 2)], {
     type: "application/json;charset=utf-8",
   });

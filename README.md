@@ -241,7 +241,7 @@ Shared-mode application logs still save on-device first (`upsertLog`). A durable
 
 ### Not in this slice (later PRs)
 
-- Export rewrite (#7), Jobber OAuth / email SaaS, Function-based PIN verify (see `docs/BACKLOG.md`)
+- Jobber OAuth / email SaaS, Function-based PIN verify (see `docs/BACKLOG.md`). Export rewrite (#7) + session harden (#8) shipped.
 
 Does not add Jobber OAuth, email SaaS, or inventory.
 
