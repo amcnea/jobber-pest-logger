@@ -3,6 +3,7 @@ import { exportBlockedByExamples, productEpaCaption } from "../catalog";
 import { downloadCsv } from "../csv";
 import { filterLogsByDateUsed, monthRangeLocal } from "../dates";
 import { LAWGICAL_DISCLAIMER } from "../disclaimer";
+import { buildExportProvenance, type ExportProvenance } from "../exportProvenance";
 import { exportCompletenessIssues } from "../formDefaults";
 import {
   resolveExportSections,
@@ -85,6 +86,7 @@ export function Export({
     ok: boolean;
     logs: ApplicationLog[];
     shopName: string;
+    provenance?: ExportProvenance;
   } | null> {
     setPullError(null);
     setGateMsg(null);
@@ -130,6 +132,13 @@ export function Export({
         ok: true,
         logs: rangeLogs,
         shopName: sections.settings.shopName.trim(),
+        provenance: buildExportProvenance({
+          kind: pulled.kind,
+          shopId: pulled.kind === "local" ? null : pulled.shopId,
+          dateFrom: rangeFrom,
+          dateTo: rangeTo,
+          recordCount: rangeLogs.length,
+        }),
       };
     } finally {
       setPullBusy(false);
@@ -144,7 +153,7 @@ export function Export({
       setGateMsg("No logs in range to export.");
       return;
     }
-    downloadCsv(prepared.logs, prepared.shopName || undefined);
+    downloadCsv(prepared.logs, prepared.shopName || undefined, prepared.provenance);
   }
 
   async function handlePdf() {
@@ -157,7 +166,7 @@ export function Export({
     }
     try {
       const mod = await import("../pdf");
-      mod.downloadPdf(prepared.logs, prepared.shopName || undefined);
+      mod.downloadPdf(prepared.logs, prepared.shopName || undefined, prepared.provenance);
     } catch (err) {
       console.error("jobber-pest-logger: PDF export failed", err);
       setPdfError(

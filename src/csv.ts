@@ -1,4 +1,5 @@
 import { epaExportText, EXAMPLE_EPA_LABEL, inferIsExample } from "./catalog";
+import { provenanceFileSuffix, type ExportProvenance } from "./exportProvenance";
 import type { ApplicationLog } from "./types";
 
 /** Texas TDA CSV columns matching 4 TAC § 7.144(a)/(b). Optional Jobber link is last and labeled not-TDA. */
@@ -150,16 +151,25 @@ function shopSlugForFilename(shopName: string): string {
     .slice(0, 40);
 }
 
-export function downloadCsv(logs: ApplicationLog[], shopName?: string): void {
+/**
+ * CSV provenance goes in the filename only — the row format stays exactly the
+ * TDA_CSV_COLUMNS header + one row per log (no preamble lines, no extra columns).
+ */
+export function downloadCsv(
+  logs: ApplicationLog[],
+  shopName?: string,
+  provenance?: ExportProvenance,
+): void {
   const body = logsToCsv(logs);
   const blob = new Blob([body], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   const slug = shopName ? shopSlugForFilename(shopName) : "";
+  const suffix = provenance ? `-${provenanceFileSuffix(provenance)}` : "";
   a.download = slug
-    ? `texas-tda-application-logs-${slug}.csv`
-    : "texas-tda-application-logs.csv";
+    ? `texas-tda-application-logs-${slug}${suffix}.csv`
+    : `texas-tda-application-logs${suffix}.csv`;
   a.rel = "noopener";
   a.style.display = "none";
   document.body.appendChild(a);
