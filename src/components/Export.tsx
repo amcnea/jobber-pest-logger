@@ -214,7 +214,14 @@ export function Export({
         </p>
       )}
 
-      {exampleGate.blocked && (
+      {sharedPull && (exampleGate.blocked || completenessBlocked) && (
+        <p className="hint" role="note">
+          Example-data and § 7.144 completeness checks run on the shared shop snapshot at download
+          time, not this device's local copy.
+        </p>
+      )}
+
+      {!sharedPull && exampleGate.blocked && (
         <div className="nag nag-block" role="status">
           <strong>Example seeds still present — CSV/PDF export disabled</strong>
           <p>
@@ -251,13 +258,13 @@ export function Export({
           )}
         </div>
       )}
-      {!exampleGate.blocked && exampleMsg && (
+      {(sharedPull || !exampleGate.blocked) && exampleMsg && (
         <p className="hint" role="status">
           {exampleMsg}
         </p>
       )}
 
-      {completenessBlocked && (
+      {!sharedPull && completenessBlocked && (
         <div className="nag nag-block" role="status">
           <strong>Incomplete records in range — CSV/PDF export disabled</strong>
           <p>
