@@ -57,6 +57,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   const [kindFilter, setKindFilter] = useState<KindFilter>("all");
   const [starterQuery, setStarterQuery] = useState("");
   const [starterKindFilter, setStarterKindFilter] = useState<StarterKindFilter>("all");
+  const [hideOnShopList, setHideOnShopList] = useState(false);
   const [labelConfirmId, setLabelConfirmId] = useState<string | null>(null);
   const [labelConfirmed, setLabelConfirmed] = useState(false);
   const [pendingLabelIds, setPendingLabelIds] = useState<string[]>(() => {
@@ -456,10 +457,15 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
     });
   }, [catalog, query, listFilter, kindFilter, editingId, labelConfirmId, pendingLabelIds]);
 
-  const starterResults = useMemo(
-    () => searchTexasStarterCatalog(starterQuery, starterKindFilter),
-    [starterQuery, starterKindFilter],
-  );
+  const starterResults = useMemo(() => {
+    const rows = searchTexasStarterCatalog(starterQuery, starterKindFilter);
+    if (!hideOnShopList) return rows;
+    // Hide only active shop matches; keep pending/archived so office can Confirm label…
+    return rows.filter((starter) => {
+      const match = findShopMatchForStarter(catalog, starter);
+      return !(match && !match.archived);
+    });
+  }, [starterQuery, starterKindFilter, hideOnShopList, catalog]);
 
   return (
     <div>
@@ -511,6 +517,15 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
               </select>
             </label>
           </div>
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={hideOnShopList}
+              onChange={(e) => setHideOnShopList(e.target.checked)}
+              disabled={labelConfirmId !== null}
+            />
+            Hide already on shop list
+          </label>
           <p className="hint" role="status">
             Showing {starterResults.length} starter row{starterResults.length === 1 ? "" : "s"}. Add
             copies into your shop list; techs still only pick shop-owned active rows.
