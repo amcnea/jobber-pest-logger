@@ -10,6 +10,7 @@ import { newId } from "../ids";
 import { emptyShopProduct } from "../storage";
 import {
   STARTER_CATALOG_DISCLAIMER,
+  TEXAS_COMMON_STARTER,
   TEXAS_STARTER_CATALOG_VERSION,
   addPendingLabelConfirm,
   clearPendingLabelConfirm,
@@ -60,8 +61,9 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
     const read = listPendingLabelConfirmIds();
     return read.ok ? read.ids : [];
   });
+  // Ref tracks pending ids for sync reads in helpers; update only in
+  // event handlers / effects (never during render) so discarded renders cannot leak.
   const pendingLabelIdsRef = useRef(pendingLabelIds);
-  pendingLabelIdsRef.current = pendingLabelIds;
   const [labelConfirmStoreUnavailable, setLabelConfirmStoreUnavailable] = useState(() => {
     const read = listPendingLabelConfirmIds();
     return !read.ok;
@@ -73,11 +75,27 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
    * After every successful storage read, sync durable IDs with pendingLabelIds.
    * Keep unavailable set while any in-memory pending ID is not durably represented.
    * Clear unavailable only when durable and in-memory pending state fully match.
+   * Never recover a malformed store by resetting storage to [] — that would drop
+   * pending IDs and allow unarchive without confirm (fail closed instead).
    */
   function reconcilePendingLabelState() {
     const read = listPendingLabelConfirmIds();
     if (!read.ok) {
       setLabelConfirmStoreUnavailable(true);
+      // In-memory only: require confirm for archived starter-matched rows while
+      // storage is unreadable. Never reset the durable key to [] (would drop IDs).
+      const heuristic: string[] = [];
+      for (const starter of TEXAS_COMMON_STARTER) {
+        const match = findShopMatchForStarter(catalog, starter);
+        if (match && match.archived && match.isExample !== true) {
+          heuristic.push(match.id);
+        }
+      }
+      if (heuristic.length > 0) {
+        const union = Array.from(new Set([...pendingLabelIdsRef.current, ...heuristic]));
+        pendingLabelIdsRef.current = union;
+        setPendingLabelIds(union);
+      }
       return;
     }
 
@@ -309,20 +327,16 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
 
 
   // Clear pending store ids only after a delete we requested and the row is actually gone.
+  // Use clearPendingLabel (not clearPendingLabelConfirm + unconditional filter) so a failed
+  // storage clear retains the in-memory guard.
   useEffect(() => {
     if (pendingDeleteIds.length === 0) return;
     const present = new Set(catalog.map((p) => p.id));
     const gone = pendingDeleteIds.filter((id) => !present.has(id));
     if (gone.length === 0) return;
     for (const id of gone) {
-      clearPendingLabelConfirm(id);
+      clearPendingLabel(id);
     }
-    const goneSet = new Set(gone);
-    setPendingLabelIds((ids) => {
-      const next = ids.filter((id) => !goneSet.has(id));
-      pendingLabelIdsRef.current = next;
-      return next;
-    });
     setPendingDeleteIds((ids) => ids.filter((id) => present.has(id)));
   }, [catalog, pendingDeleteIds]);
 
@@ -456,7 +470,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
         <div className="nag" role="alert">
           <p>
             Label-confirm storage is unavailable on this device. Activating or unarchiving products is
-            blocked until storage works again.
+            blocked until storage works again (fail closed — pending confirmations are not wiped).
           </p>
         </div>
       )}
