@@ -145,18 +145,36 @@ export function sortStarters(
   return [...rows];
 }
 
-/** Case-insensitive search over name, EPA #, kind, and 25(b). Empty query returns all (for the given kind filter). */
+/** Lowercase an EPA reg. no. and drop spaces/dashes so "100-1070", "100 1070", and "1001070" compare equal. */
+function compactEpa(epa: string | null | undefined): string {
+  return String(epa ?? "")
+    .toLowerCase()
+    .replace(/[\s-]+/g, "");
+}
+
+/**
+ * True when a starter matches a free-text query (case-insensitive substring over name, EPA #,
+ * kind, and 25(b)). EPA reg. no. also matches ignoring spaces/dashes. Empty query matches all.
+ */
+export function starterMatchesQuery(starter: StarterProduct, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const hay = `${starter.name} ${starter.epaRegNo ?? ""} ${starter.kind} ${
+    starter.is25b ? "25b 25(b)" : ""
+  }`.toLowerCase();
+  if (hay.includes(q)) return true;
+  const qEpa = compactEpa(q);
+  return qEpa !== "" && compactEpa(starter.epaRegNo).includes(qEpa);
+}
+
+/** Search via starterMatchesQuery. Empty query returns all (for the given kind filter). */
 export function searchTexasStarterCatalog(
   query: string,
   kindFilter: StarterKindFilter = "all",
 ): StarterProduct[] {
-  const q = query.trim().toLowerCase();
-  return TEXAS_COMMON_STARTER.filter((p) => {
-    if (kindFilter !== "all" && p.kind !== kindFilter) return false;
-    if (!q) return true;
-    const hay = `${p.name} ${p.epaRegNo ?? ""} ${p.kind} ${p.is25b ? "25b 25(b)" : ""}`.toLowerCase();
-    return hay.includes(q);
-  });
+  return TEXAS_COMMON_STARTER.filter(
+    (p) => (kindFilter === "all" || p.kind === kindFilter) && starterMatchesQuery(p, query),
+  );
 }
 
 /** Copy a starter row into a new shop-owned product (inactive until label confirm activates it). */
