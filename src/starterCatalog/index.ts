@@ -196,6 +196,11 @@ export function starterEpaCaption(starter: StarterProduct): string {
   return `EPA ${starter.epaRegNo}`;
 }
 
+/** Polite results line for the starter list, e.g. "Showing 4 of 32 starters". */
+export function formatStarterResultCount(shown: number, total: number): string {
+  return `Showing ${shown} of ${total} starter${total === 1 ? "" : "s"}`;
+}
+
 export {
   STARTER_LABEL_CONFIRM_KEY,
   addPendingLabelConfirm,
