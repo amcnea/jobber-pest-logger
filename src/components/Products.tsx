@@ -18,11 +18,13 @@ import {
   findShopMatchForStarter,
   listPendingLabelConfirmIds,
   searchTexasStarterCatalog,
+  sortStarters,
   starterEpaCaption,
   starterShopState,
   starterToPendingShopProduct,
   type StarterKindFilter,
   type StarterShopStatusFilter,
+  type StarterSortOrder,
   type StarterProduct,
 } from "../starterCatalog";
 import type { ShopProduct } from "../types";
@@ -61,6 +63,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   const [starterQuery, setStarterQuery] = useState("");
   const [starterKindFilter, setStarterKindFilter] = useState<StarterKindFilter>("all");
   const [starterShopStatus, setStarterShopStatus] = useState<StarterShopStatusFilter>("all");
+  const [starterSort, setStarterSort] = useState<StarterSortOrder>("list");
   const [labelConfirmId, setLabelConfirmId] = useState<string | null>(null);
   const [labelConfirmed, setLabelConfirmed] = useState(false);
   const [pendingLabelIds, setPendingLabelIds] = useState<string[]>(() => {
@@ -463,8 +466,9 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   const starterResults = useMemo(() => {
     const rows = searchTexasStarterCatalog(starterQuery, starterKindFilter);
     // hide-active hides only active shop matches; pending/archived stay so office can Confirm label…
-    return filterStartersByShopStatus(rows, catalog, starterShopStatus, pendingLabelIds);
-  }, [starterQuery, starterKindFilter, starterShopStatus, catalog, pendingLabelIds]);
+    const filtered = filterStartersByShopStatus(rows, catalog, starterShopStatus, pendingLabelIds);
+    return sortStarters(filtered, catalog, pendingLabelIds, starterSort);
+  }, [starterQuery, starterKindFilter, starterShopStatus, starterSort, catalog, pendingLabelIds]);
 
   // Counts over the search + kind results (before the shop status filter).
   const starterStatusCounts = useMemo(() => {
@@ -544,10 +548,23 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                 <option value="archived">Archived on shop list</option>
               </select>
             </label>
+            <label className="field">
+              Sort
+              <select
+                value={starterSort}
+                onChange={(e) => setStarterSort(e.target.value as StarterSortOrder)}
+                disabled={labelConfirmId !== null}
+              >
+                <option value="list">Starter list order</option>
+                <option value="name">Name A–Z</option>
+                <option value="needs-action">Needs action first</option>
+              </select>
+            </label>
           </div>
           {(starterQuery.trim() !== "" ||
             starterKindFilter !== "all" ||
-            starterShopStatus !== "all") && (
+            starterShopStatus !== "all" ||
+            starterSort !== "list") && (
             <button
               type="button"
               className="btn btn-secondary"
@@ -555,6 +572,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                 setStarterQuery("");
                 setStarterKindFilter("all");
                 setStarterShopStatus("all");
+                setStarterSort("list");
               }}
               disabled={labelConfirmId !== null}
             >

@@ -101,6 +101,50 @@ export function filterStartersByShopStatus(
   });
 }
 
+/** Display order for starter results (applied after filtering). */
+export type StarterSortOrder = "list" | "name" | "needs-action";
+
+const NEEDS_ACTION_RANK: Record<StarterShopState, number> = {
+  pending: 0,
+  archived: 1,
+  "not-added": 2,
+  active: 3,
+};
+
+/**
+ * Return a NEW array of starter rows in the requested order (input is never mutated):
+ * - list: original starter list order (input order)
+ * - name: name A–Z (localeCompare, sensitivity "base"), ties by id
+ * - needs-action: grouped by starterShopState — pending, archived, not-added, active;
+ *   stable within each group (keeps list order)
+ */
+export function sortStarters(
+  rows: readonly StarterProduct[],
+  catalog: ShopProduct[],
+  pendingIds: ReadonlySet<string> | readonly string[],
+  order: StarterSortOrder,
+): StarterProduct[] {
+  if (order === "name") {
+    return [...rows].sort((a, b) => {
+      const byName = a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+      if (byName !== 0) return byName;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
+  }
+  if (order === "needs-action") {
+    const ids = toIdSet(pendingIds);
+    return rows
+      .map((starter, index) => ({
+        starter,
+        index,
+        rank: NEEDS_ACTION_RANK[starterShopState(catalog, starter, ids)],
+      }))
+      .sort((a, b) => a.rank - b.rank || a.index - b.index)
+      .map((entry) => entry.starter);
+  }
+  return [...rows];
+}
+
 /** Case-insensitive search over name, EPA #, kind, and 25(b). Empty query returns all (for the given kind filter). */
 export function searchTexasStarterCatalog(
   query: string,
