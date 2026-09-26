@@ -89,6 +89,9 @@ export function Export({
     setPullError(null);
     setGateMsg(null);
     setPdfError(null);
+    // Freeze range for this prep (controls also disabled while pullBusy).
+    const rangeFrom = dateFrom;
+    const rangeTo = dateTo;
     setPullBusy(true);
     try {
       const pulled = await resolveExportSections({
@@ -108,7 +111,7 @@ export function Export({
       }
       const sections = pulled.sections;
       const example = exportBlockedByExamples(sections.catalog, sections.logs);
-      const rangeLogs = filterLogsByDateUsed(sections.logs, dateFrom, dateTo);
+      const rangeLogs = filterLogsByDateUsed(sections.logs, rangeFrom, rangeTo);
       const issues = exportCompletenessIssues(rangeLogs);
       if (example.blocked || issues.length > 0) {
         const parts: string[] = [];
@@ -295,22 +298,33 @@ export function Export({
               type="date"
               value={dateFrom}
               onChange={(e) => setDateFrom(e.target.value)}
+              disabled={pullBusy}
             />
           </label>
           <label className="field">
             To
-            <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <input
+              type="date"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              disabled={pullBusy}
+            />
           </label>
         </div>
         <div className="row export-date-row">
-          <button type="button" className="btn btn-secondary" onClick={applyThisMonth}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={applyThisMonth}
+            disabled={pullBusy}
+          >
             This month
           </button>
           <button
             type="button"
             className="btn btn-secondary"
             onClick={clearDates}
-            disabled={!hasDateInput}
+            disabled={!hasDateInput || pullBusy}
           >
             Clear dates
           </button>

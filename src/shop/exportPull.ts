@@ -11,6 +11,7 @@ import {
   getSessionMutationEpoch,
   loadShopSession,
 } from "./session";
+import { RemoteShopStore } from "./RemoteShopStore";
 import { resolveShopStore, type ResolvedShopStoreInfo } from "./resolveShopStore";
 
 export type ExportPullResult =
@@ -94,6 +95,35 @@ export async function resolveExportSections(
       error:
         got.error ||
         "Could not load the shared shop. Exporting this device's local copy instead — it may be incomplete.",
+    };
+  }
+
+  // Do not trust localStorage office role alone — require remote membership/owner.
+  // (Firestore get is still open to any signed-in caller for PIN join; CF-scoped
+  // export read is backlog. This blocks forged local office sessions that are not
+  // office on the shop document.)
+  if (!(info.store instanceof RemoteShopStore)) {
+    return {
+      kind: "canceled",
+      error: "Shared export requires the remote shop store.",
+    };
+  }
+  let uid: string;
+  try {
+    uid = await info.store.ensureUid();
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "Could not verify Firebase identity for export.";
+    return { kind: "canceled", error: message };
+  }
+  const members = got.value.members ?? {};
+  const isRemoteOffice =
+    got.value.ownerUid === uid || members[uid] === "office";
+  if (!isRemoteOffice) {
+    return {
+      kind: "canceled",
+      error:
+        "Shared export requires office membership on the shop document — not only a local office session.",
     };
   }
 
