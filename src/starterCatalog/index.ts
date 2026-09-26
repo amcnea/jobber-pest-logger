@@ -35,11 +35,17 @@ export function findShopMatchForStarter(
   );
 }
 
-/** Case-insensitive search over name, EPA #, kind, and 25(b). Empty query returns all. */
-export function searchTexasStarterCatalog(query: string): StarterProduct[] {
+export type StarterKindFilter = "all" | "pesticide" | "device";
+
+/** Case-insensitive search over name, EPA #, kind, and 25(b). Empty query returns all (for the given kind filter). */
+export function searchTexasStarterCatalog(
+  query: string,
+  kindFilter: StarterKindFilter = "all",
+): StarterProduct[] {
   const q = query.trim().toLowerCase();
-  if (!q) return [...TEXAS_COMMON_STARTER];
   return TEXAS_COMMON_STARTER.filter((p) => {
+    if (kindFilter !== "all" && p.kind !== kindFilter) return false;
+    if (!q) return true;
     const hay = `${p.name} ${p.epaRegNo ?? ""} ${p.kind} ${p.is25b ? "25b 25(b)" : ""}`.toLowerCase();
     return hay.includes(q);
   });

@@ -19,6 +19,7 @@ import {
   searchTexasStarterCatalog,
   starterEpaCaption,
   starterToPendingShopProduct,
+  type StarterKindFilter,
   type StarterProduct,
 } from "../starterCatalog";
 import type { ShopProduct } from "../types";
@@ -55,6 +56,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   const [listFilter, setListFilter] = useState<ListFilter>("active");
   const [kindFilter, setKindFilter] = useState<KindFilter>("all");
   const [starterQuery, setStarterQuery] = useState("");
+  const [starterKindFilter, setStarterKindFilter] = useState<StarterKindFilter>("all");
   const [labelConfirmId, setLabelConfirmId] = useState<string | null>(null);
   const [labelConfirmed, setLabelConfirmed] = useState(false);
   const [pendingLabelIds, setPendingLabelIds] = useState<string[]>(() => {
@@ -454,7 +456,10 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
     });
   }, [catalog, query, listFilter, kindFilter, editingId, labelConfirmId, pendingLabelIds]);
 
-  const starterResults = useMemo(() => searchTexasStarterCatalog(starterQuery), [starterQuery]);
+  const starterResults = useMemo(
+    () => searchTexasStarterCatalog(starterQuery, starterKindFilter),
+    [starterQuery, starterKindFilter],
+  );
 
   return (
     <div>
@@ -492,43 +497,61 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
               disabled={labelConfirmId !== null}
             />
           </label>
+          <div className="row">
+            <label className="field">
+              Kind
+              <select
+                value={starterKindFilter}
+                onChange={(e) => setStarterKindFilter(e.target.value as StarterKindFilter)}
+                disabled={labelConfirmId !== null}
+              >
+                <option value="all">All kinds</option>
+                <option value="pesticide">Pesticide</option>
+                <option value="device">Device</option>
+              </select>
+            </label>
+          </div>
           <p className="hint" role="status">
             Showing {starterResults.length} starter row{starterResults.length === 1 ? "" : "s"}. Add
             copies into your shop list; techs still only pick shop-owned active rows.
           </p>
           <div className="starter-results">
-            {starterResults.map((starter) => {
-              const match = findShopMatchForStarter(catalog, starter);
-              const alreadyActive = match && !match.archived;
-              const alreadyPending = match && match.archived;
-              return (
-                <div className="card-head" key={starter.id} style={{ marginBottom: "0.65rem" }}>
-                  <div>
-                    <strong>{starter.name}</strong>
+            {starterResults.length === 0 ? (
+              <p className="hint">No starter rows match this search/filter.</p>
+            ) : (
+              starterResults.map((starter) => {
+                const match = findShopMatchForStarter(catalog, starter);
+                const alreadyActive = match && !match.archived;
+                const alreadyPending = match && match.archived;
+                return (
+                  <div className="card-head" key={starter.id} style={{ marginBottom: "0.65rem" }}>
                     <div>
-                      <span className="chip">{starter.kind}</span>{" "}
-                      <span className="chip">{starterEpaCaption(starter)}</span>
-                      {alreadyActive && <span className="chip">on shop list</span>}
-                      {alreadyPending && <span className="chip">pending label confirm</span>}
+                      <strong>{starter.name}</strong>
+                      <div>
+                        <span className="chip">{starter.kind}</span>{" "}
+                        <span className="chip">{starterEpaCaption(starter)}</span>
+                        {alreadyActive && <span className="chip">on shop list</span>}
+                        {alreadyPending && <span className="chip">pending label confirm</span>}
+                      </div>
+                    </div>
+                    <div className="card-actions">
+                      {alreadyActive ? (
+                        <span className="hint">Already in catalog</span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          disabled={labelConfirmId !== null}
+                          onClick={() => addStarterToCatalog(starter)}
+                        >
+                          {alreadyPending ? "Confirm label…" : "Add to my catalog"}
+                        </button>
+                      )}
                     </div>
                   </div>
-                  <div className="card-actions">
-                    {alreadyActive ? (
-                      <span className="hint">Already in catalog</span>
-                    ) : (
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
-                        disabled={labelConfirmId !== null}
-                        onClick={() => addStarterToCatalog(starter)}
-                      >
-                        {alreadyPending ? "Confirm label…" : "Add to my catalog"}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         </div>
       )}
