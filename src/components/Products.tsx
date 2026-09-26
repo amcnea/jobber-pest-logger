@@ -19,6 +19,7 @@ import {
   listPendingLabelConfirmIds,
   searchTexasStarterCatalog,
   starterEpaCaption,
+  starterShopState,
   starterToPendingShopProduct,
   type StarterKindFilter,
   type StarterShopStatusFilter,
@@ -462,18 +463,23 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   const starterResults = useMemo(() => {
     const rows = searchTexasStarterCatalog(starterQuery, starterKindFilter);
     // hide-active hides only active shop matches; pending/archived stay so office can Confirm label…
-    return filterStartersByShopStatus(rows, catalog, starterShopStatus);
-  }, [starterQuery, starterKindFilter, starterShopStatus, catalog]);
+    return filterStartersByShopStatus(rows, catalog, starterShopStatus, pendingLabelIds);
+  }, [starterQuery, starterKindFilter, starterShopStatus, catalog, pendingLabelIds]);
 
   // Counts over the search + kind results (before the shop status filter).
   const starterStatusCounts = useMemo(() => {
     const rows = searchTexasStarterCatalog(starterQuery, starterKindFilter);
-    return {
-      notAdded: filterStartersByShopStatus(rows, catalog, "not-added").length,
-      pending: filterStartersByShopStatus(rows, catalog, "pending").length,
-      active: rows.length - filterStartersByShopStatus(rows, catalog, "hide-active").length,
-    };
-  }, [starterQuery, starterKindFilter, catalog]);
+    const ids = new Set(pendingLabelIds);
+    const counts = { notAdded: 0, pending: 0, archived: 0, active: 0 };
+    for (const starter of rows) {
+      const state = starterShopState(catalog, starter, ids);
+      if (state === "not-added") counts.notAdded += 1;
+      else if (state === "pending") counts.pending += 1;
+      else if (state === "archived") counts.archived += 1;
+      else counts.active += 1;
+    }
+    return counts;
+  }, [starterQuery, starterKindFilter, catalog, pendingLabelIds]);
 
   return (
     <div>
@@ -535,6 +541,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                 <option value="hide-active">Hide already on shop list</option>
                 <option value="not-added">Not on shop list yet</option>
                 <option value="pending">Pending label confirm</option>
+                <option value="archived">Archived on shop list</option>
               </select>
             </label>
           </div>
@@ -558,16 +565,18 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
             Showing {starterResults.length} starter row{starterResults.length === 1 ? "" : "s"}. Add
             copies into your shop list; techs still only pick shop-owned active rows.{" "}
             Not on shop list yet: {starterStatusCounts.notAdded} · Pending label confirm:{" "}
-            {starterStatusCounts.pending} · Already on shop list: {starterStatusCounts.active}.
+            {starterStatusCounts.pending} · Archived on shop list: {starterStatusCounts.archived} ·
+            Already on shop list: {starterStatusCounts.active}.
           </p>
           <div className="starter-results">
             {starterResults.length === 0 ? (
               <p className="hint">No starter rows match this search/filter.</p>
             ) : (
               starterResults.map((starter) => {
-                const match = findShopMatchForStarter(catalog, starter);
-                const alreadyActive = match && !match.archived;
-                const alreadyPending = match && match.archived;
+                const state = starterShopState(catalog, starter, pendingLabelIds);
+                const alreadyActive = state === "active";
+                const alreadyPending = state === "pending";
+                const alreadyArchived = state === "archived";
                 return (
                   <div className="card-head" key={starter.id} style={{ marginBottom: "0.65rem" }}>
                     <div>
@@ -577,6 +586,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                         <span className="chip">{starterEpaCaption(starter)}</span>
                         {alreadyActive && <span className="chip">on shop list</span>}
                         {alreadyPending && <span className="chip">pending label confirm</span>}
+                        {alreadyArchived && <span className="chip">archived on shop list</span>}
                       </div>
                     </div>
                     <div className="card-actions">
@@ -589,7 +599,8 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                           disabled={labelConfirmId !== null}
                           onClick={() => addStarterToCatalog(starter)}
                         >
-                          {alreadyPending ? "Confirm label…" : "Add to my catalog"}
+                          {/* Archived matches also route through label confirm in addStarterToCatalog. */}
+                          {alreadyPending || alreadyArchived ? "Confirm label…" : "Add to my catalog"}
                         </button>
                       )}
                     </div>
