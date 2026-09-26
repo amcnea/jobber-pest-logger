@@ -14,12 +14,14 @@ import {
   TEXAS_STARTER_CATALOG_VERSION,
   addPendingLabelConfirm,
   clearPendingLabelConfirm,
+  filterStartersByShopStatus,
   findShopMatchForStarter,
   listPendingLabelConfirmIds,
   searchTexasStarterCatalog,
   starterEpaCaption,
   starterToPendingShopProduct,
   type StarterKindFilter,
+  type StarterShopStatusFilter,
   type StarterProduct,
 } from "../starterCatalog";
 import type { ShopProduct } from "../types";
@@ -57,7 +59,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   const [kindFilter, setKindFilter] = useState<KindFilter>("all");
   const [starterQuery, setStarterQuery] = useState("");
   const [starterKindFilter, setStarterKindFilter] = useState<StarterKindFilter>("all");
-  const [hideOnShopList, setHideOnShopList] = useState(false);
+  const [starterShopStatus, setStarterShopStatus] = useState<StarterShopStatusFilter>("all");
   const [labelConfirmId, setLabelConfirmId] = useState<string | null>(null);
   const [labelConfirmed, setLabelConfirmed] = useState(false);
   const [pendingLabelIds, setPendingLabelIds] = useState<string[]>(() => {
@@ -459,13 +461,19 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
 
   const starterResults = useMemo(() => {
     const rows = searchTexasStarterCatalog(starterQuery, starterKindFilter);
-    if (!hideOnShopList) return rows;
-    // Hide only active shop matches; keep pending/archived so office can Confirm label…
-    return rows.filter((starter) => {
-      const match = findShopMatchForStarter(catalog, starter);
-      return !(match && !match.archived);
-    });
-  }, [starterQuery, starterKindFilter, hideOnShopList, catalog]);
+    // hide-active hides only active shop matches; pending/archived stay so office can Confirm label…
+    return filterStartersByShopStatus(rows, catalog, starterShopStatus);
+  }, [starterQuery, starterKindFilter, starterShopStatus, catalog]);
+
+  // Counts over the search + kind results (before the shop status filter).
+  const starterStatusCounts = useMemo(() => {
+    const rows = searchTexasStarterCatalog(starterQuery, starterKindFilter);
+    return {
+      notAdded: filterStartersByShopStatus(rows, catalog, "not-added").length,
+      pending: filterStartersByShopStatus(rows, catalog, "pending").length,
+      active: rows.length - filterStartersByShopStatus(rows, catalog, "hide-active").length,
+    };
+  }, [starterQuery, starterKindFilter, catalog]);
 
   return (
     <div>
@@ -516,24 +524,30 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                 <option value="device">Device</option>
               </select>
             </label>
+            <label className="field">
+              Shop status
+              <select
+                value={starterShopStatus}
+                onChange={(e) => setStarterShopStatus(e.target.value as StarterShopStatusFilter)}
+                disabled={labelConfirmId !== null}
+              >
+                <option value="all">All starters</option>
+                <option value="hide-active">Hide already on shop list</option>
+                <option value="not-added">Not on shop list yet</option>
+                <option value="pending">Pending label confirm</option>
+              </select>
+            </label>
           </div>
-          <label className="toggle">
-            <input
-              type="checkbox"
-              checked={hideOnShopList}
-              onChange={(e) => setHideOnShopList(e.target.checked)}
-              disabled={labelConfirmId !== null}
-            />
-            Hide already on shop list
-          </label>
-          {(starterQuery.trim() !== "" || starterKindFilter !== "all" || hideOnShopList) && (
+          {(starterQuery.trim() !== "" ||
+            starterKindFilter !== "all" ||
+            starterShopStatus !== "all") && (
             <button
               type="button"
               className="btn btn-secondary"
               onClick={() => {
                 setStarterQuery("");
                 setStarterKindFilter("all");
-                setHideOnShopList(false);
+                setStarterShopStatus("all");
               }}
               disabled={labelConfirmId !== null}
             >
@@ -542,7 +556,9 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
           )}
           <p className="hint" role="status">
             Showing {starterResults.length} starter row{starterResults.length === 1 ? "" : "s"}. Add
-            copies into your shop list; techs still only pick shop-owned active rows.
+            copies into your shop list; techs still only pick shop-owned active rows.{" "}
+            Not on shop list yet: {starterStatusCounts.notAdded} · Pending label confirm:{" "}
+            {starterStatusCounts.pending} · Already on shop list: {starterStatusCounts.active}.
           </p>
           <div className="starter-results">
             {starterResults.length === 0 ? (
