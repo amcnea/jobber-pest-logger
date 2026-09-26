@@ -526,6 +526,20 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
             />
             Hide already on shop list
           </label>
+          {(starterQuery.trim() !== "" || starterKindFilter !== "all" || hideOnShopList) && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                setStarterQuery("");
+                setStarterKindFilter("all");
+                setHideOnShopList(false);
+              }}
+              disabled={labelConfirmId !== null}
+            >
+              Reset search &amp; filters
+            </button>
+          )}
           <p className="hint" role="status">
             Showing {starterResults.length} starter row{starterResults.length === 1 ? "" : "s"}. Add
             copies into your shop list; techs still only pick shop-owned active rows.

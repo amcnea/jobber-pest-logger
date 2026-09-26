@@ -20,19 +20,23 @@ function normalizeName(name: string): string {
   return name.trim().toLowerCase();
 }
 
-/** Find a shop row that already matches this starter (EPA #, or name+kind for 25(b)/device). */
+/**
+ * Find a shop row that already matches this starter (EPA #, or name+kind for 25(b)/device
+ * rows with no EPA #). When several shop rows match, prefer the first non-archived (active)
+ * row; if none is active, return the first archived match; otherwise undefined.
+ */
 export function findShopMatchForStarter(
   catalog: ShopProduct[],
   starter: StarterProduct,
 ): ShopProduct | undefined {
   const starterEpa = normalizeEpa(starter.epaRegNo);
-  if (starterEpa) {
-    return catalog.find((p) => normalizeEpa(p.epaRegNo) === starterEpa);
-  }
   const name = normalizeName(starter.name);
-  return catalog.find(
-    (p) => p.kind === starter.kind && normalizeName(p.name) === name && !normalizeEpa(p.epaRegNo),
+  const matches = catalog.filter((p) =>
+    starterEpa
+      ? normalizeEpa(p.epaRegNo) === starterEpa
+      : p.kind === starter.kind && normalizeName(p.name) === name && !normalizeEpa(p.epaRegNo),
   );
+  return matches.find((p) => !p.archived) ?? matches[0];
 }
 
 export type StarterKindFilter = "all" | "pesticide" | "device";
