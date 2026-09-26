@@ -516,7 +516,8 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
               type="search"
               value={starterQuery}
               onChange={(e) => setStarterQuery(e.target.value)}
-              placeholder="Name or EPA #"
+              placeholder="Name or EPA reg. no. (dashes optional)"
+              aria-label="Search starter list by name or EPA reg. no."
               autoComplete="off"
               disabled={labelConfirmId !== null}
             />
