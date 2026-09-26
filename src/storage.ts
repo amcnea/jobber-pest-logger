@@ -552,6 +552,11 @@ export interface DeviceBackup {
   catalog: ShopProduct[];
   people: Person[];
   settings: ShopSettings;
+  /**
+   * Optional export provenance (#7). Informational only: parseBackup ignores
+   * unknown/extra keys and rebuilds the backup from known fields on restore.
+   */
+  meta?: Record<string, unknown>;
 }
 
 export function buildBackup(): DeviceBackup {
@@ -767,8 +772,11 @@ export function backupNagMessage(iso: string | null, now = new Date()): string |
  * Download backup JSON. Optional `sections` override (shared-shop pull #7);
  * omitted ⇒ build from this device's localStorage (local-only path).
  */
-export function downloadBackup(sections?: ShopSections): void {
-  const backup: DeviceBackup = sections
+export function downloadBackup(
+  sections?: ShopSections,
+  meta?: { fileSuffix: string; provenance: Record<string, unknown> },
+): void {
+  const built: DeviceBackup = sections
     ? {
         version: BACKUP_VERSION,
         exportedAt: new Date().toISOString(),
@@ -778,6 +786,7 @@ export function downloadBackup(sections?: ShopSections): void {
         settings: sections.settings,
       }
     : buildBackup();
+  const backup: DeviceBackup = meta ? { ...built, meta: meta.provenance } : built;
   const blob = new Blob([JSON.stringify(backup, null, 2)], {
     type: "application/json;charset=utf-8",
   });
@@ -785,7 +794,9 @@ export function downloadBackup(sections?: ShopSections): void {
   const a = document.createElement("a");
   a.href = url;
   const stamp = backup.exportedAt.slice(0, 10);
-  a.download = `jobber-pest-logger-backup-${stamp}.json`;
+  a.download = meta
+    ? `jobber-pest-logger-backup-${meta.fileSuffix}.json`
+    : `jobber-pest-logger-backup-${stamp}.json`;
   a.rel = "noopener";
   a.style.display = "none";
   document.body.appendChild(a);

@@ -1,6 +1,12 @@
 import { jsPDF } from "jspdf";
 import { epaExportText, EXAMPLE_EPA_LABEL, inferIsExample, logHasExampleProducts } from "./catalog";
 import { LAWGICAL_DISCLAIMER } from "./disclaimer";
+import {
+  provenanceFileSuffix,
+  provenanceLines,
+  provenanceSummary,
+  type ExportProvenance,
+} from "./exportProvenance";
 import type { ApplicationLog } from "./types";
 
 function person(log: ApplicationLog, role: ApplicationLog["personnel"][number]["role"]) {
@@ -55,13 +61,25 @@ const FOOTER_LINE_H = 3.2;
 /** Max wrapped lines for shop name in the repeating page header. */
 const SHOP_NAME_MAX_LINES = 2;
 
-/** Split disclaimer once; band height must match drawFooter layout + font. */
-function measureFooter(doc: jsPDF): { lines: string[]; bandH: number } {
+/**
+ * Split provenance summary (if any) + disclaimer once; band height must match
+ * drawFooter layout + font. Disclaimer text itself is unchanged.
+ */
+function measureFooter(
+  doc: jsPDF,
+  provenance?: ExportProvenance,
+): { lines: string[]; bandH: number } {
   const prevSize = doc.getFontSize();
   const prevFont = doc.getFont();
   doc.setFont("helvetica", "normal");
   doc.setFontSize(6.5);
-  const lines = doc.splitTextToSize(LAWGICAL_DISCLAIMER, MAX_WIDTH) as string[];
+  const provLines = provenance
+    ? (doc.splitTextToSize(provenanceSummary(provenance), MAX_WIDTH) as string[])
+    : [];
+  const lines = [
+    ...provLines,
+    ...(doc.splitTextToSize(LAWGICAL_DISCLAIMER, MAX_WIDTH) as string[]),
+  ];
   doc.setFont(prevFont.fontName, prevFont.fontStyle);
   doc.setFontSize(prevSize);
   const blockH = lines.length * FOOTER_LINE_H;
@@ -128,10 +146,14 @@ function drawPageHeader(doc: jsPDF, shopName: string | undefined): number {
   return y + 5;
 }
 
-export function downloadPdf(logs: ApplicationLog[], shopName?: string): void {
+export function downloadPdf(
+  logs: ApplicationLog[],
+  shopName?: string,
+  provenance?: ExportProvenance,
+): void {
   const doc = new jsPDF({ unit: "mm", format: "letter" });
-  // Split disclaimer once; reuse lines + band height for every page.
-  const { lines: footerLines, bandH: footerBandH } = measureFooter(doc);
+  // Split provenance + disclaimer once; reuse lines + band height for every page.
+  const { lines: footerLines, bandH: footerBandH } = measureFooter(doc, provenance);
   const contentBottom = PAGE_H - footerBandH - 2;
 
   let y = drawPageHeader(doc, shopName);
@@ -146,6 +168,14 @@ export function downloadPdf(logs: ApplicationLog[], shopName?: string): void {
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
+  if (provenance) {
+    // Page-1 provenance block (export metadata, not a § 7.144 record field).
+    for (const line of provenanceLines(provenance)) {
+      ensureSpace(wrappedHeight(doc, line, MAX_WIDTH) + 0.5);
+      y = wrap(doc, line, MARGIN, y, MAX_WIDTH);
+    }
+    y += 2;
+  }
   const schemaNote =
     "Columns follow 4 TAC § 7.144(a) for Texas SPCS shops. Termite extras follow § 7.144(b) when the stop is termite work. Full disclaimer is on every page footer.";
   ensureSpace(wrappedHeight(doc, schemaNote, MAX_WIDTH) + 2);
@@ -244,5 +274,9 @@ export function downloadPdf(logs: ApplicationLog[], shopName?: string): void {
     drawFooter(doc, i, pageCount, footerLines);
   }
 
-  doc.save("texas-tda-application-logs.pdf");
+  doc.save(
+    provenance
+      ? `texas-tda-application-logs-${provenanceFileSuffix(provenance)}.pdf`
+      : "texas-tda-application-logs.pdf",
+  );
 }

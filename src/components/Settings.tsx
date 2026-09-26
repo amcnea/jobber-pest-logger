@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { LAWGICAL_DISCLAIMER } from "../disclaimer";
+import { buildExportProvenance, provenanceFileSuffix } from "../exportProvenance";
 import {
   applyBackup,
   backupNagMessage,
@@ -805,7 +806,16 @@ export function Settings({
                     `Shared shop pull failed (${pulled.shopId}): ${pulled.error} Downloaded this device's local copy instead — it may not match the full shop.`,
                   );
                 }
-                downloadBackup(pulled.sections);
+                const provenance = buildExportProvenance({
+                  kind: pulled.kind,
+                  shopId: pulled.kind === "local" ? null : pulled.shopId,
+                  recordCount: pulled.sections.logs.length,
+                  rangeLabel: "All dates (full backup)",
+                });
+                downloadBackup(pulled.sections, {
+                  fileSuffix: provenanceFileSuffix(provenance, false),
+                  provenance: { ...provenance },
+                });
                 onBackupStampChange(loadLastBackupAt());
                 setBackupMsg(
                   pulled.kind === "shared"
