@@ -41,6 +41,36 @@ export function findShopMatchForStarter(
 
 export type StarterKindFilter = "all" | "pesticide" | "device";
 
+export type StarterShopStatusFilter = "all" | "hide-active" | "not-added" | "pending";
+
+/**
+ * Filter starter rows by their shop-list status (via findShopMatchForStarter):
+ * - all: no filtering
+ * - hide-active: hide starters with an active (non-archived) shop match; pending/archived stay
+ * - not-added: only starters with no shop match at all
+ * - pending: only starters whose shop match is archived (pending label confirm)
+ */
+export function filterStartersByShopStatus(
+  rows: StarterProduct[],
+  catalog: ShopProduct[],
+  status: StarterShopStatusFilter,
+): StarterProduct[] {
+  if (status === "all") return rows;
+  return rows.filter((starter) => {
+    const match = findShopMatchForStarter(catalog, starter);
+    switch (status) {
+      case "hide-active":
+        return !(match && !match.archived);
+      case "not-added":
+        return !match;
+      case "pending":
+        return !!match && match.archived;
+      default:
+        return true;
+    }
+  });
+}
+
 /** Case-insensitive search over name, EPA #, kind, and 25(b). Empty query returns all (for the given kind filter). */
 export function searchTexasStarterCatalog(
   query: string,
