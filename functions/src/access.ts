@@ -67,7 +67,10 @@ export function decideBootstrap(
   officePin: unknown,
   techPin: unknown,
 ): Decision<{ members: ShopMembers; ownerUid: string }> {
-  if (doc.auth !== undefined && doc.auth !== null) {
+  // Bundle #71 Major: any `auth` key at all (including null) counts as configured.
+  // Only a doc with no auth field can be bootstrapped; a null value must not let
+  // a signed-in stranger set PINs or claim ownership.
+  if (Object.prototype.hasOwnProperty.call(doc, "auth")) {
     return { ok: false, code: "failed-precondition", message: "This shop already has PINs (or unreadable PIN auth). Sign in with office or tech PIN instead." };
   }
   if (hasMembership(doc) && !isOfficeCaller(doc, uid)) {

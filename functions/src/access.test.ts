@@ -70,3 +70,10 @@ test("decideChangePins: only owner/office member", () => {
   assert.equal(decideChangePins(doc, "x", "1111", "2222").ok, false);
   assert.equal(decideChangePins({ auth }, "x", "1111", "2222").ok, false);
 });
+
+test("decideBootstrap: an auth key set to null still counts as configured (Bundle #71)", () => {
+  const d = decideBootstrap({ auth: null }, "stranger", "1111", "2222");
+  assert.equal(d.ok, false);
+  assert.equal(!d.ok && d.code, "failed-precondition");
+  assert.equal(decideBootstrap({ auth: null, members: {} }, "u", "1111", "2222").ok, false);
+});
