@@ -41,30 +41,60 @@ export function findShopMatchForStarter(
 
 export type StarterKindFilter = "all" | "pesticide" | "device";
 
-export type StarterShopStatusFilter = "all" | "hide-active" | "not-added" | "pending";
+export type StarterShopStatusFilter = "all" | "hide-active" | "not-added" | "pending" | "archived";
+
+/** Shop-list state of a starter row relative to the shop catalog. */
+export type StarterShopState = "not-added" | "active" | "pending" | "archived";
+
+function toIdSet(pendingIds: ReadonlySet<string> | readonly string[]): ReadonlySet<string> {
+  return pendingIds instanceof Set ? pendingIds : new Set(pendingIds as readonly string[]);
+}
 
 /**
- * Filter starter rows by their shop-list status (via findShopMatchForStarter):
+ * Classify a starter by its shop match (via findShopMatchForStarter):
+ * - not-added: no shop match
+ * - active: match is not archived
+ * - pending: match is archived AND its id is awaiting label confirm (pendingIds)
+ * - archived: match is archived but not awaiting label confirm (normally archived product)
+ */
+export function starterShopState(
+  catalog: ShopProduct[],
+  starter: StarterProduct,
+  pendingIds: ReadonlySet<string> | readonly string[],
+): StarterShopState {
+  const match = findShopMatchForStarter(catalog, starter);
+  if (!match) return "not-added";
+  if (!match.archived) return "active";
+  return toIdSet(pendingIds).has(match.id) ? "pending" : "archived";
+}
+
+/**
+ * Filter starter rows by their shop-list state (via starterShopState):
  * - all: no filtering
- * - hide-active: hide starters with an active (non-archived) shop match; pending/archived stay
+ * - hide-active: hide only starters with an active (non-archived) shop match; pending/archived stay
  * - not-added: only starters with no shop match at all
- * - pending: only starters whose shop match is archived (pending label confirm)
+ * - pending: only starters whose archived shop match is awaiting label confirm (id in pendingIds)
+ * - archived: only starters whose shop match is archived and NOT awaiting label confirm
  */
 export function filterStartersByShopStatus(
   rows: StarterProduct[],
   catalog: ShopProduct[],
   status: StarterShopStatusFilter,
+  pendingIds: ReadonlySet<string> | readonly string[],
 ): StarterProduct[] {
   if (status === "all") return rows;
+  const ids = toIdSet(pendingIds);
   return rows.filter((starter) => {
-    const match = findShopMatchForStarter(catalog, starter);
+    const state = starterShopState(catalog, starter, ids);
     switch (status) {
       case "hide-active":
-        return !(match && !match.archived);
+        return state !== "active";
       case "not-added":
-        return !match;
+        return state === "not-added";
       case "pending":
-        return !!match && match.archived;
+        return state === "pending";
+      case "archived":
+        return state === "archived";
       default:
         return true;
     }
