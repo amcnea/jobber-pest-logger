@@ -17,6 +17,17 @@ import {
 import { backupNagMessage, formatLastBackupLabel } from "../storage";
 import type { ApplicationLog, Screen, ShopProduct, ShopSettings } from "../types";
 
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+const INVERTED_RANGE_MSG =
+  "“From” is after “To”, so no logs can match. Fix the date range to export.";
+
+/** Both bounds are valid YYYY-MM-DD and From is later than To (string compare = local calendar order). */
+function isInvertedRange(from: string, to: string): boolean {
+  const f = from.trim();
+  const t = to.trim();
+  return YMD_RE.test(f) && YMD_RE.test(t) && f > t;
+}
+
 interface Props {
   logs: ApplicationLog[];
   catalog: ShopProduct[];
@@ -64,9 +75,12 @@ export function Export({
   // Shared office: gates apply to the pulled snapshot at download time (local UI
   // may be stale). Local-only: keep today's disable-on-gate behavior.
   const sharedPull = Boolean(sharedPullHint);
+  // From after To silently matches nothing (and, for a shared shop, would pull
+  // the cloud snapshot only to fail with "No logs in range"). Block in both modes.
+  const rangeInverted = isInvertedRange(dateFrom, dateTo);
   const exportBlocked = sharedPull
-    ? false
-    : exampleGate.blocked || completenessBlocked;
+    ? rangeInverted
+    : rangeInverted || exampleGate.blocked || completenessBlocked;
 
   // Pre-download preview of the provenance the export will carry. For a shared
   // shop the real count comes from the snapshot pulled at download time.
@@ -114,6 +128,10 @@ export function Export({
     // Freeze range for this prep (controls also disabled while pullBusy).
     const rangeFrom = dateFrom;
     const rangeTo = dateTo;
+    if (isInvertedRange(rangeFrom, rangeTo)) {
+      setGateMsg(INVERTED_RANGE_MSG);
+      return { ok: false, logs: [], shopName: "" };
+    }
     setPullBusy(true);
     try {
       const pulled = await resolveExportSections({
@@ -336,6 +354,7 @@ export function Export({
               type="date"
               value={dateFrom}
               onChange={(e) => setDateFrom(e.target.value)}
+              max={dateTo || undefined}
               disabled={pullBusy}
             />
           </label>
@@ -345,6 +364,7 @@ export function Export({
               type="date"
               value={dateTo}
               onChange={(e) => setDateTo(e.target.value)}
+              min={dateFrom || undefined}
               disabled={pullBusy}
             />
           </label>
@@ -367,6 +387,11 @@ export function Export({
             Clear dates
           </button>
         </div>
+        {rangeInverted && (
+          <p className="nag" role="alert">
+            {INVERTED_RANGE_MSG}
+          </p>
+        )}
       </div>
 
       <div className="card">
