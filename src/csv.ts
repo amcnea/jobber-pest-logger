@@ -1,5 +1,9 @@
 import { epaExportText, EXAMPLE_EPA_LABEL, inferIsExample } from "./catalog";
-import { provenanceFileSuffix, type ExportProvenance } from "./exportProvenance";
+import {
+  provenanceFileSuffix,
+  shopSlugForFilename,
+  type ExportProvenance,
+} from "./exportProvenance";
 import type { ApplicationLog } from "./types";
 
 /** Texas TDA CSV columns matching 4 TAC § 7.144(a)/(b). Optional Jobber link is last and labeled not-TDA. */
@@ -140,15 +144,6 @@ export function logsToCsv(logs: ApplicationLog[]): string {
     return cells.map(csvEscape).join(",");
   });
   return [header, ...rows].join("\r\n") + "\r\n";
-}
-
-function shopSlugForFilename(shopName: string): string {
-  return shopName
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40);
 }
 
 /**

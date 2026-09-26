@@ -122,3 +122,23 @@ export function provenanceFileSuffix(p: ExportProvenance, withRange = true): str
   parts.push(sourceTag(p.source), `generated-${generatedYmd}`);
   return parts.join("-");
 }
+
+/**
+ * ASCII filename slug for a shop name (#64): strip diacritics first so
+ * "Peña Pest" becomes "pena-pest" (not "pe-a-pest"). Returns "" when nothing
+ * Latin/alphanumeric survives (e.g. "東京"); callers omit the slug segment then.
+ */
+const NON_DECOMPOSING: Record<string, string> = {
+  ß: "ss", æ: "ae", œ: "oe", ø: "o", đ: "d", ł: "l", þ: "th", ð: "d",
+};
+
+export function shopSlugForFilename(shopName: string): string {
+  return shopName
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[ßæœøđłþð]/g, (c) => NON_DECOMPOSING[c] ?? "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .slice(0, 40)
+    .replace(/^-+|-+$/g, "");
+}
