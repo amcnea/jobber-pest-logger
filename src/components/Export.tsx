@@ -3,10 +3,15 @@ import { exportBlockedByExamples, productEpaCaption } from "../catalog";
 import { downloadCsv } from "../csv";
 import { filterLogsByDateUsed, monthRangeLocal } from "../dates";
 import { LAWGICAL_DISCLAIMER } from "../disclaimer";
-import { buildExportProvenance, type ExportProvenance } from "../exportProvenance";
+import {
+  buildExportProvenance,
+  provenanceSummary,
+  type ExportProvenance,
+} from "../exportProvenance";
 import { exportCompletenessIssues } from "../formDefaults";
 import {
   resolveExportSections,
+  resolveShopStore,
   sharedExportPullHint,
 } from "../shop";
 import { backupNagMessage, formatLastBackupLabel } from "../storage";
@@ -36,6 +41,7 @@ export function Export({
   const [pullError, setPullError] = useState<string | null>(null);
   const [pullBusy, setPullBusy] = useState(false);
   const [gateMsg, setGateMsg] = useState<string | null>(null);
+  const [lastExport, setLastExport] = useState<ExportProvenance | null>(null);
 
   const lastBackupLabel = formatLastBackupLabel(lastBackupAt);
   const nag = backupNagMessage(lastBackupAt);
@@ -61,6 +67,20 @@ export function Export({
   const exportBlocked = sharedPull
     ? false
     : exampleGate.blocked || completenessBlocked;
+
+  // Pre-download preview of the provenance the export will carry. For a shared
+  // shop the real count comes from the snapshot pulled at download time.
+  const preview = useMemo(
+    () =>
+      buildExportProvenance({
+        kind: sharedPull ? "shared" : "local",
+        shopId: sharedPull ? resolveShopStore().shopId : null,
+        dateFrom,
+        dateTo,
+        recordCount: filtered.length,
+      }),
+    [sharedPull, dateFrom, dateTo, filtered.length],
+  );
 
   const shopName = settings.shopName.trim();
   const ymd = /^\d{4}-\d{2}-\d{2}$/;
@@ -154,6 +174,7 @@ export function Export({
       return;
     }
     downloadCsv(prepared.logs, prepared.shopName || undefined, prepared.provenance);
+    setLastExport(prepared.provenance ?? null);
   }
 
   async function handlePdf() {
@@ -167,6 +188,7 @@ export function Export({
     try {
       const mod = await import("../pdf");
       mod.downloadPdf(prepared.logs, prepared.shopName || undefined, prepared.provenance);
+      setLastExport(prepared.provenance ?? null);
     } catch (err) {
       console.error("jobber-pest-logger: PDF export failed", err);
       setPdfError(
@@ -362,6 +384,29 @@ export function Export({
           .
         </p>
         <p className="hint">Exports stay on your machine. Nothing is uploaded.</p>
+      </div>
+
+      <div className="card export-preview" aria-label="Export preview">
+        <h3>Export preview</h3>
+        <p className="hint">
+          What the CSV/PDF provenance header will say. Final values are stamped at download.
+        </p>
+        <ul className="warn-list">
+          <li>Source: {preview.sourceLabel}</li>
+          {preview.shopId && <li>Shop ID: {preview.shopId}</li>}
+          <li>Date range (date used): {preview.rangeLabel}</li>
+          <li>
+            Records:{" "}
+            {sharedPull
+              ? `${preview.recordCount} on this device — final count from the shared snapshot`
+              : preview.recordCount}
+          </li>
+        </ul>
+        {lastExport && (
+          <p className="hint" role="status">
+            Last export — {provenanceSummary(lastExport)}
+          </p>
+        )}
       </div>
 
       <div className="sticky-save sticky-actions no-print">
