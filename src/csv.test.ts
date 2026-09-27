@@ -411,6 +411,61 @@ describe("logsToCsv products", () => {
     expect(row[col("Device counts")]).toBe("Bait Station: 12; Glue Board");
   });
 
+  it("keeps Devices used and Device counts aligned slot for slot when a device has no name", () => {
+    const row = singleRow(
+      makeLog({
+        products: [
+          product({ lineId: "1", name: "Bait Station", method: "device", epaRegNo: null, deviceCount: "12" }),
+          product({ lineId: "2", name: "", method: "device", epaRegNo: null, deviceCount: "3" }),
+          product({ lineId: "3", name: "Glue Board", method: "device", epaRegNo: null, deviceCount: "5" }),
+        ],
+      }),
+    );
+    expect(row[col("Devices used")]).toBe("Bait Station; ; Glue Board");
+    expect(row[col("Device counts")]).toBe("Bait Station: 12; : 3; Glue Board: 5");
+    expect(row[col("Devices used")].split("; ")).toHaveLength(row[col("Device counts")].split("; ").length);
+  });
+
+  it("keeps an empty slot in both device columns for an unnamed device with no count", () => {
+    const row = singleRow(
+      makeLog({
+        products: [
+          product({ lineId: "1", name: "", method: "device", epaRegNo: null, deviceCount: "" }),
+          product({ lineId: "2", name: "Glue Board", method: "device", epaRegNo: null, deviceCount: "5" }),
+        ],
+      }),
+    );
+    expect(row[col("Devices used")]).toBe("; Glue Board");
+    expect(row[col("Device counts")]).toBe("; Glue Board: 5");
+  });
+
+  it("leaves both device cells blank when every device is unnamed with no count", () => {
+    const row = singleRow(
+      makeLog({
+        products: [
+          product({ lineId: "1", name: "", method: "device", epaRegNo: null, deviceCount: "" }),
+          product({ lineId: "2", name: "", method: "device", epaRegNo: null, deviceCount: "" }),
+        ],
+      }),
+    );
+    expect(row[col("Devices used")]).toBe("");
+    expect(row[col("Device counts")]).toBe("");
+  });
+
+  it("keeps device slots aligned when only some devices have counts", () => {
+    const row = singleRow(
+      makeLog({
+        products: [
+          product({ lineId: "1", name: "A", method: "device", epaRegNo: null, deviceCount: "" }),
+          product({ lineId: "2", name: "", method: "device", epaRegNo: null, deviceCount: "" }),
+          product({ lineId: "3", name: "C", method: "device", epaRegNo: null, deviceCount: "2" }),
+        ],
+      }),
+    );
+    expect(row[col("Devices used")]).toBe("A; ; C");
+    expect(row[col("Device counts")]).toBe("A; ; C: 2");
+  });
+
   it("labels example devices in the device columns", () => {
     const row = singleRow(
       makeLog({
@@ -556,6 +611,62 @@ describe("logsToCsv products", () => {
       }),
     );
     expect(row[EPA_COL]).toBe(`${EXAMPLE_EPA_LABEL}; ; 333-3`);
+  });
+
+  it("keeps an empty name slot for an unnamed pesticide so names align with EPA numbers", () => {
+    const row = singleRow(
+      makeLog({
+        products: [
+          product({ lineId: "1", name: "A", epaRegNo: "111-1" }),
+          product({ lineId: "2", name: "", epaRegNo: "222-2" }),
+          product({ lineId: "3", name: "C", epaRegNo: "333-3" }),
+        ],
+      }),
+    );
+    expect(row[col("Pesticide names")]).toBe("A; ; C");
+    expect(row[EPA_COL]).toBe("111-1; 222-2; 333-3");
+    expect(row[col("Pesticide names")].split("; ")).toHaveLength(row[EPA_COL].split("; ").length);
+  });
+
+  it("keeps leading/trailing empty name slots for unnamed pesticides", () => {
+    const row = singleRow(
+      makeLog({
+        products: [
+          product({ lineId: "1", name: "", epaRegNo: "111-1" }),
+          product({ lineId: "2", name: "B", epaRegNo: "222-2" }),
+          product({ lineId: "3", name: "", epaRegNo: "333-3" }),
+        ],
+      }),
+    );
+    expect(row[col("Pesticide names")]).toBe("; B; ");
+    expect(row[EPA_COL]).toBe("111-1; 222-2; 333-3");
+  });
+
+  it("leaves the Pesticide names cell blank (not '; ') when every pesticide is unnamed", () => {
+    const row = singleRow(
+      makeLog({
+        products: [
+          product({ lineId: "1", name: "", epaRegNo: "111-1" }),
+          product({ lineId: "2", name: "", epaRegNo: "222-2" }),
+        ],
+      }),
+    );
+    expect(row[col("Pesticide names")]).toBe("");
+    expect(row[EPA_COL]).toBe("111-1; 222-2");
+  });
+
+  it("aligns an unnamed pesticide that is also 25(b) (blank in both columns)", () => {
+    const row = singleRow(
+      makeLog({
+        products: [
+          product({ lineId: "1", name: "A", epaRegNo: "111-1" }),
+          product({ lineId: "2", name: "", epaRegNo: null, is25b: true }),
+          product({ lineId: "3", name: "C", epaRegNo: "333-3" }),
+        ],
+      }),
+    );
+    expect(row[col("Pesticide names")]).toBe("A; ; C");
+    expect(row[EPA_COL]).toBe("111-1; ; 333-3");
   });
 
   it("ignores devices when building EPA slots", () => {
