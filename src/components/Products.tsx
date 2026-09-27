@@ -16,6 +16,7 @@ import {
   clearPendingLabelConfirm,
   filterStartersByShopStatus,
   findShopMatchForStarter,
+  formatStarterResultCount,
   listPendingLabelConfirmIds,
   searchTexasStarterCatalog,
   sortStarters,
@@ -580,8 +581,8 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
               Reset search &amp; filters
             </button>
           )}
-          <p className="hint" role="status">
-            Showing {starterResults.length} starter row{starterResults.length === 1 ? "" : "s"}. Add
+          <p className="hint" role="status" aria-live="polite">
+            {formatStarterResultCount(starterResults.length, TEXAS_COMMON_STARTER.length)}. Add
             copies into your shop list; techs still only pick shop-owned active rows.{" "}
             Not on shop list yet: {starterStatusCounts.notAdded} · Pending label confirm:{" "}
             {starterStatusCounts.pending} · Archived on shop list: {starterStatusCounts.archived} ·
