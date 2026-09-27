@@ -16,6 +16,7 @@ import {
   clearPendingLabelConfirm,
   filterStartersByShopStatus,
   findShopMatchForStarter,
+  formatStarterResultCount,
   listPendingLabelConfirmIds,
   searchTexasStarterCatalog,
   sortStarters,
@@ -27,7 +28,15 @@ import {
   type StarterSortOrder,
   type StarterProduct,
 } from "../starterCatalog";
+import { highlightSegments } from "../starterCatalog/highlight";
 import type { ShopProduct } from "../types";
+
+/** Render text with query matches wrapped in <mark> (plain React children, no raw HTML). */
+function renderHighlighted(text: string, query: string) {
+  return highlightSegments(text, query).map((seg, i) =>
+    seg.match ? <mark key={i}>{seg.text}</mark> : <span key={i}>{seg.text}</span>,
+  );
+}
 
 interface Props {
   catalog: ShopProduct[];
@@ -64,6 +73,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   const [starterKindFilter, setStarterKindFilter] = useState<StarterKindFilter>("all");
   const [starterShopStatus, setStarterShopStatus] = useState<StarterShopStatusFilter>("all");
   const [starterSort, setStarterSort] = useState<StarterSortOrder>("list");
+  const starterSearchRef = useRef<HTMLInputElement>(null);
   const [labelConfirmId, setLabelConfirmId] = useState<string | null>(null);
   const [labelConfirmed, setLabelConfirmed] = useState(false);
   const [pendingLabelIds, setPendingLabelIds] = useState<string[]>(() => {
@@ -512,15 +522,39 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
           </p>
           <label className="field">
             Search starter list
-            <input
-              type="search"
-              value={starterQuery}
-              onChange={(e) => setStarterQuery(e.target.value)}
-              placeholder="Name or EPA reg. no. (dashes optional)"
-              aria-label="Search starter list by name or EPA reg. no."
-              autoComplete="off"
-              disabled={labelConfirmId !== null}
-            />
+            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+              <input
+                ref={starterSearchRef}
+                type="search"
+                value={starterQuery}
+                onChange={(e) => setStarterQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  // Escape clears only the search text; leave default behavior when empty.
+                  if (e.key === "Escape" && starterQuery !== "") {
+                    e.preventDefault();
+                    setStarterQuery("");
+                  }
+                }}
+                placeholder="Name or EPA reg. no. (dashes optional)"
+                aria-label="Search starter list by name or EPA reg. no."
+                autoComplete="off"
+                disabled={labelConfirmId !== null}
+              />
+              {starterQuery !== "" && (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  aria-label="Clear starter search"
+                  onClick={() => {
+                    setStarterQuery("");
+                    starterSearchRef.current?.focus();
+                  }}
+                  disabled={labelConfirmId !== null}
+                >
+                  ×
+                </button>
+              )}
+            </div>
           </label>
           <div className="row">
             <label className="field">
@@ -580,8 +614,8 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
               Reset search &amp; filters
             </button>
           )}
-          <p className="hint" role="status">
-            Showing {starterResults.length} starter row{starterResults.length === 1 ? "" : "s"}. Add
+          <p className="hint" role="status" aria-live="polite">
+            {formatStarterResultCount(starterResults.length, TEXAS_COMMON_STARTER.length)}. Add
             copies into your shop list; techs still only pick shop-owned active rows.{" "}
             Not on shop list yet: {starterStatusCounts.notAdded} · Pending label confirm:{" "}
             {starterStatusCounts.pending} · Archived on shop list: {starterStatusCounts.archived} ·
@@ -599,10 +633,12 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                 return (
                   <div className="card-head" key={starter.id} style={{ marginBottom: "0.65rem" }}>
                     <div>
-                      <strong>{starter.name}</strong>
+                      <strong>{renderHighlighted(starter.name, starterQuery)}</strong>
                       <div>
                         <span className="chip">{starter.kind}</span>{" "}
-                        <span className="chip">{starterEpaCaption(starter)}</span>
+                        <span className="chip">
+                          {renderHighlighted(starterEpaCaption(starter), starterQuery)}
+                        </span>
                         {alreadyActive && <span className="chip">on shop list</span>}
                         {alreadyPending && <span className="chip">pending label confirm</span>}
                         {alreadyArchived && <span className="chip">archived on shop list</span>}
