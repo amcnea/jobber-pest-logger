@@ -178,6 +178,11 @@ export function searchTexasStarterCatalog(
   );
 }
 
+/** When only25b is true, keep only 25(b) pesticide starters; otherwise return rows unchanged. */
+export function filterStarters25bOnly(rows: StarterProduct[], only25b: boolean): StarterProduct[] {
+  return only25b ? rows.filter((p) => p.kind === "pesticide" && p.is25b) : rows;
+}
+
 /** Copy a starter row into a new shop-owned product (inactive until label confirm activates it). */
 export function starterToPendingShopProduct(starter: StarterProduct, id: string): ShopProduct {
   return {
