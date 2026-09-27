@@ -502,15 +502,15 @@ describe("exportCompletenessIssues", () => {
     expect(issue.serviceAddress).toBe("2 Oak Ave");
   });
 
-  // BUG (minor, display only): a whitespace-only dateUsed is flagged "Date used"
-  // (validateLog trims it), but the issue's dateUsed is not trimmed, so the
-  // "(no date)" placeholder is skipped. serviceAddress on the next line is
-  // trimmed before its placeholder check, so the two are inconsistent.
-  //   Expected: dateUsed "(no date)"   Actual: dateUsed "   "
-  it.skip("uses the (no date) placeholder for a whitespace-only date", () => {
+  it("uses the (no date) placeholder for a whitespace-only date", () => {
     const [issue] = exportCompletenessIssues([validLog({ dateUsed: "   " })]);
     expect(issue.fields).toEqual(["Date used"]);
     expect(issue.dateUsed).toBe("(no date)");
+  });
+
+  it("trims the date it reports", () => {
+    const [issue] = exportCompletenessIssues([validLog({ dateUsed: " 2026-09-26 ", targetPestOrPurpose: "" })]);
+    expect(issue.dateUsed).toBe("2026-09-26");
   });
 
   it("reports only incomplete logs, in input order", () => {
