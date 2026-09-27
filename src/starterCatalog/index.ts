@@ -5,6 +5,7 @@ import type { StarterProduct } from "./types";
 export type { StarterProduct } from "./types";
 export type { LabelConfirmReadResult } from "./labelConfirmStore";
 export { TEXAS_COMMON_STARTER, TEXAS_STARTER_CATALOG_VERSION };
+export { highlightSegments, type HighlightSegment } from "./highlight";
 
 export const STARTER_CATALOG_DISCLAIMER =
   "This Texas starter list is not official EPA or TDA data. It may be incomplete or outdated. Always confirm the product name and EPA registration number against the label before activating a row on your shop list.";
@@ -194,6 +195,11 @@ export function starterEpaCaption(starter: StarterProduct): string {
   if (starter.kind === "device") return "device";
   if (starter.is25b || !starter.epaRegNo) return "25(b) · no EPA #";
   return `EPA ${starter.epaRegNo}`;
+}
+
+/** Polite results line for the starter list, e.g. "Showing 4 of 32 starters". */
+export function formatStarterResultCount(shown: number, total: number): string {
+  return `Showing ${shown} of ${total} starter${total === 1 ? "" : "s"}`;
 }
 
 export {
