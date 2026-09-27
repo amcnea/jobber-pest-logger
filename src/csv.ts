@@ -66,6 +66,16 @@ function joinLines(values: string[]): string {
   return values.filter(Boolean).join("; ");
 }
 
+/**
+ * Positional list: one slot per product so parallel columns line up
+ * ("Pesticide names" with EPA numbers, "Devices used" with "Device counts").
+ * Blank values keep their slot (e.g. "111-1; ; 333-3" for a 25(b) product,
+ * "A; ; C" for an unnamed one). When every slot is blank the cell is blank.
+ */
+function joinSlots(values: string[]): string {
+  return values.some(Boolean) ? values.join("; ") : "";
+}
+
 function person(log: ApplicationLog, role: ApplicationLog["personnel"][number]["role"]) {
   return log.personnel.find((p) => p.role === role);
 }
@@ -89,13 +99,13 @@ export function logsToCsv(logs: ApplicationLog[]): string {
       log.customerBillingAddress,
       log.serviceAddress,
       log.poleLocation,
-      joinLines(pesticides.map((p) => p.name)),
-      joinLines(pesticides.map((p) => epaExportText(p))),
+      joinSlots(pesticides.map((p) => p.name)),
+      joinSlots(pesticides.map((p) => epaExportText(p))),
       joinLines(pesticides.filter((p) => !inferIsExample(p) && (p.is25b || !p.epaRegNo)).map((p) => p.name)),
-      joinLines(
+      joinSlots(
         devices.map((p) => (inferIsExample(p) ? `${p.name} (${EXAMPLE_EPA_LABEL})` : p.name)),
       ),
-      joinLines(
+      joinSlots(
         devices.map((p) => {
           const count = p.deviceCount ? `${p.name}: ${p.deviceCount}` : p.name;
           return inferIsExample(p) ? `${count} (${EXAMPLE_EPA_LABEL})` : count;
