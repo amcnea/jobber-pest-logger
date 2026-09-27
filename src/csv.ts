@@ -66,6 +66,15 @@ function joinLines(values: string[]): string {
   return values.filter(Boolean).join("; ");
 }
 
+/**
+ * EPA column: one slot per pesticide so it lines up with "Pesticide names".
+ * 25(b) / unregistered products keep a blank slot (e.g. "111-1; ; 333-3").
+ * When every slot is blank the whole cell is blank.
+ */
+function epaSlots(values: string[]): string {
+  return values.some(Boolean) ? values.join("; ") : "";
+}
+
 function person(log: ApplicationLog, role: ApplicationLog["personnel"][number]["role"]) {
   return log.personnel.find((p) => p.role === role);
 }
@@ -90,7 +99,7 @@ export function logsToCsv(logs: ApplicationLog[]): string {
       log.serviceAddress,
       log.poleLocation,
       joinLines(pesticides.map((p) => p.name)),
-      joinLines(pesticides.map((p) => epaExportText(p))),
+      epaSlots(pesticides.map((p) => epaExportText(p))),
       joinLines(pesticides.filter((p) => !inferIsExample(p) && (p.is25b || !p.epaRegNo)).map((p) => p.name)),
       joinLines(
         devices.map((p) => (inferIsExample(p) ? `${p.name} (${EXAMPLE_EPA_LABEL})` : p.name)),

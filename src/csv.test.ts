@@ -480,14 +480,7 @@ describe("logsToCsv products", () => {
     expect(row[col("Pesticide names")]).toBe('Brand "X", 2%; Plain');
   });
 
-  // BUG: when a log mixes registered and 25(b)/unregistered pesticides, the EPA
-  // column drops the blank entries (joinLines filters empty strings), so the
-  // EPA list is no longer positionally aligned with the "Pesticide names" list.
-  // Example: names "A; B; C" (A=111-1, B=25(b), C=333-3).
-  //   Expected EPA cell: "111-1; ; 333-3" (blank for B, per the column header
-  //   "blank if 25(b) / unregistered") — or some other per-product mapping.
-  //   Actual EPA cell:   "111-1; 333-3", which reads as if B's EPA # is 333-3.
-  it.skip("keeps the EPA column aligned with pesticide names when a 25(b) product is in the middle", () => {
+  it("keeps the EPA column aligned with pesticide names when a 25(b) product is in the middle", () => {
     const row = singleRow(
       makeLog({
         products: [
@@ -501,6 +494,81 @@ describe("logsToCsv products", () => {
     const epas = row[EPA_COL].split("; ");
     expect(epas).toHaveLength(names.length);
     expect(epas[names.indexOf("C")]).toBe("333-3");
+  });
+
+  it("renders a blank slot for a 25(b) product between registered ones", () => {
+    const row = singleRow(
+      makeLog({
+        products: [
+          product({ lineId: "1", name: "A", epaRegNo: "111-1" }),
+          product({ lineId: "2", name: "B", epaRegNo: null, is25b: true }),
+          product({ lineId: "3", name: "C", epaRegNo: "333-3" }),
+        ],
+      }),
+    );
+    expect(row[col("Pesticide names")]).toBe("A; B; C");
+    expect(row[EPA_COL]).toBe("111-1; ; 333-3");
+  });
+
+  it("keeps leading and trailing blank slots for 25(b) / unregistered products", () => {
+    const leading = singleRow(
+      makeLog({
+        products: [
+          product({ lineId: "1", name: "B", epaRegNo: null, is25b: true }),
+          product({ lineId: "2", name: "C", epaRegNo: "333-3" }),
+        ],
+      }),
+    );
+    expect(leading[EPA_COL]).toBe("; 333-3");
+    const trailing = singleRow(
+      makeLog({
+        products: [
+          product({ lineId: "1", name: "A", epaRegNo: "111-1" }),
+          product({ lineId: "2", name: "U", epaRegNo: null }),
+        ],
+      }),
+    );
+    expect(trailing[EPA_COL]).toBe("111-1; ");
+  });
+
+  it("leaves the EPA cell fully blank (not '; ') when every pesticide is 25(b) / unregistered", () => {
+    const row = singleRow(
+      makeLog({
+        products: [
+          product({ lineId: "1", name: "B", epaRegNo: null, is25b: true }),
+          product({ lineId: "2", name: "U", epaRegNo: null }),
+        ],
+      }),
+    );
+    expect(row[col("Pesticide names")]).toBe("B; U");
+    expect(row[EPA_COL]).toBe("");
+    expect(row[B25_COL]).toBe("B; U");
+  });
+
+  it("keeps example-seed labels in their own slot alongside blank 25(b) slots", () => {
+    const row = singleRow(
+      makeLog({
+        products: [
+          product({ lineId: "1", name: "Ex", catalogId: "example-rtu-insecticide", epaRegNo: null, isExample: true }),
+          product({ lineId: "2", name: "B", epaRegNo: null, is25b: true }),
+          product({ lineId: "3", name: "C", epaRegNo: "333-3" }),
+        ],
+      }),
+    );
+    expect(row[EPA_COL]).toBe(`${EXAMPLE_EPA_LABEL}; ; 333-3`);
+  });
+
+  it("ignores devices when building EPA slots", () => {
+    const row = singleRow(
+      makeLog({
+        products: [
+          product({ lineId: "1", name: "A", epaRegNo: "111-1" }),
+          product({ lineId: "2", name: "Station", method: "device", epaRegNo: null }),
+          product({ lineId: "3", name: "C", epaRegNo: "333-3" }),
+        ],
+      }),
+    );
+    expect(row[EPA_COL]).toBe("111-1; 333-3");
   });
 });
 
