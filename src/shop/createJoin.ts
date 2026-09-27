@@ -234,10 +234,15 @@ async function verifyPinAndGrant(
   if (!isValidPin(input.pin)) return { ok: false, error: "PIN must be 4–8 digits." };
   const grant = await joinShopWithPinFn(config, shopId, input.role, input.pin);
   if (!grant.ok) return grant;
+  // cf2: a successful server join always leaves the hashes in shopSecrets, so
+  // never carry the pre-join `auth` forward (the migrate putShop would re-expose it).
   return {
     ok: true,
     doc: {
       ...doc,
+      auth: undefined,
+      authUnreadable: undefined,
+      pinsConfigured: true,
       updatedAt: grant.value.updatedAt,
       members: grant.value.members,
       ownerUid: grant.value.ownerUid ?? doc.ownerUid,

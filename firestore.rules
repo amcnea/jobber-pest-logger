@@ -66,6 +66,16 @@ service cloud.firestore {
       return request.resource.data.get('pinsConfigured', null) == resource.data.get('pinsConfigured', null);
     }
 
+    // cf2: once the shop server holds the PIN hashes, no client write may put
+    // `auth` back on the readable doc or clear `pinsConfigured`.
+    function pinsStayHidden() {
+      return resource.data.get('pinsConfigured', false) != true
+        || (
+          request.resource.data.get('pinsConfigured', false) == true
+          && !request.resource.data.keys().hasAny(['auth'])
+        );
+    }
+
     function membersUnchanged() {
       return requestMembers() == membersMap();
     }
@@ -127,9 +137,9 @@ service cloud.firestore {
         && isValidShopId(shopId)
         && (
           // Office/owner: full document updates (PIN change, migrate, etc.).
-          (isOffice() && ownerUidUnchanged())
+          (isOffice() && ownerUidUnchanged() && pinsStayHidden())
           // Tech: may update shop data but not auth, ownerUid, or members.
-          || (isTech() && ownerUidUnchanged() && authUnchanged() && membersUnchanged() && pinsConfiguredUnchanged())
+          || (isTech() && ownerUidUnchanged() && authUnchanged() && membersUnchanged() && pinsConfiguredUnchanged() && pinsStayHidden())
           // After client PIN verify: add this uid to members (optional legacy owner claim).
           || isJoinSelfUpdate()
           // Pre-#3 shops with no auth hashes yet.
