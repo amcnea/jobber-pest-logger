@@ -439,7 +439,7 @@ describe("logsToCsv products", () => {
     expect(row[col("Device counts")]).toBe("; Glue Board: 5");
   });
 
-  it("leaves both device cells blank when every device is unnamed with no count", () => {
+  it("keeps positional device slots ('; ') when every device is unnamed with no count (#90)", () => {
     const row = singleRow(
       makeLog({
         products: [
@@ -448,8 +448,8 @@ describe("logsToCsv products", () => {
         ],
       }),
     );
-    expect(row[col("Devices used")]).toBe("");
-    expect(row[col("Device counts")]).toBe("");
+    expect(row[col("Devices used")]).toBe("; ");
+    expect(row[col("Device counts")]).toBe("; ");
   });
 
   it("keeps device slots aligned when only some devices have counts", () => {
@@ -586,7 +586,7 @@ describe("logsToCsv products", () => {
     expect(trailing[EPA_COL]).toBe("111-1; ");
   });
 
-  it("leaves the EPA cell fully blank (not '; ') when every pesticide is 25(b) / unregistered", () => {
+  it("keeps one blank EPA slot per pesticide when every pesticide is 25(b) / unregistered (#90)", () => {
     const row = singleRow(
       makeLog({
         products: [
@@ -596,7 +596,7 @@ describe("logsToCsv products", () => {
       }),
     );
     expect(row[col("Pesticide names")]).toBe("B; U");
-    expect(row[EPA_COL]).toBe("");
+    expect(row[EPA_COL]).toBe("; "); // two slots, aligned with "B; U"
     expect(row[B25_COL]).toBe("B; U");
   });
 
@@ -642,7 +642,7 @@ describe("logsToCsv products", () => {
     expect(row[EPA_COL]).toBe("111-1; 222-2; 333-3");
   });
 
-  it("leaves the Pesticide names cell blank (not '; ') when every pesticide is unnamed", () => {
+  it("multi-product row with all names blank keeps name slots aligned with non-blank EPA slots (#90)", () => {
     const row = singleRow(
       makeLog({
         products: [
@@ -651,8 +651,14 @@ describe("logsToCsv products", () => {
         ],
       }),
     );
-    expect(row[col("Pesticide names")]).toBe("");
+    expect(row[col("Pesticide names")]).toBe("; ");
     expect(row[EPA_COL]).toBe("111-1; 222-2");
+  });
+
+  it("a single blank slot collapses to an empty cell (#90)", () => {
+    const row = singleRow(makeLog({ products: [product({ lineId: "1", name: "", epaRegNo: null, is25b: true })] }));
+    expect(row[col("Pesticide names")]).toBe("");
+    expect(row[EPA_COL]).toBe("");
   });
 
   it("aligns an unnamed pesticide that is also 25(b) (blank in both columns)", () => {
