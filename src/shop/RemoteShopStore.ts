@@ -119,6 +119,7 @@ function coerceShopDocument(raw: unknown): ShopDocument | null {
       doc.authUnreadable = true;
     }
   }
+  if (raw.pinsConfigured === true) doc.pinsConfigured = true;
   const ownerUid = parseOwnerUid(raw.ownerUid);
   if (ownerUid) doc.ownerUid = ownerUid;
   const members = parseMembers(raw.members);

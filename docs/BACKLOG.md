@@ -9,7 +9,7 @@ Client Anonymous Auth + Firestore rules cannot prove a PIN check. Until a truste
 1. ~~**PIN verify + membership/owner grants in a Cloud Function (or equivalent)**~~ **Done (cf1, PR #70):** `functions/` callables `joinShopWithPin`, `bootstrapShopPins`, `changeShopPins` verify auth + PIN (server PBKDF2, `timingSafeEqual`) + owner/office membership before granting; client opts in with `VITE_SHOP_PIN_FUNCTIONS=1` after deploy. Rules still allow the legacy client path until (3).  
    Today `isJoinSelfUpdate` / self-assignment of `members[uid]` (including `"office"`) and claiming missing `ownerUid` do not prove PIN verification. Move verify + grant off the client; rules should not let anonymous callers make `isOffice()` true without a server-side grant.
 
-2. **Stop exposing PIN hashes on shop `get`**  
+2. ~~**Stop exposing PIN hashes on shop `get`**~~ **Done (cf2):** functions keep hashes in admin-only `shopSecrets/{shopId}` and strip `auth` from the shop doc (`pinsConfigured: true` instead); join is rate-limited (#70). Legacy docs migrate on the next server join/bootstrap/PIN change, so this takes effect after deploy + `VITE_SHOP_PIN_FUNCTIONS=1`.  
    Any signed-in caller who knows `shopId` can read office/tech PBKDF2 hashes and offline-guess short PINs. Verify server-side (rate-limited); return only the authorization result to the client.
 
 3. **Deny direct client writes to `members` and `ownerUid`** once (1) exists — Functions own those fields.

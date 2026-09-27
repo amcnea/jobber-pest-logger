@@ -5,8 +5,9 @@ service cloud.firestore {
     // Unauthenticated strangers with a guessed shopId are denied (closes open IDOR).
     // Signed-in get is allowed so join/unlock can client-verify PIN hashes, then
     // write membership via join-self update. PIN hashes remain readable to any
-    // authenticated caller who knows shopId — Function-based verify + rate limit
-    // is the follow-up. localStorage session is UI-only; rules enforce membership
+    // authenticated caller who knows shopId on legacy docs. cf2: the shop-server
+    // functions move hashes into shopSecrets/ (denied below) and leave only
+    // pinsConfigured on the shop doc. localStorage session is UI-only; rules enforce membership
     // for writes after create/join.
 
     function signedIn() {
@@ -61,6 +62,10 @@ service cloud.firestore {
       return request.resource.data.get('auth', null) == resource.data.get('auth', null);
     }
 
+    function pinsConfiguredUnchanged() {
+      return request.resource.data.get('pinsConfigured', null) == resource.data.get('pinsConfigured', null);
+    }
+
     function membersUnchanged() {
       return requestMembers() == membersMap();
     }
@@ -84,10 +89,11 @@ service cloud.firestore {
     }
 
     // Pre-#3 / no-auth shops: first office device may set auth + claim ownership.
+    // cf2: a shop whose hashes moved to the shop server (pinsConfigured) is not "no-auth".
     // Diff limited to bootstrap fields so other shop data cannot be overwritten.
     function isLegacyPinBootstrap() {
       return signedIn()
-        && !resource.data.keys().hasAny(['auth'])
+        && !resource.data.keys().hasAny(['auth', 'pinsConfigured'])
         && request.resource.data.keys().hasAll(['auth', 'ownerUid', 'members'])
         && request.resource.data.ownerUid == request.auth.uid
         && request.resource.data.members[request.auth.uid] == 'office'
@@ -123,7 +129,7 @@ service cloud.firestore {
           // Office/owner: full document updates (PIN change, migrate, etc.).
           (isOffice() && ownerUidUnchanged())
           // Tech: may update shop data but not auth, ownerUid, or members.
-          || (isTech() && ownerUidUnchanged() && authUnchanged() && membersUnchanged())
+          || (isTech() && ownerUidUnchanged() && authUnchanged() && membersUnchanged() && pinsConfiguredUnchanged())
           // After client PIN verify: add this uid to members (optional legacy owner claim).
           || isJoinSelfUpdate()
           // Pre-#3 shops with no auth hashes yet.

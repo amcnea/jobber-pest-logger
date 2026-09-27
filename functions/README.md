@@ -26,3 +26,14 @@ the catch-all rule in `firestore.rules`). Once the caller or shop limit is hit, 
 return `resource-exhausted` until the 15-minute window ends. A successful join clears
 that caller's counter. Keep `VITE_SHOP_PIN_FUNCTIONS` off in production until these
 functions are deployed. The client-side PIN hash check still exists until cf2/cf3 land.
+
+## PIN hashes are not on the shop doc (cf2)
+
+`bootstrapShopPins`, `changeShopPins`, and every successful `joinShopWithPin` on a legacy
+doc write the PIN hashes to `shopSecrets/{shopId}` and delete `auth` from `shops/{shopId}`,
+leaving `pinsConfigured: true`. Clients can't read `shopSecrets/` (catch-all deny). The
+functions read the secret first and fall back to a legacy `auth` field. A doc marked
+`pinsConfigured` with no hashes anywhere fails closed, and bootstrap stays blocked.
+With the flag on, `createShop` hands the hashes to `changeShopPins` right after the create
+write. Legacy (flag-off) builds can't verify a migrated shop and show a reload message, so
+existing shops only migrate once the functions are deployed and the flag is on.
