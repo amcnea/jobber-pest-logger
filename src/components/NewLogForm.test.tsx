@@ -856,12 +856,7 @@ describe("NewLogForm: submit", () => {
     expect(onSave.mock.calls[0][0].products[0]).toMatchObject({ method: "mixed", rtuAmount: "16" });
   });
 
-  // BUG: a line whose product name is blank fails validation (`product-N-name`), but the
-  // form never renders that error, so Save silently does nothing.
-  // Expected: a visible "Product name required" message on the line (or somewhere on the form).
-  // Actual:   onSave is not called and no error text is shown anywhere.
-  // Reachable when a catalog row has a blank/whitespace name (storage normalizers accept it).
-  it.skip("shows a visible error when a product line has a blank name", async () => {
+  it("shows the product-name-required error on the line when a product name is blank", async () => {
     const blank: ShopProduct = { ...TALSTAR, id: "blank", name: "   " };
     const { user, onSave } = setup({ catalog: [blank] });
     await fillRequired(user);
@@ -869,6 +864,21 @@ describe("NewLogForm: submit", () => {
     await user.type(within(productCards()[0]).getByLabelText(/^Total RTU amount/), "1");
     await user.click(saveButton());
     expect(onSave).not.toHaveBeenCalled();
-    expect(screen.getByText("Product name required")).toBeInTheDocument();
+    const error = within(productCards()[0]).getByText("Product name required");
+    expect(error).toHaveClass("error");
+  });
+
+  it("puts the product-name-required error only on the blank line", async () => {
+    const blank: ShopProduct = { ...GLUE_BOARD, id: "blank-device", name: "" };
+    const { user, onSave } = setup({ catalog: [GLUE_BOARD, blank] });
+    await fillRequired(user);
+    await addProduct(user, "glue");
+    await addProduct(user, "blank-device");
+    await user.click(saveButton());
+    expect(onSave).not.toHaveBeenCalled();
+    const [named, unnamed] = productCards();
+    expect(within(named).queryByText("Product name required")).toBeNull();
+    expect(within(unnamed).getByText("Product name required")).toHaveClass("error");
+    expect(screen.getAllByText("Product name required")).toHaveLength(1);
   });
 });
