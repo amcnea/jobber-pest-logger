@@ -583,3 +583,61 @@ describe("Products starter search: label-confirm storage failures", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// 25(b)-only toggle (#81)
+// ---------------------------------------------------------------------------
+
+describe("Products starter search: 25(b)-only toggle", () => {
+  const only25b = () =>
+    within(starterPanel()).getByRole("checkbox", { name: "25(b) products only" }) as HTMLInputElement;
+  const EXPECTED_25B = TEXAS_COMMON_STARTER.filter((s) => s.kind === "pesticide" && s.is25b).map((s) => s.name);
+
+  it("starts unchecked and narrows the rows to 25(b) pesticide starters only", async () => {
+    const { user } = setup();
+    expect(EXPECTED_25B.length).toBeGreaterThan(0);
+    expect(EXPECTED_25B.length).toBeLessThan(TOTAL);
+    expect(only25b().checked).toBe(false);
+    await user.click(only25b());
+    expect(only25b().checked).toBe(true);
+    expect(rowNames()).toEqual(EXPECTED_25B);
+    expect(rowNames()).toContain("Essentria IC3");
+    expect(rowNames()).not.toContain("Termidor SC");
+    expect(rowNames()).not.toContain("Catchmaster Insect Glue Board"); // devices excluded
+  });
+
+  it("updates the results count and combines with the query", async () => {
+    const { user } = setup();
+    await user.click(only25b());
+    expect(resultsLine()).toHaveTextContent(`Showing ${EXPECTED_25B.length} of ${TOTAL} starters.`);
+    await user.type(search(), "essentria");
+    expect(rowNames()).toEqual(["Essentria IC3"]);
+    expect(resultsLine()).toHaveTextContent(`Showing 1 of ${TOTAL} starters.`);
+    await user.clear(search());
+    await user.type(search(), "termidor"); // registered → filtered out by the toggle
+    expect(rowNames()).toEqual([]);
+    expect(screen.getByText("No starter rows match this search/filter.")).toBeInTheDocument();
+  });
+
+  it("shows 'Reset search & filters' on its own, and Reset clears it", async () => {
+    const { user } = setup();
+    expect(screen.queryByRole("button", { name: "Reset search & filters" })).toBeNull();
+    await user.click(only25b());
+    await user.click(screen.getByRole("button", { name: "Reset search & filters" }));
+    expect(only25b().checked).toBe(false);
+    expect(rowNames()).toEqual(TEXAS_COMMON_STARTER.map((s) => s.name));
+    expect(resultsLine()).toHaveTextContent(`Showing ${TOTAL} of ${TOTAL} starters.`);
+    expect(screen.queryByRole("button", { name: "Reset search & filters" })).toBeNull();
+  });
+
+  it("is disabled while the label-confirm card is open, and re-enabled after", async () => {
+    const { user } = setup();
+    await user.click(only25b());
+    await user.click(within(row("Essentria IC3")).getByRole("button", { name: "Add to my catalog" }));
+    expect(confirmCard()).toBeInTheDocument();
+    expect(only25b()).toBeDisabled();
+    expect(only25b().checked).toBe(true); // state kept, just locked
+    await user.click(within(confirmCard()).getByRole("button", { name: "Leave archived" }));
+    expect(only25b()).toBeEnabled();
+  });
+});
