@@ -9,8 +9,11 @@ process.env.TZ = "America/Chicago";
 // plugin or the GitHub Pages `base`, and Vitest prefers this file when present.
 export default defineConfig({
   test: {
+    // Node stays the default. Component tests opt into jsdom per file with
+    // `// @vitest-environment jsdom` at the top of the .test.tsx file.
     environment: "node",
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.{ts,tsx}"],
+    setupFiles: ["src/test/setup.ts"],
     env: { TZ: "America/Chicago" },
   },
 });
