@@ -384,7 +384,7 @@ describe("upsertLog / deleteLog", () => {
 
   it("a save after load permanently prunes rows that failed normalization", () => {
     // Documents current behavior: loadLogs drops unreadable rows, and the next write
-    // persists only the readable ones.
+    // persists only the readable ones. Tracked in #87 (pre-launch): quarantine instead.
     put(LOGS_KEY, [makeLog("A"), { id: "legacy-without-termite" }]);
     upsertLog(makeLog("B"));
     expect((stored(LOGS_KEY) as { id: string }[]).map((l) => l.id)).toEqual(["B", "A"]);

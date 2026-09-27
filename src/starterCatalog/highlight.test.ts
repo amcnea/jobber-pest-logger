@@ -134,7 +134,8 @@ describe("highlightSegments", () => {
     }
   });
 
-  // BUG: indices come from text.toLowerCase() but are used to slice the original text.
+  // Known bug, see #86 (backlog): indices come from text.toLowerCase() but are used to
+  // slice the original text.
   // When lowercasing changes string length (e.g. "İ" U+0130 → "i̇", 2 code units), every
   // segment after that character is shifted.
   // Expected: highlightSegments("İstanbul Pest", "pest") marks "Pest".
