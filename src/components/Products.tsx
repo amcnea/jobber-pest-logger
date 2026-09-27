@@ -14,6 +14,7 @@ import {
   TEXAS_STARTER_CATALOG_VERSION,
   addPendingLabelConfirm,
   clearPendingLabelConfirm,
+  filterStarters25bOnly,
   filterStartersByShopStatus,
   findShopMatchForStarter,
   formatStarterResultCount,
@@ -71,6 +72,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   const [kindFilter, setKindFilter] = useState<KindFilter>("all");
   const [starterQuery, setStarterQuery] = useState("");
   const [starterKindFilter, setStarterKindFilter] = useState<StarterKindFilter>("all");
+  const [starter25bOnly, setStarter25bOnly] = useState(false);
   const [starterShopStatus, setStarterShopStatus] = useState<StarterShopStatusFilter>("all");
   const [starterSort, setStarterSort] = useState<StarterSortOrder>("list");
   const starterSearchRef = useRef<HTMLInputElement>(null);
@@ -473,16 +475,26 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
     });
   }, [catalog, query, listFilter, kindFilter, editingId, labelConfirmId, pendingLabelIds]);
 
+  // Search + kind + 25(b) matches, shared by the results list and the status counts.
+  const starterMatches = useMemo(
+    () =>
+      filterStarters25bOnly(
+        searchTexasStarterCatalog(starterQuery, starterKindFilter),
+        starter25bOnly,
+      ),
+    [starterQuery, starterKindFilter, starter25bOnly],
+  );
+
   const starterResults = useMemo(() => {
-    const rows = searchTexasStarterCatalog(starterQuery, starterKindFilter);
+    const rows = starterMatches;
     // hide-active hides only active shop matches; pending/archived stay so office can Confirm label…
     const filtered = filterStartersByShopStatus(rows, catalog, starterShopStatus, pendingLabelIds);
     return sortStarters(filtered, catalog, pendingLabelIds, starterSort);
-  }, [starterQuery, starterKindFilter, starterShopStatus, starterSort, catalog, pendingLabelIds]);
+  }, [starterMatches, starterShopStatus, starterSort, catalog, pendingLabelIds]);
 
-  // Counts over the search + kind results (before the shop status filter).
+  // Counts over the search + kind + 25(b) results (before the shop status filter).
   const starterStatusCounts = useMemo(() => {
-    const rows = searchTexasStarterCatalog(starterQuery, starterKindFilter);
+    const rows = starterMatches;
     const ids = new Set(pendingLabelIds);
     const counts = { notAdded: 0, pending: 0, archived: 0, active: 0 };
     for (const starter of rows) {
@@ -493,7 +505,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
       else counts.active += 1;
     }
     return counts;
-  }, [starterQuery, starterKindFilter, catalog, pendingLabelIds]);
+  }, [starterMatches, catalog, pendingLabelIds]);
 
   return (
     <div>
@@ -596,8 +608,18 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
               </select>
             </label>
           </div>
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={starter25bOnly}
+              onChange={(e) => setStarter25bOnly(e.target.checked)}
+              disabled={labelConfirmId !== null}
+            />
+            25(b) products only
+          </label>
           {(starterQuery.trim() !== "" ||
             starterKindFilter !== "all" ||
+            starter25bOnly ||
             starterShopStatus !== "all" ||
             starterSort !== "list") && (
             <button
@@ -606,6 +628,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
               onClick={() => {
                 setStarterQuery("");
                 setStarterKindFilter("all");
+                setStarter25bOnly(false);
                 setStarterShopStatus("all");
                 setStarterSort("list");
               }}
