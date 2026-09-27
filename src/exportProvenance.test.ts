@@ -18,7 +18,8 @@ function withTz<T>(tz: string, fn: () => T): T {
   try {
     return fn();
   } finally {
-    process.env.TZ = prev;
+    if (prev === undefined) delete process.env.TZ;
+    else process.env.TZ = prev;
   }
 }
 

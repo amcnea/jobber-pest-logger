@@ -73,7 +73,9 @@ function joinLines(values: string[]): string {
  * "A; ; C" for an unnamed one). When every slot is blank the cell is blank.
  */
 function joinSlots(values: string[]): string {
-  return values.some(Boolean) ? values.join("; ") : "";
+  // Positional: with >1 slot keep every slot (even all-blank) so parallel columns align.
+  if (values.length > 1) return values.join("; ");
+  return values[0] ?? "";
 }
 
 function person(log: ApplicationLog, role: ApplicationLog["personnel"][number]["role"]) {
