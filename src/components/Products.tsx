@@ -475,30 +475,26 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
     });
   }, [catalog, query, listFilter, kindFilter, editingId, labelConfirmId, pendingLabelIds]);
 
+  // Search + kind + 25(b) matches, shared by the results list and the status counts.
+  const starterMatches = useMemo(
+    () =>
+      filterStarters25bOnly(
+        searchTexasStarterCatalog(starterQuery, starterKindFilter),
+        starter25bOnly,
+      ),
+    [starterQuery, starterKindFilter, starter25bOnly],
+  );
+
   const starterResults = useMemo(() => {
-    const rows = filterStarters25bOnly(
-      searchTexasStarterCatalog(starterQuery, starterKindFilter),
-      starter25bOnly,
-    );
+    const rows = starterMatches;
     // hide-active hides only active shop matches; pending/archived stay so office can Confirm label…
     const filtered = filterStartersByShopStatus(rows, catalog, starterShopStatus, pendingLabelIds);
     return sortStarters(filtered, catalog, pendingLabelIds, starterSort);
-  }, [
-    starterQuery,
-    starterKindFilter,
-    starter25bOnly,
-    starterShopStatus,
-    starterSort,
-    catalog,
-    pendingLabelIds,
-  ]);
+  }, [starterMatches, starterShopStatus, starterSort, catalog, pendingLabelIds]);
 
   // Counts over the search + kind + 25(b) results (before the shop status filter).
   const starterStatusCounts = useMemo(() => {
-    const rows = filterStarters25bOnly(
-      searchTexasStarterCatalog(starterQuery, starterKindFilter),
-      starter25bOnly,
-    );
+    const rows = starterMatches;
     const ids = new Set(pendingLabelIds);
     const counts = { notAdded: 0, pending: 0, archived: 0, active: 0 };
     for (const starter of rows) {
@@ -509,7 +505,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
       else counts.active += 1;
     }
     return counts;
-  }, [starterQuery, starterKindFilter, starter25bOnly, catalog, pendingLabelIds]);
+  }, [starterMatches, catalog, pendingLabelIds]);
 
   return (
     <div>
