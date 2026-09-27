@@ -837,3 +837,80 @@ describe("syncLogToRemote", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Branch-coverage follow-ups (target (a)): remaining uncovered paths
+// ---------------------------------------------------------------------------
+
+describe("logOutbox: remaining edge paths", () => {
+  it("falls back to a time-based entry id when crypto.randomUUID is unavailable", () => {
+    vi.stubGlobal("crypto", {});
+    expect(enqueueLogOutbox(SHOP, makeLog("a"))).toBe(true);
+    const [entry] = outboxEntriesForShop(SHOP);
+    expect(entry.entryId).toMatch(new RegExp(`^e-${NOW.getTime()}-[a-z0-9]+$`));
+  });
+
+  it("flush: the conflict retry finds an empty outbox (cleared elsewhere) and reports ok", async () => {
+    enqueueLogOutbox(SHOP, makeLog("a"));
+    const { remote, getShop, putShop } = fakeRemote({
+      puts: [conflict],
+      onPut: (n) => {
+        // Another tab flushed and cleared the outbox while our first put was in flight.
+        if (n === 0) storage.removeItem(LOG_OUTBOX_KEY);
+      },
+    });
+    expect(await flushLogOutbox(remote, SHOP)).toEqual({ ok: true, flushed: 0, remaining: 0 });
+    expect(getShop).toHaveBeenCalledOnce();
+    expect(putShop).toHaveBeenCalledOnce();
+  });
+
+  it("sync without a queued copy still runs the conflict retry and succeeds", async () => {
+    storage.failSet = true; // enqueue fails → queued: false, no entryId
+    const fresh = shopDoc([makeLog("from-other-device")]);
+    const { remote, putShop, putDocs } = fakeRemote({
+      gets: [{ ok: true, value: shopDoc() }, { ok: true, value: fresh }],
+      puts: [conflict, { ok: true, value: { updatedAt: "x" } }],
+    });
+    expect(await syncLogToRemote(remote, SHOP, makeLog("a"))).toEqual({ ok: true });
+    expect(putShop).toHaveBeenCalledTimes(2);
+    expect(putDocs[1].logs.map((l) => l.id)).toEqual(["a", "from-other-device"]);
+    expect(loadLogOutbox()).toEqual([]);
+  });
+
+  it("sync without a queued copy reports queued:false when the conflict retry put fails", async () => {
+    storage.failSet = true;
+    const { remote } = fakeRemote({ puts: [conflict, { ok: false, error: "denied" }] });
+    expect(await syncLogToRemote(remote, SHOP, makeLog("a"))).toEqual({
+      ok: false,
+      error: "denied",
+      queued: false,
+    });
+    expect(loadLogOutbox()).toEqual([]);
+  });
+
+  it("sync conflict retry replaces the log in place when the fresh read already has it", async () => {
+    const fresh = shopDoc([makeLog("y"), makeLog("a", { targetPestOrPurpose: "other device" }), makeLog("z")]);
+    const { remote, putDocs } = fakeRemote({
+      gets: [{ ok: true, value: shopDoc() }, { ok: true, value: fresh }],
+      puts: [conflict, { ok: true, value: { updatedAt: "x" } }],
+    });
+    expect(await syncLogToRemote(remote, SHOP, makeLog("a", { targetPestOrPurpose: "mine" }))).toEqual({ ok: true });
+    expect(putDocs[1].logs.map((l) => [l.id, l.targetPestOrPurpose])).toEqual([
+      ["y", "Ants"],
+      ["a", "mine"],
+      ["z", "Ants"],
+    ]);
+    expect(outboxEntriesForShop(SHOP)).toEqual([]);
+  });
+
+  it("sync without a queued copy reports queued:false on a non-conflict put failure", async () => {
+    storage.failSet = true;
+    const { remote, putShop } = fakeRemote({ puts: [{ ok: false, error: "denied" }] });
+    expect(await syncLogToRemote(remote, SHOP, makeLog("a"))).toEqual({
+      ok: false,
+      error: "denied",
+      queued: false,
+    });
+    expect(putShop).toHaveBeenCalledOnce();
+  });
+});
