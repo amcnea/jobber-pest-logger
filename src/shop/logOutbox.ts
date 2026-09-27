@@ -186,7 +186,9 @@ export async function flushLogOutbox(
     }
 
     let logs = [...got.value.logs];
-    for (const entry of live) {
+    // Outbox is newest-first; merge oldest-first so prepended new logs end up
+    // newest-first on the remote (same order as upsertLog / syncLogToRemote).
+    for (const entry of [...live].reverse()) {
       const idx = logs.findIndex((l) => l.id === entry.log.id);
       if (idx === -1) logs = [entry.log, ...logs];
       else logs[idx] = entry.log;

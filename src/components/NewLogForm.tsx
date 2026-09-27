@@ -296,6 +296,7 @@ export function NewLogForm({
                 Remove
               </button>
             </div>
+            {errors[`product-${i}-name`] && <p className="error">{errors[`product-${i}-name`]}</p>}
 
             {p.method !== "device" && (
               <label className="field">

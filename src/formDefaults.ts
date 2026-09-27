@@ -183,7 +183,7 @@ export function exportCompletenessIssues(logs: ApplicationLog[]): ExportComplete
     });
     issues.push({
       logId: log.id,
-      dateUsed: log.dateUsed || "(no date)",
+      dateUsed: log.dateUsed.trim() || "(no date)",
       serviceAddress: log.serviceAddress.trim() || "(no service address)",
       fields,
     });
