@@ -28,7 +28,15 @@ import {
   type StarterSortOrder,
   type StarterProduct,
 } from "../starterCatalog";
+import { highlightSegments } from "../starterCatalog/highlight";
 import type { ShopProduct } from "../types";
+
+/** Render text with query matches wrapped in <mark> (plain React children, no raw HTML). */
+function renderHighlighted(text: string, query: string) {
+  return highlightSegments(text, query).map((seg, i) =>
+    seg.match ? <mark key={i}>{seg.text}</mark> : <span key={i}>{seg.text}</span>,
+  );
+}
 
 interface Props {
   catalog: ShopProduct[];
@@ -600,10 +608,12 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                 return (
                   <div className="card-head" key={starter.id} style={{ marginBottom: "0.65rem" }}>
                     <div>
-                      <strong>{starter.name}</strong>
+                      <strong>{renderHighlighted(starter.name, starterQuery)}</strong>
                       <div>
                         <span className="chip">{starter.kind}</span>{" "}
-                        <span className="chip">{starterEpaCaption(starter)}</span>
+                        <span className="chip">
+                          {renderHighlighted(starterEpaCaption(starter), starterQuery)}
+                        </span>
                         {alreadyActive && <span className="chip">on shop list</span>}
                         {alreadyPending && <span className="chip">pending label confirm</span>}
                         {alreadyArchived && <span className="chip">archived on shop list</span>}
