@@ -644,21 +644,36 @@ describe("flushLogOutbox", () => {
     expect(current().logs.map((l) => l.id)).toEqual(["a"]);
   });
 
-  // BUG (minor, ordering only): when several NEW logs are flushed together, each
-  // is prepended in outbox order (newest first), so they land on the remote in
-  // reverse: oldest queued ends up at the top. Everywhere else a new log goes to
-  // the front (storage.upsertLog, syncLogToRemote's unshift), i.e. newest first.
-  //   Queue a, then b, then c (outbox = [c, b, a]); remote had [z].
-  //   Expected remote logs: [c, b, a, z]   Actual: [a, b, c, z]
-  // Grouped History views sort by recency, but raw array order (e.g. CSV export
-  // of shared logs) follows this reversed order.
-  it.skip("adds several new logs to the remote newest-first, matching local upsert order", async () => {
+  it("adds several new logs to the remote newest-first, matching local upsert order", async () => {
     const { remote, current } = fakeRemote({ doc: shopDoc([makeLog("z")]) });
     enqueueLogOutbox(SHOP, makeLog("a"));
     enqueueLogOutbox(SHOP, makeLog("b"));
     enqueueLogOutbox(SHOP, makeLog("c"));
     await flushLogOutbox(remote, SHOP);
     expect(current().logs.map((l) => l.id)).toEqual(["c", "b", "a", "z"]);
+  });
+
+  it("with a mix of new and existing logs: new ones go on top newest-first, existing ones are replaced in place", async () => {
+    const { remote, current } = fakeRemote({
+      doc: shopDoc([makeLog("x", { targetPestOrPurpose: "old" }), makeLog("z")]),
+    });
+    enqueueLogOutbox(SHOP, makeLog("a"));
+    enqueueLogOutbox(SHOP, makeLog("x", { targetPestOrPurpose: "new" }));
+    enqueueLogOutbox(SHOP, makeLog("c"));
+    expect(await flushLogOutbox(remote, SHOP)).toEqual({ ok: true, flushed: 3, remaining: 0 });
+    expect(current().logs.map((l) => l.id)).toEqual(["c", "a", "x", "z"]);
+    expect(current().logs.find((l) => l.id === "x")!.targetPestOrPurpose).toBe("new");
+  });
+
+  it("with duplicate legacy rows for one log, the newest payload wins", async () => {
+    writeRaw([
+      { shopId: SHOP, queuedAt: "2026-09-26T02:00:00.000Z", entryId: "new", log: makeLog("a", { targetPestOrPurpose: "v2" }) },
+      { shopId: SHOP, queuedAt: "2026-09-26T01:00:00.000Z", entryId: "old", log: makeLog("a", { targetPestOrPurpose: "v1" }) },
+    ]);
+    const { remote, current } = fakeRemote();
+    await flushLogOutbox(remote, SHOP);
+    expect(current().logs).toHaveLength(1);
+    expect(current().logs[0].targetPestOrPurpose).toBe("v2");
   });
 });
 
