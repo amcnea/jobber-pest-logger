@@ -26,6 +26,11 @@ export interface ShopDocument {
    */
   auth?: ShopPinAuth;
   /**
+   * cf2: true once the shop server has moved the PIN hashes out of this readable
+   * doc into an admin-only record. PINs exist even though `auth` is absent.
+   */
+  pinsConfigured?: boolean;
+  /**
    * Firebase Auth uid of the first-office creator (#5). Immutable after create
    * (rules preserve ownerUid).
    */
