@@ -210,7 +210,7 @@ export function downloadPdf(
     const exampleMark = logHasExampleProducts(log.products)
       ? "  [includes example catalog items]"
       : "";
-    const title = `Log ${i + 1} — ${log.dateUsed || "(no date)"}${exampleMark}`;
+    const title = `Log ${i + 1} — ${log.dateUsed.trim() || "(no date)"}${exampleMark}`;
     ensureSpace(wrappedHeight(doc, title, MAX_WIDTH, 5.5) + 4);
     y = wrap(doc, title, MARGIN, y, MAX_WIDTH, 5.5);
     y += 3;

@@ -367,13 +367,12 @@ describe("per-log lines", () => {
     expect(joinedCalls(render([makeLog({ dateUsed: "" })]))).toContain("Log 1 — (no date)");
   });
 
-  // BUG (minor, display only): the title uses `log.dateUsed || "(no date)"`
-  // without trimming, so a whitespace-only date prints "Log 1 —    " instead of
-  // "Log 1 — (no date)". Same issue that was fixed for exportCompletenessIssues
-  // in #79 (src/formDefaults.ts); pdf.ts still has the untrimmed fallback.
-  //   Expected: "Log 1 — (no date)"   Actual: "Log 1 —    "
-  it.skip("uses '(no date)' in the title when the date is whitespace-only", () => {
+  it("uses '(no date)' in the title when the date is whitespace-only", () => {
     expect(joinedCalls(render([makeLog({ dateUsed: "   " })]))).toContain("Log 1 — (no date)");
+  });
+
+  it("trims a padded date in the title", () => {
+    expect(joinedCalls(render([makeLog({ dateUsed: " 2026-09-26 " })]))).toContain("Log 1 — 2026-09-26");
   });
 
   it("adds the pole location only when present", () => {
