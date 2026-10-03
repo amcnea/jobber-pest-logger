@@ -7,10 +7,12 @@ import { TEXAS_COMMON_STARTER, TEXAS_STARTER_CATALOG_VERSION } from "../starterC
 import { STARTER_LABEL_CONFIRM_KEY } from "../starterCatalog/labelConfirmStore";
 import type { ShopProduct } from "../types";
 
-// Scope: the Texas starter search UI in Products.tsx (Catalog's file; tests only):
-// query filtering, <mark> highlighting, no-results state, filters/sort/reset, keyboard
-// (Escape / clear button), the add-starter → label-confirm → activate flow, and the
-// fail-closed label-confirm storage paths.
+// Scope: Products.tsx (Catalog's file; tests only):
+// (1) Texas starter search UI — query filtering, <mark> highlighting, no-results,
+//     filters/sort/reset/25(b), keyboard, add-starter → label-confirm → activate,
+//     fail-closed label-confirm storage.
+// (2) Shop catalog UI — add/edit form validation, list filters, archive/delete,
+//     remove-examples.
 // Import-boundary mocks, same approach as NewLogForm.test.tsx:
 // - ../storage → only `emptyShopProduct` (the one import Products uses, real impl).
 // - ../ids     → deterministic "id-N" ids (the mount-time empty draft consumes id-1).
@@ -58,7 +60,10 @@ class MemoryStorage {
 
 let storage: MemoryStorage;
 let upsertOk: boolean;
+let removeOk: boolean;
 const onUpsertSpy = vi.fn<(p: ShopProduct) => void>();
+const onDeleteSpy = vi.fn<(id: string) => void>();
+const onRemoveExamplesSpy = vi.fn<() => boolean>();
 
 function Harness({ initial }: { initial: ShopProduct[] }) {
   const [catalog, setCatalog] = useState(initial);
@@ -71,8 +76,18 @@ function Harness({ initial }: { initial: ShopProduct[] }) {
         setCatalog((c) => (c.some((x) => x.id === p.id) ? c.map((x) => (x.id === p.id ? p : x)) : [p, ...c]));
         return true;
       }}
-      onDelete={(id) => setCatalog((c) => c.filter((x) => x.id !== id))}
-      onRemoveExamples={() => true}
+      onDelete={(id) => {
+        onDeleteSpy(id);
+        setCatalog((c) => c.filter((x) => x.id !== id));
+      }}
+      onRemoveExamples={() => {
+        const ok = removeOk;
+        onRemoveExamplesSpy.mockReturnValue(ok);
+        onRemoveExamplesSpy();
+        if (!ok) return false;
+        setCatalog((c) => c.filter((p) => !p.isExample));
+        return true;
+      }}
     />
   );
 }
@@ -86,7 +101,10 @@ function setup(initial: ShopProduct[] = []) {
 beforeEach(() => {
   idCounter = 0;
   upsertOk = true;
+  removeOk = true;
   onUpsertSpy.mockReset();
+  onDeleteSpy.mockReset();
+  onRemoveExamplesSpy.mockReset();
   storage = new MemoryStorage();
   vi.stubGlobal("localStorage", storage);
   vi.spyOn(window, "alert").mockImplementation(() => {});
@@ -639,5 +657,284 @@ describe("Products starter search: 25(b)-only toggle", () => {
     expect(only25b().checked).toBe(true); // state kept, just locked
     await user.click(within(confirmCard()).getByRole("button", { name: "Leave archived" }));
     expect(only25b()).toBeEnabled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Shop catalog: add / edit form, list filters, archive / delete, remove-examples
+// ---------------------------------------------------------------------------
+
+const EXAMPLE: ShopProduct = {
+  id: "example-rtu-insecticide",
+  name: "Example RTU insecticide",
+  epaRegNo: null,
+  is25b: false,
+  kind: "pesticide",
+  isExample: true,
+  archived: false,
+};
+const GLUE_SHOP: ShopProduct = {
+  id: "shop-glue",
+  name: "Glue board",
+  epaRegNo: null,
+  is25b: false,
+  kind: "device",
+  isExample: false,
+  archived: false,
+};
+const ARCHIVED_SHOP: ShopProduct = {
+  id: "shop-old",
+  name: "Old Concentrate",
+  epaRegNo: "111-2",
+  is25b: false,
+  kind: "pesticide",
+  isExample: false,
+  archived: true,
+};
+
+// Shop-catalog filters (distinct from the starter panel, which also uses .catalog-filters).
+const catalogFilters = () =>
+  (document.querySelector('.catalog-filters input[placeholder="Name or EPA #"]') as HTMLElement).closest(
+    ".catalog-filters",
+  ) as HTMLElement;
+const catalogSearch = () => within(catalogFilters()).getByPlaceholderText("Name or EPA #") as HTMLInputElement;
+const catalogShow = () => within(catalogFilters()).getByLabelText(/^Show/) as HTMLSelectElement;
+const catalogKind = () => within(catalogFilters()).getByLabelText(/^Kind/) as HTMLSelectElement;
+const catalogStatus = () => within(catalogFilters()).getByRole("status");
+const productForm = () =>
+  screen.getByRole("heading", { name: /^(Add|Edit) product$/ }).closest("form") as HTMLFormElement;
+const formName = () => within(productForm()).getByLabelText(/^Name/) as HTMLInputElement;
+const formKind = () => within(productForm()).getByLabelText(/^Kind/) as HTMLSelectElement;
+const formEpa = () => within(productForm()).getByLabelText(/^EPA registration number/) as HTMLInputElement;
+const form25b = () => within(productForm()).getByRole("checkbox", { name: /25\(b\) product/ }) as HTMLInputElement;
+const formExample = () =>
+  within(productForm()).getByRole("checkbox", { name: /Example seed/ }) as HTMLInputElement;
+const formErrors = () => Array.from(productForm().querySelectorAll(".error")).map((e) => e.textContent);
+function listedShopNames(): string[] {
+  return Array.from(document.querySelectorAll<HTMLElement>("article.card"))
+    .filter((a) => !a.closest(".starter-results") && a.querySelector(".card-head strong"))
+    .map((a) => a.querySelector(".card-head strong")!.textContent ?? "");
+}
+
+describe("Products catalog: empty and remove-examples", () => {
+  it("shows the empty hint when the shop catalog is empty", () => {
+    setup([]);
+    expect(screen.getByText("No products yet. Add the pesticides and devices this shop actually uses.")).toBeInTheDocument();
+    expect(document.querySelector('.catalog-filters input[placeholder="Name or EPA #"]')).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove example products from catalog" })).toBeNull();
+  });
+
+  it("offers remove-examples when seeds remain, confirms, then removes them", async () => {
+    const { user } = setup([TALSTAR_SHOP, EXAMPLE]);
+    const btn = screen.getByRole("button", { name: "Remove example products from catalog" });
+    expect(screen.getByText(/1 example product on this list/)).toBeInTheDocument();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await user.click(btn);
+    expect(confirm).toHaveBeenCalledWith(
+      "Remove 1 example product from the shop catalog? Saved logs are not changed.",
+    );
+    expect(onRemoveExamplesSpy).not.toHaveBeenCalled();
+    confirm.mockReturnValue(true);
+    await user.click(btn);
+    expect(onRemoveExamplesSpy).toHaveBeenCalledTimes(1);
+    expect(listedShopNames()).toEqual(["Talstar P (my label)"]);
+    expect(screen.queryByRole("button", { name: "Remove example products from catalog" })).toBeNull();
+  });
+
+  it("uses plural copy for multiple example products", async () => {
+    const ex2 = { ...EXAMPLE, id: "example-25b-concentrate", name: "Example 25(b) concentrate", is25b: true };
+    const { user } = setup([EXAMPLE, ex2]);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await user.click(screen.getByRole("button", { name: "Remove example products from catalog" }));
+    expect(confirm).toHaveBeenCalledWith(
+      "Remove 2 example products from the shop catalog? Saved logs are not changed.",
+    );
+  });
+});
+
+describe("Products catalog: list filters", () => {
+  const CATALOG = [TALSTAR_SHOP, GLUE_SHOP, ARCHIVED_SHOP, EXAMPLE];
+
+  it("defaults to active and hides archived; status line reflects the filter", () => {
+    setup(CATALOG);
+    expect(catalogShow().value).toBe("active");
+    expect(listedShopNames()).toEqual(["Talstar P (my label)", "Glue board", "Example RTU insecticide"]);
+    expect(catalogStatus()).toHaveTextContent("Showing 3 of 4 (active).");
+    expect(within(catalogShow()).getByRole("option", { name: "Archived (1)" })).toBeInTheDocument();
+  });
+
+  it("Show=archived / all and Kind narrow the list; search matches name, EPA, kind, 25b, example", async () => {
+    const { user } = setup(CATALOG);
+    await user.selectOptions(catalogShow(), "archived");
+    expect(listedShopNames()).toEqual(["Old Concentrate"]);
+    expect(catalogStatus()).toHaveTextContent("Showing 1 of 4 (archived).");
+    await user.selectOptions(catalogShow(), "all");
+    expect(listedShopNames()).toHaveLength(4);
+    expect(catalogStatus()).toHaveTextContent("Showing 4 of 4.");
+    await user.selectOptions(catalogKind(), "device");
+    expect(listedShopNames()).toEqual(["Glue board"]);
+    await user.selectOptions(catalogKind(), "all");
+    await user.type(catalogSearch(), "279-3206");
+    expect(listedShopNames()).toEqual(["Talstar P (my label)"]);
+    await user.clear(catalogSearch());
+    await user.type(catalogSearch(), "example");
+    expect(listedShopNames()).toEqual(["Example RTU insecticide"]);
+    await user.clear(catalogSearch());
+    await user.type(catalogSearch(), "zzzz");
+    expect(listedShopNames()).toEqual([]);
+    expect(screen.getByText("No products match this search/filter.")).toBeInTheDocument();
+  });
+});
+
+describe("Products catalog: add form", () => {
+  it("Add product opens a blank form and hides the Add button", async () => {
+    const { user } = setup([]);
+    await user.click(screen.getByRole("button", { name: "Add product" }));
+    expect(screen.getByRole("heading", { name: "Add product" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add product" })).toBeNull();
+    expect(formName().value).toBe("");
+    expect(formKind().value).toBe("pesticide");
+    expect(form25b().checked).toBe(false);
+    expect(formExample().checked).toBe(false);
+  });
+
+  it("requires a name and an EPA # for registered pesticides", async () => {
+    const { user } = setup([]);
+    await user.click(screen.getByRole("button", { name: "Add product" }));
+    await user.click(screen.getByRole("button", { name: "Save product" }));
+    expect(formErrors()).toEqual(["Name required", "EPA # required for registered pesticides (leave blank for 25(b) or examples)"]);
+    expect(onUpsertSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects SAMPLE-* EPA numbers unless marked as an example seed", async () => {
+    const { user } = setup([]);
+    await user.click(screen.getByRole("button", { name: "Add product" }));
+    await user.type(formName(), "Placeholder");
+    await user.type(formEpa(), "SAMPLE-1");
+    await user.click(screen.getByRole("button", { name: "Save product" }));
+    expect(formErrors()).toEqual([
+      "SAMPLE-* looks like a placeholder; mark as Example seed or enter a real EPA #",
+    ]);
+  });
+
+  it("saves a registered pesticide with a trimmed name and EPA #", async () => {
+    const { user } = setup([]);
+    await user.click(screen.getByRole("button", { name: "Add product" }));
+    await user.type(formName(), "  New Bifen  ");
+    await user.type(formEpa(), "  53883-118  ");
+    await user.click(screen.getByRole("button", { name: "Save product" }));
+    expect(onUpsertSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: expect.stringMatching(/^id-\d+$/),
+        name: "New Bifen",
+        epaRegNo: "53883-118",
+        is25b: false,
+        kind: "pesticide",
+        isExample: false,
+        archived: false,
+      }),
+    );
+    expect(screen.queryByRole("heading", { name: "Add product" })).toBeNull();
+    expect(listedShopNames()).toContain("New Bifen");
+  });
+
+  it("25(b) and device saves null the EPA #; example seed does too", async () => {
+    const { user } = setup([]);
+    await user.click(screen.getByRole("button", { name: "Add product" }));
+    await user.type(formName(), "Ess Clone");
+    await user.click(form25b());
+    await user.type(formEpa(), "should-clear");
+    await user.click(screen.getByRole("button", { name: "Save product" }));
+    expect(onUpsertSpy.mock.calls.at(-1)![0]).toMatchObject({
+      name: "Ess Clone",
+      epaRegNo: null,
+      is25b: true,
+    });
+
+    await user.click(screen.getByRole("button", { name: "Add product" }));
+    await user.type(formName(), "Trap");
+    await user.selectOptions(formKind(), "device");
+    expect(within(productForm()).queryByLabelText(/^EPA registration number/)).toBeNull();
+    expect(within(productForm()).queryByRole("checkbox", { name: /25\(b\) product/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Save product" }));
+    expect(onUpsertSpy.mock.calls.at(-1)![0]).toMatchObject({
+      name: "Trap",
+      kind: "device",
+      epaRegNo: null,
+      is25b: false,
+    });
+
+    await user.click(screen.getByRole("button", { name: "Add product" }));
+    await user.type(formName(), "Demo");
+    await user.click(formExample());
+    expect(formEpa()).toBeDisabled();
+    expect(formEpa().value).toBe("");
+    expect(screen.getByText(/Example items never print a registration number/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save product" }));
+    expect(onUpsertSpy.mock.calls.at(-1)![0]).toMatchObject({
+      name: "Demo",
+      isExample: true,
+      epaRegNo: null,
+    });
+  });
+
+  it("keeps the form open when onUpsert fails; Cancel discards", async () => {
+    upsertOk = false;
+    const { user } = setup([]);
+    await user.click(screen.getByRole("button", { name: "Add product" }));
+    await user.type(formName(), "Nope");
+    await user.type(formEpa(), "1-1");
+    await user.click(screen.getByRole("button", { name: "Save product" }));
+    expect(onUpsertSpy).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("heading", { name: "Add product" })).toBeInTheDocument();
+    upsertOk = true;
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("heading", { name: "Add product" })).toBeNull();
+    expect(listedShopNames()).toEqual([]);
+  });
+});
+
+describe("Products catalog: edit, archive, delete", () => {
+  it("Edit prefills the form; Save updates under the same id", async () => {
+    const { user } = setup([TALSTAR_SHOP]);
+    await user.click(within(shopCard("Talstar P (my label)")).getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("heading", { name: "Edit product" })).toBeInTheDocument();
+    expect(formName().value).toBe("Talstar P (my label)");
+    expect(formEpa().value).toBe("279-3206");
+    expect(catalogSearch()).toBeDisabled();
+    expect(catalogShow()).toBeDisabled();
+    await user.clear(formName());
+    await user.type(formName(), "Talstar Pro");
+    await user.click(screen.getByRole("button", { name: "Save product" }));
+    expect(onUpsertSpy).toHaveBeenLastCalledWith(expect.objectContaining({ id: "shop-talstar", name: "Talstar Pro" }));
+    expect(listedShopNames()).toEqual(["Talstar Pro"]);
+  });
+
+  it("Archive / Unarchive toggles the archived flag", async () => {
+    const { user } = setup([TALSTAR_SHOP]);
+    await user.click(within(shopCard("Talstar P (my label)")).getByRole("button", { name: "Archive" }));
+    expect(onUpsertSpy).toHaveBeenLastCalledWith(expect.objectContaining({ id: "shop-talstar", archived: true }));
+    await user.selectOptions(catalogShow(), "archived");
+    await user.click(within(shopCard("Talstar P (my label)")).getByRole("button", { name: "Unarchive" }));
+    expect(onUpsertSpy).toHaveBeenLastCalledWith(expect.objectContaining({ id: "shop-talstar", archived: false }));
+  });
+
+  it("Delete confirms by name then removes the row", async () => {
+    const { user } = setup([TALSTAR_SHOP, GLUE_SHOP]);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await user.click(within(shopCard("Glue board")).getByRole("button", { name: "Delete" }));
+    expect(confirm).toHaveBeenCalledWith("Delete Glue board from the shop list?");
+    expect(onDeleteSpy).not.toHaveBeenCalled();
+    confirm.mockReturnValue(true);
+    await user.click(within(shopCard("Glue board")).getByRole("button", { name: "Delete" }));
+    expect(onDeleteSpy).toHaveBeenCalledWith("shop-glue");
+    expect(listedShopNames()).toEqual(["Talstar P (my label)"]);
+  });
+
+  it("example products have no Archive button", () => {
+    setup([EXAMPLE]);
+    const card = shopCard("Example RTU insecticide");
+    expect(within(card).queryByRole("button", { name: "Archive" })).toBeNull();
+    expect(within(card).getByText("example")).toHaveClass("chip", "sample");
   });
 });
