@@ -42,7 +42,13 @@ export function findShopMatchForStarter(
 
 export type StarterKindFilter = "all" | "pesticide" | "device";
 
-export type StarterShopStatusFilter = "all" | "hide-active" | "not-added" | "pending" | "archived";
+export type StarterShopStatusFilter =
+  | "all"
+  | "hide-active"
+  | "active"
+  | "not-added"
+  | "pending"
+  | "archived";
 
 /** Shop-list state of a starter row relative to the shop catalog. */
 export type StarterShopState = "not-added" | "active" | "pending" | "archived";
@@ -73,6 +79,7 @@ export function starterShopState(
  * Filter starter rows by their shop-list state (via starterShopState):
  * - all: no filtering
  * - hide-active: hide only starters with an active (non-archived) shop match; pending/archived stay
+ * - active: only starters with an active (non-archived) shop match
  * - not-added: only starters with no shop match at all
  * - pending: only starters whose archived shop match is awaiting label confirm (id in pendingIds)
  * - archived: only starters whose shop match is archived and NOT awaiting label confirm
@@ -90,6 +97,8 @@ export function filterStartersByShopStatus(
     switch (status) {
       case "hide-active":
         return state !== "active";
+      case "active":
+        return state === "active";
       case "not-added":
         return state === "not-added";
       case "pending":
