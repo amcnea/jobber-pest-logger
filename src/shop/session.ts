@@ -85,17 +85,16 @@ function parseVerifiedAt(value: unknown): string | undefined {
 
 /** Human-readable duration for Settings chrome (idle / TTL labels). */
 export function formatDurationMs(ms: number): string {
-  if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))}s`;
-  if (ms < 3_600_000) {
-    const m = Math.round(ms / 60_000);
-    return `${m} minute${m === 1 ? "" : "s"}`;
-  }
-  if (ms < 48 * 3_600_000) {
-    const h = Math.round(ms / 3_600_000);
-    return `${h} hour${h === 1 ? "" : "s"}`;
-  }
-  const d = Math.round(ms / (24 * 3_600_000));
-  return `${d} day${d === 1 ? "" : "s"}`;
+  // Choose the unit from the rounded value so a duration just under a
+  // boundary (59_999 ms, 3_599_999 ms) does not print as "60s" / "60 minutes".
+  const seconds = Math.max(1, Math.round(ms / 1_000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  const hours = Math.round(ms / 3_600_000);
+  if (hours < 48) return `${hours} hour${hours === 1 ? "" : "s"}`;
+  const days = Math.round(ms / (24 * 3_600_000));
+  return `${days} day${days === 1 ? "" : "s"}`;
 }
 
 /**
