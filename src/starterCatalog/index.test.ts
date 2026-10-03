@@ -99,13 +99,26 @@ describe("sortStarters", () => {
     expect(sortStarters(rows, [], [], "name").map((s) => s.id)).toEqual(["b", "c", "a"]);
   });
 
-  it("needs-action groups pending → archived → not-added → active, stable within group", () => {
+  it("needs-action groups pending → archived → not-added → active, stable within group (#102)", () => {
+    // Distinct EPA #s so findShopMatchForStarter cannot share a shop row across starters.
+    // Input order is intentionally interleaved (active, not-added, archived, pending) so a
+    // correct sort must actually regroup — not lean on the original order.
+    const pending = starter({ id: "p", name: "Pending One", epaRegNo: "10-1" });
+    const archived = starter({ id: "z", name: "Archived One", epaRegNo: "10-2" });
+    const notAdded = starter({ id: "n", name: "Not Added", epaRegNo: "10-3" });
+    const active = starter({ id: "a", name: "Active One", epaRegNo: "10-4" });
+    const interleaved = [active, notAdded, archived, pending];
     const catalog = [
-      makeShopProduct({ id: "pa", epaRegNo: a.epaRegNo, archived: true }),
-      makeShopProduct({ id: "ac", epaRegNo: c.epaRegNo, archived: false }),
+      makeShopProduct({ id: "shop-p", epaRegNo: "10-1", archived: true }),
+      makeShopProduct({ id: "shop-z", epaRegNo: "10-2", archived: true }),
+      makeShopProduct({ id: "shop-a", epaRegNo: "10-4", archived: false }),
     ];
-    // b has no match → not-added; a is pending; c is active
-    expect(sortStarters(rows, catalog, ["pa"], "needs-action").map((s) => s.id)).toEqual(["a", "b", "c"]);
+    expect(sortStarters(interleaved, catalog, ["shop-p"], "needs-action").map((s) => s.id)).toEqual([
+      "p",
+      "z",
+      "n",
+      "a",
+    ]);
   });
 });
 

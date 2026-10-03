@@ -750,6 +750,20 @@ describe("Products catalog: empty and remove-examples", () => {
       "Remove 2 example products from the shop catalog? Saved logs are not changed.",
     );
   });
+
+  it("when onRemoveExamples fails, examples stay and the remove nag remains (#103)", async () => {
+    // Products.tsx ignores the boolean return today — it does not show a dedicated error
+    // string like Export does. The failure is still visible: examples stay on the list and
+    // the remove affordance stays up (removal was not treated as done).
+    removeOk = false;
+    const { user } = setup([TALSTAR_SHOP, EXAMPLE]);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    await user.click(screen.getByRole("button", { name: "Remove example products from catalog" }));
+    expect(onRemoveExamplesSpy).toHaveBeenCalledTimes(1);
+    expect(listedShopNames()).toEqual(["Talstar P (my label)", "Example RTU insecticide"]);
+    expect(screen.getByText(/1 example product on this list/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove example products from catalog" })).toBeInTheDocument();
+  });
 });
 
 describe("Products catalog: list filters", () => {
@@ -936,5 +950,34 @@ describe("Products catalog: edit, archive, delete", () => {
     const card = shopCard("Example RTU insecticide");
     expect(within(card).queryByRole("button", { name: "Archive" })).toBeNull();
     expect(within(card).getByText("example")).toHaveClass("chip", "sample");
+  });
+});
+
+describe("Products catalog: edit visibility and unarchive edges", () => {
+  it("keeps the product being edited visible even when filters would hide it", async () => {
+    const { user } = setup([TALSTAR_SHOP, GLUE_SHOP]);
+    await user.click(within(shopCard("Glue board")).getByRole("button", { name: "Edit" }));
+    await user.selectOptions(catalogKind(), "pesticide"); // would hide the device
+    // The edit form (not the card-head) is still mounted for Glue board.
+    expect(screen.getByRole("heading", { name: "Edit product" })).toBeInTheDocument();
+    expect(formName().value).toBe("Glue board");
+    expect(listedShopNames()).not.toContain("Glue board"); // card-head gone, form remains
+  });
+
+  it("Unarchive on a pending label-confirm row opens Confirm label instead of activating", async () => {
+    // Seed a pending archived shop match via starter add, then leave archived and try Unarchive /
+    // Confirm label… from the shop card.
+    const { user } = setup();
+    await user.type(search(), "essentria");
+    await user.click(within(row("Essentria IC3")).getByRole("button", { name: "Add to my catalog" }));
+    await user.click(within(confirmCard()).getByRole("button", { name: "Leave archived" }));
+    const card = shopCard("Essentria IC3");
+    expect(within(card).getByText("needs label confirm")).toBeInTheDocument();
+    await user.click(within(card).getByRole("button", { name: "Confirm label…" }));
+    expect(confirmCard()).toBeInTheDocument();
+    // Still archived — activate only goes through the confirm checkbox path.
+    expect(onUpsertSpy.mock.calls.some((c) => c[0].name === "Essentria IC3" && c[0].archived === false)).toBe(
+      false,
+    );
   });
 });

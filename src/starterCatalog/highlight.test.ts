@@ -134,14 +134,8 @@ describe("highlightSegments", () => {
     }
   });
 
-  // Known bug, see #86 (backlog): indices come from text.toLowerCase() but are used to
-  // slice the original text.
-  // When lowercasing changes string length (e.g. "İ" U+0130 → "i̇", 2 code units), every
-  // segment after that character is shifted.
-  // Expected: highlightSegments("İstanbul Pest", "pest") marks "Pest".
-  // Actual:   [{ "İstanbul P", false }, { "est", true }] — the highlight is shifted one
-  //           character right (one extra code unit per "İ" before the match).
-  it.skip("stays aligned when lowercasing changes the text length (e.g. Turkish İ)", () => {
+  // #86 fixed in source; #106 asks that this regression guard run.
+  it("stays aligned when lowercasing changes the text length (e.g. Turkish İ)", () => {
     const segs = highlightSegments("İstanbul Pest", "pest");
     expect(marks(segs)).toEqual(["Pest"]);
     expect(joined(segs)).toBe("İstanbul Pest");
