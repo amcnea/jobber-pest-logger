@@ -981,3 +981,69 @@ describe("Products catalog: edit visibility and unarchive edges", () => {
     );
   });
 });
+
+describe("Products catalog: fail-closed unarchive / clear-pending", () => {
+  const CUSTOM_ARCHIVED: ShopProduct = {
+    id: "custom-mix",
+    name: "Custom Mix",
+    epaRegNo: "999-999",
+    is25b: false,
+    kind: "pesticide",
+    isExample: false,
+    archived: true,
+  };
+
+  it("shows Unarchive blocked (disabled) for a non-pending archived row when storage is unreadable", async () => {
+    // Heuristic pending only covers archived starter matches. A custom archived row
+    // with no starter match must not be activatable while storage is down.
+    storage.failGet = true;
+    const { user } = setup([CUSTOM_ARCHIVED]);
+    expect(screen.getByRole("alert")).toHaveTextContent("Label-confirm storage is unavailable");
+    await user.selectOptions(catalogShow(), "archived");
+    const card = shopCard("Custom Mix");
+    const btn = within(card).getByRole("button", { name: "Unarchive blocked" });
+    expect(btn).toBeDisabled();
+    await user.click(btn);
+    expect(onUpsertSpy).not.toHaveBeenCalled();
+  });
+
+  it("if clearPending fails after activate, re-archives and keeps the confirm open", async () => {
+    const { user } = setup();
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
+    await user.type(search(), "termidor");
+    await user.click(within(row("Termidor SC")).getByRole("button", { name: "Add to my catalog" }));
+    const card = confirmCard();
+    await user.click(within(card).getByLabelText(/I confirmed/));
+    storage.failSet = true; // clearPending write fails; activate upsert still ok
+    const before = onUpsertSpy.mock.calls.length;
+    await user.click(within(card).getByRole("button", { name: "Confirm label & activate" }));
+    const after = onUpsertSpy.mock.calls.slice(before).map((c) => c[0]);
+    expect(after.map((p) => p.archived)).toEqual([false, true]); // activate then re-archive
+    expect(confirmCard()).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Label-confirm storage is unavailable");
+    expect(alertSpy).not.toHaveBeenCalled();
+    expect(pendingIds()).toEqual([after[0].id]);
+  });
+
+  it("alerts if re-archive also fails after a clearPending failure", async () => {
+    const { user } = setup();
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
+    await user.type(search(), "termidor");
+    await user.click(within(row("Termidor SC")).getByRole("button", { name: "Add to my catalog" }));
+    const card = confirmCard();
+    await user.click(within(card).getByLabelText(/I confirmed/));
+    storage.failSet = true;
+    // Harness: onUpsertSpy(clone) then if (!upsertOk) return false.
+    // Fail only the re-archive call (the one after a successful activate).
+    let seenActivate = false;
+    onUpsertSpy.mockImplementation((p: ShopProduct) => {
+      if (seenActivate) upsertOk = false;
+      if (p.archived === false) seenActivate = true;
+    });
+    await user.click(within(card).getByRole("button", { name: "Confirm label & activate" }));
+    expect(alertSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/Termidor SC is active but label confirmation could not be saved/),
+    );
+    expect(confirmCard()).toBeInTheDocument();
+  });
+});
