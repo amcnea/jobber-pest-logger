@@ -156,6 +156,8 @@ export function ShopSessionGate({
       setPin("");
       setMsg(result.message);
       onSessionChange();
+    } catch {
+      setError("Could not sign in. Try again.");
     } finally {
       setBusy(false);
     }
@@ -183,6 +185,8 @@ export function ShopSessionGate({
       setShowBootstrap(false);
       setMsg(result.message);
       onSessionChange();
+    } catch {
+      setError("Could not set PINs. Try again.");
     } finally {
       setBusy(false);
     }
