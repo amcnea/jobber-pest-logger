@@ -206,11 +206,7 @@ describe("formatDurationMs", () => {
     expect(formatDurationMs(60 * HOUR)).toBe("3 days"); // 2.5 rounds up
   });
 
-  // Known bug, see #85 (backlog): values just under a unit boundary round up into the
-  // smaller unit's label.
-  // Expected: 59_999 ms → "1 minute" and 3_599_999 ms → "1 hour".
-  // Actual:   "60s" and "60 minutes" (Math.round before the unit is chosen).
-  it.skip("does not show 60s / 60 minutes just below a unit boundary", () => {
+  it("does not show 60s / 60 minutes just below a unit boundary", () => {
     expect(formatDurationMs(59_999)).toBe("1 minute");
     expect(formatDurationMs(3_599_999)).toBe("1 hour");
   });

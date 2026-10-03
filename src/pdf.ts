@@ -210,7 +210,8 @@ export function downloadPdf(
     const exampleMark = logHasExampleProducts(log.products)
       ? "  [includes example catalog items]"
       : "";
-    const title = `Log ${i + 1} — ${log.dateUsed.trim() || "(no date)"}${exampleMark}`;
+    const dateUsed = log.dateUsed.trim() || "(no date)";
+    const title = `Log ${i + 1} — ${dateUsed}${exampleMark}`;
     ensureSpace(wrappedHeight(doc, title, MAX_WIDTH, 5.5) + 4);
     y = wrap(doc, title, MARGIN, y, MAX_WIDTH, 5.5);
     y += 3;
@@ -226,7 +227,7 @@ export function downloadPdf(
       `Customer billing: ${log.customerBillingName} — ${log.customerBillingAddress}`,
       `Service address: ${log.serviceAddress}${log.poleLocation ? ` (pole: ${log.poleLocation})` : ""}`,
       `Target pest / purpose: ${log.targetPestOrPurpose}`,
-      `Date used: ${log.dateUsed}`,
+      `Date used: ${dateUsed}`,
       `Shop TPCL: ${log.shopTpclNumber}${log.shopTpclLetter ? log.shopTpclLetter : ""}`,
     ];
     if (log.jobberJobNumber || log.jobberAddress) {
