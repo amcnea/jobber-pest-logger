@@ -914,3 +914,97 @@ describe("logOutbox: remaining edge paths", () => {
     expect(putShop).toHaveBeenCalledOnce();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Cross-tab compare-and-swap (BACKLOG outbox atomicity; locks still deferred)
+// ---------------------------------------------------------------------------
+
+describe("outbox cross-tab CAS", () => {
+  /** Other tab commits during the confirming read (between snapshot and setItem). */
+  function interleaveOnConfirm(mutate: (currentRaw: string | null) => void) {
+    const originalGet = storage.getItem.bind(storage);
+    const originalSet = storage.setItem.bind(storage);
+    let reads = 0;
+    storage.getItem = (k: string) => {
+      if (k === LOG_OUTBOX_KEY) {
+        reads += 1;
+        if (reads % 2 === 0) mutate(originalGet(k));
+      }
+      return originalGet(k);
+    };
+    return {
+      reads: () => reads,
+      restore() {
+        storage.getItem = originalGet;
+        storage.setItem = originalSet;
+      },
+      originalSet,
+    };
+  }
+
+  function otherEntry(logId: string, entryId: string) {
+    return {
+      shopId: SHOP,
+      queuedAt: NOW.toISOString(),
+      entryId,
+      log: makeLog(logId),
+    };
+  }
+
+  it("retries an enqueue so another tab's row is kept instead of last-write-wins", () => {
+    enqueueLogOutbox(SHOP, makeLog("existing"));
+    let commits = 0;
+    const hook = interleaveOnConfirm((currentRaw) => {
+      if (commits > 0) return;
+      commits += 1;
+      const current = JSON.parse(currentRaw ?? "[]") as unknown[];
+      hook.originalSet(
+        LOG_OUTBOX_KEY,
+        JSON.stringify([otherEntry("other", "other-tab"), ...current]),
+      );
+    });
+    const originalSet = storage.setItem.bind(storage);
+    let ourWrites = 0;
+    storage.setItem = (k: string, v: string) => {
+      if (k === LOG_OUTBOX_KEY) ourWrites += 1;
+      originalSet(k, v);
+    };
+    expect(enqueueLogOutbox(SHOP, makeLog("mine"))).toBe(true);
+    expect(ourWrites).toBe(1);
+    hook.restore();
+    expect(loadLogOutbox().map((e) => e.log.id)).toEqual(["mine", "other", "existing"]);
+    expect(loadLogOutbox().find((e) => e.log.id === "other")?.entryId).toBe("other-tab");
+  });
+
+  it("retries a versioned remove so a concurrent enqueue is not dropped", () => {
+    enqueueLogOutbox(SHOP, makeLog("a"));
+    enqueueLogOutbox(SHOP, makeLog("b"));
+    const dropId = outboxEntriesForShop(SHOP).find((e) => e.log.id === "a")!.entryId;
+    let injected = false;
+    const hook = interleaveOnConfirm((currentRaw) => {
+      if (injected) return;
+      injected = true;
+      const current = JSON.parse(currentRaw ?? "[]") as unknown[];
+      hook.originalSet(
+        LOG_OUTBOX_KEY,
+        JSON.stringify([otherEntry("other", "other-tab"), ...current]),
+      );
+    });
+    expect(removeOutboxVersions(SHOP, [dropId])).toBe(true);
+    hook.restore();
+    expect(loadLogOutbox().map((e) => e.log.id)).toEqual(["other", "b"]);
+  });
+
+  it("gives up after 8 conflicts and leaves the other tab's write in place", () => {
+    enqueueLogOutbox(SHOP, makeLog("keep"));
+    let confirms = 0;
+    const hook = interleaveOnConfirm(() => {
+      confirms += 1;
+      hook.originalSet(LOG_OUTBOX_KEY, JSON.stringify([otherEntry("other", `tab-${confirms}`)]));
+    });
+    expect(enqueueLogOutbox(SHOP, makeLog("mine"))).toBe(false);
+    expect(confirms).toBe(8);
+    hook.restore();
+    expect(loadLogOutbox().map((e) => e.entryId)).toEqual(["tab-8"]);
+  });
+});
