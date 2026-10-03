@@ -172,6 +172,18 @@ describe("ShopSessionGate: sign in", () => {
     expect(screen.queryByText(/Pre-#3 shop/)).toBeNull();
   });
 
+  it("a rejected sign-in shows a generic error and re-enables Unlock", async () => {
+    signInShop.mockRejectedValue(new Error("network down"));
+    const { user, onSessionChange } = setupGate({ initialShopCode: "ABCD2345" });
+    await user.type(pinInput(), "1234");
+    await user.click(unlockBtn());
+    expect(screen.getByRole("alert")).toHaveTextContent("Could not sign in. Try again.");
+    expect(unlockBtn()).toHaveTextContent("Unlock");
+    expect(unlockBtn()).toBeEnabled();
+    expect(pinInput().value).toBe("1234");
+    expect(onSessionChange).not.toHaveBeenCalled();
+  });
+
   it("typing in the code or PIN clears the error", async () => {
     signInShop.mockResolvedValue({ ok: false, error: "Enter a valid shop code." });
     const { user } = setupGate({ initialShopCode: "X" });
@@ -236,6 +248,17 @@ describe("ShopSessionGate: pins-missing bootstrap", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Office PINs do not match.");
     expect(bootstrapField("Office PIN").value).toBe("1111");
     expect(screen.getByText(/Pre-#3 shop/)).toBeInTheDocument();
+    expect(onSessionChange).not.toHaveBeenCalled();
+  });
+
+  it("a rejected bootstrap shows a generic error, keeps the panel, and clears busy", async () => {
+    const { user, onSessionChange } = await openBootstrap();
+    bootstrapShopPins.mockRejectedValue(new Error("functions unavailable"));
+    await user.click(screen.getByRole("button", { name: "Set PINs & sign in as office" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Could not set PINs. Try again.");
+    expect(screen.getByText(/Pre-#3 shop/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Set PINs & sign in as office" })).toBeEnabled();
+    expect(unlockBtn()).toHaveTextContent("Unlock");
     expect(onSessionChange).not.toHaveBeenCalled();
   });
 
