@@ -5,6 +5,8 @@ import {
   flushLogOutbox,
   loadLogOutbox,
   LOG_OUTBOX_KEY,
+  OUTBOX_LOCK_NAME,
+  OUTBOX_LOCK_WAIT_MS,
   outboxEntriesForShop,
   removeOutboxLogIds,
   removeOutboxVersions,
@@ -176,7 +178,7 @@ function fakeRemote(opts: {
   let p = 0;
   const getShop = vi.fn(async (): Promise<GetResult> => {
     const n = g++;
-    opts.onGet?.(n);
+    await opts.onGet?.(n);
     const scripted = opts.gets?.[Math.min(n, (opts.gets?.length ?? 1) - 1)];
     if (scripted) return scripted.ok ? { ok: true, value: structuredClone(scripted.value) } : scripted;
     return { ok: true, value: structuredClone(doc) };
@@ -184,7 +186,7 @@ function fakeRemote(opts: {
   const putShop = vi.fn(async (next: ShopDocument): Promise<PutResult> => {
     const n = p++;
     putDocs.push(structuredClone(next));
-    opts.onPut?.(n, next);
+    await opts.onPut?.(n, next);
     const scripted = opts.puts?.[Math.min(n, (opts.puts?.length ?? 1) - 1)];
     if (scripted && !scripted.ok) return scripted;
     doc = structuredClone(next);
@@ -286,17 +288,17 @@ describe("loadLogOutbox", () => {
 // enqueueLogOutbox (queue / dedupe / ordering / serialization)
 // ---------------------------------------------------------------------------
 
-describe("enqueueLogOutbox", () => {
-  it("rejects a blank shop id or a log without id, writing nothing", () => {
-    expect(enqueueLogOutbox("", makeLog("a"))).toBe(false);
-    expect(enqueueLogOutbox("   ", makeLog("a"))).toBe(false);
-    expect(enqueueLogOutbox(SHOP, makeLog(""))).toBe(false);
+describe("enqueueLogOutbox", async () => {
+  it("rejects a blank shop id or a log without id, writing nothing", async () => {
+    expect(await enqueueLogOutbox("", makeLog("a"))).toBe(false);
+    expect(await enqueueLogOutbox("   ", makeLog("a"))).toBe(false);
+    expect(await enqueueLogOutbox(SHOP, makeLog(""))).toBe(false);
     expect(storage.getItem(LOG_OUTBOX_KEY)).toBeNull();
   });
 
-  it("stores a trimmed shop id, the current time, a unique entry id, and the full log", () => {
+  it("stores a trimmed shop id, the current time, a unique entry id, and the full log", async () => {
     const log = makeLog("a");
-    expect(enqueueLogOutbox(`  ${SHOP}  `, log)).toBe(true);
+    expect(await enqueueLogOutbox(`  ${SHOP}  `, log)).toBe(true);
     const [entry] = loadLogOutbox();
     expect(entry.shopId).toBe(SHOP);
     expect(entry.queuedAt).toBe(NOW.toISOString());
@@ -305,9 +307,9 @@ describe("enqueueLogOutbox", () => {
     expect(entry).not.toHaveProperty("lastError");
   });
 
-  it("serializes to JSON under LOG_OUTBOX_KEY and round-trips losslessly", () => {
+  it("serializes to JSON under LOG_OUTBOX_KEY and round-trips losslessly", async () => {
     const log = makeLog("a");
-    enqueueLogOutbox(SHOP, log, "offline");
+    await enqueueLogOutbox(SHOP, log, "offline");
     const raw = rawOutbox() as LogOutboxEntry[];
     expect(raw).toHaveLength(1);
     expect(raw[0].log).toEqual(log);
@@ -315,19 +317,19 @@ describe("enqueueLogOutbox", () => {
     expect(loadLogOutbox()).toEqual(raw);
   });
 
-  it("puts the newest entry first", () => {
-    enqueueLogOutbox(SHOP, makeLog("a"));
+  it("puts the newest entry first", async () => {
+    await enqueueLogOutbox(SHOP, makeLog("a"));
     vi.setSystemTime(new Date(NOW.getTime() + 1000));
-    enqueueLogOutbox(SHOP, makeLog("b"));
+    await enqueueLogOutbox(SHOP, makeLog("b"));
     expect(loadLogOutbox().map((e) => e.log.id)).toEqual(["b", "a"]);
   });
 
-  it("upserts by shop + log id: latest payload wins, gets a new entry id and moves to the front", () => {
-    enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v1" }));
-    enqueueLogOutbox(SHOP, makeLog("b"));
+  it("upserts by shop + log id: latest payload wins, gets a new entry id and moves to the front", async () => {
+    await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v1" }));
+    await enqueueLogOutbox(SHOP, makeLog("b"));
     const firstId = outboxEntriesForShop(SHOP).find((e) => e.log.id === "a")!.entryId;
     vi.setSystemTime(new Date(NOW.getTime() + 5000));
-    enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v2" }));
+    await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v2" }));
     const entries = loadLogOutbox();
     expect(entries.map((e) => e.log.id)).toEqual(["a", "b"]);
     expect(entries[0].log.targetPestOrPurpose).toBe("v2");
@@ -335,31 +337,31 @@ describe("enqueueLogOutbox", () => {
     expect(entries[0].queuedAt).toBe(new Date(NOW.getTime() + 5000).toISOString());
   });
 
-  it("keeps the same log id queued separately per shop", () => {
-    enqueueLogOutbox(SHOP, makeLog("a"));
-    enqueueLogOutbox(OTHER, makeLog("a"));
+  it("keeps the same log id queued separately per shop", async () => {
+    await enqueueLogOutbox(SHOP, makeLog("a"));
+    await enqueueLogOutbox(OTHER, makeLog("a"));
     expect(loadLogOutbox().map((e) => e.shopId)).toEqual([OTHER, SHOP]);
   });
 
-  it("dedupes against a stored entry whose shop id had whitespace", () => {
+  it("dedupes against a stored entry whose shop id had whitespace", async () => {
     writeRaw([{ shopId: ` ${SHOP} `, queuedAt: NOW.toISOString(), entryId: "old", log: makeLog("a") }]);
-    enqueueLogOutbox(SHOP, makeLog("a"));
+    await enqueueLogOutbox(SHOP, makeLog("a"));
     const entries = loadLogOutbox();
     expect(entries).toHaveLength(1);
     expect(entries[0].entryId).not.toBe("old");
   });
 
-  it("records a trimmed lastError, ignores a blank one, and a re-queue without error clears it", () => {
-    enqueueLogOutbox(SHOP, makeLog("a"), "  offline  ");
+  it("records a trimmed lastError, ignores a blank one, and a re-queue without error clears it", async () => {
+    await enqueueLogOutbox(SHOP, makeLog("a"), "  offline  ");
     expect(loadLogOutbox()[0].lastError).toBe("offline");
-    enqueueLogOutbox(SHOP, makeLog("a"), "   ");
+    await enqueueLogOutbox(SHOP, makeLog("a"), "   ");
     expect(loadLogOutbox()[0]).not.toHaveProperty("lastError");
   });
 
-  it("returns false and leaves the previous queue when storage is full", () => {
-    enqueueLogOutbox(SHOP, makeLog("a"));
+  it("returns false and leaves the previous queue when storage is full", async () => {
+    await enqueueLogOutbox(SHOP, makeLog("a"));
     storage.failSet = true;
-    expect(enqueueLogOutbox(SHOP, makeLog("b"))).toBe(false);
+    expect(await enqueueLogOutbox(SHOP, makeLog("b"))).toBe(false);
     expect(loadLogOutbox().map((e) => e.log.id)).toEqual(["a"]);
   });
 });
@@ -369,10 +371,10 @@ describe("enqueueLogOutbox", () => {
 // ---------------------------------------------------------------------------
 
 describe("outboxEntriesForShop", () => {
-  it("returns only the given shop's entries (trimmed id), newest first", () => {
-    enqueueLogOutbox(SHOP, makeLog("a"));
-    enqueueLogOutbox(OTHER, makeLog("x"));
-    enqueueLogOutbox(SHOP, makeLog("b"));
+  it("returns only the given shop's entries (trimmed id), newest first", async () => {
+    await enqueueLogOutbox(SHOP, makeLog("a"));
+    await enqueueLogOutbox(OTHER, makeLog("x"));
+    await enqueueLogOutbox(SHOP, makeLog("b"));
     expect(outboxEntriesForShop(` ${SHOP} `).map((e) => e.log.id)).toEqual(["b", "a"]);
     expect(outboxEntriesForShop(OTHER).map((e) => e.log.id)).toEqual(["x"]);
     expect(outboxEntriesForShop("NOPE")).toEqual([]);
@@ -380,57 +382,57 @@ describe("outboxEntriesForShop", () => {
 });
 
 describe("removeOutboxVersions", () => {
-  it("removes only the exact entry ids for that shop", () => {
-    enqueueLogOutbox(SHOP, makeLog("a"));
-    enqueueLogOutbox(SHOP, makeLog("b"));
-    enqueueLogOutbox(OTHER, makeLog("a"));
+  it("removes only the exact entry ids for that shop", async () => {
+    await enqueueLogOutbox(SHOP, makeLog("a"));
+    await enqueueLogOutbox(SHOP, makeLog("b"));
+    await enqueueLogOutbox(OTHER, makeLog("a"));
     const aId = outboxEntriesForShop(SHOP).find((e) => e.log.id === "a")!.entryId;
     const otherId = outboxEntriesForShop(OTHER)[0].entryId;
-    expect(removeOutboxVersions(` ${SHOP} `, [aId, otherId])).toBe(true);
+    expect(await removeOutboxVersions(` ${SHOP} `, [aId, otherId])).toBe(true);
     expect(outboxEntriesForShop(SHOP).map((e) => e.log.id)).toEqual(["b"]);
     // Other shop's entry is untouched even though its id was passed.
     expect(outboxEntriesForShop(OTHER)).toHaveLength(1);
   });
 
-  it("preserves a newer re-queue of the same log", () => {
-    enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v1" }));
+  it("preserves a newer re-queue of the same log", async () => {
+    await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v1" }));
     const oldId = outboxEntriesForShop(SHOP)[0].entryId;
-    enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v2" }));
-    removeOutboxVersions(SHOP, [oldId]);
+    await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v2" }));
+    await removeOutboxVersions(SHOP, [oldId]);
     const entries = outboxEntriesForShop(SHOP);
     expect(entries).toHaveLength(1);
     expect(entries[0].log.targetPestOrPurpose).toBe("v2");
   });
 
-  it("ignores empty ids and unknown ids", () => {
-    enqueueLogOutbox(SHOP, makeLog("a"));
-    expect(removeOutboxVersions(SHOP, ["", "nope"])).toBe(true);
+  it("ignores empty ids and unknown ids", async () => {
+    await enqueueLogOutbox(SHOP, makeLog("a"));
+    expect(await removeOutboxVersions(SHOP, ["", "nope"])).toBe(true);
     expect(outboxEntriesForShop(SHOP)).toHaveLength(1);
   });
 
-  it("returns false when the write fails", () => {
-    enqueueLogOutbox(SHOP, makeLog("a"));
+  it("returns false when the write fails", async () => {
+    await enqueueLogOutbox(SHOP, makeLog("a"));
     const id = outboxEntriesForShop(SHOP)[0].entryId;
     storage.failSet = true;
-    expect(removeOutboxVersions(SHOP, [id])).toBe(false);
+    expect(await removeOutboxVersions(SHOP, [id])).toBe(false);
     expect(outboxEntriesForShop(SHOP)).toHaveLength(1);
   });
 });
 
-describe("removeOutboxLogIds (deprecated)", () => {
-  it("removes every version of the given log ids for that shop only", () => {
-    enqueueLogOutbox(SHOP, makeLog("a"));
-    enqueueLogOutbox(SHOP, makeLog("b"));
-    enqueueLogOutbox(OTHER, makeLog("a"));
-    expect(removeOutboxLogIds(` ${SHOP} `, ["a"])).toBe(true);
+describe("removeOutboxLogIds (deprecated)", async () => {
+  it("removes every version of the given log ids for that shop only", async () => {
+    await enqueueLogOutbox(SHOP, makeLog("a"));
+    await enqueueLogOutbox(SHOP, makeLog("b"));
+    await enqueueLogOutbox(OTHER, makeLog("a"));
+    expect(await removeOutboxLogIds(` ${SHOP} `, ["a"])).toBe(true);
     expect(outboxEntriesForShop(SHOP).map((e) => e.log.id)).toEqual(["b"]);
     expect(outboxEntriesForShop(OTHER).map((e) => e.log.id)).toEqual(["a"]);
   });
 
-  it("returns false when the write fails", () => {
-    enqueueLogOutbox(SHOP, makeLog("a"));
+  it("returns false when the write fails", async () => {
+    await enqueueLogOutbox(SHOP, makeLog("a"));
     storage.failSet = true;
-    expect(removeOutboxLogIds(SHOP, ["a"])).toBe(false);
+    expect(await removeOutboxLogIds(SHOP, ["a"])).toBe(false);
   });
 });
 
@@ -438,9 +440,9 @@ describe("removeOutboxLogIds (deprecated)", () => {
 // flushLogOutbox (merge / retry / state transitions) — fake remote only
 // ---------------------------------------------------------------------------
 
-describe("flushLogOutbox", () => {
+describe("flushLogOutbox", async () => {
   it("is a no-op when nothing is queued for the shop", async () => {
-    enqueueLogOutbox(OTHER, makeLog("x"));
+    await enqueueLogOutbox(OTHER, makeLog("x"));
     const { remote, getShop, putShop } = fakeRemote();
     expect(await flushLogOutbox(remote, SHOP)).toEqual({ ok: true, flushed: 0, remaining: 0 });
     expect(getShop).not.toHaveBeenCalled();
@@ -452,8 +454,8 @@ describe("flushLogOutbox", () => {
     const remoteOld = makeLog("a", { targetPestOrPurpose: "old" });
     const untouched = makeLog("z");
     const { remote, putShop, putDocs } = fakeRemote({ doc: shopDoc([remoteOld, untouched]) });
-    enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "new" }));
-    enqueueLogOutbox(SHOP, makeLog("n"));
+    await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "new" }));
+    await enqueueLogOutbox(SHOP, makeLog("n"));
 
     const res = await flushLogOutbox(remote, SHOP);
     expect(res).toEqual({ ok: true, flushed: 2, remaining: 0 });
@@ -471,8 +473,8 @@ describe("flushLogOutbox", () => {
   });
 
   it("only flushes the requested shop's entries", async () => {
-    enqueueLogOutbox(SHOP, makeLog("a"));
-    enqueueLogOutbox(OTHER, makeLog("x"));
+    await enqueueLogOutbox(SHOP, makeLog("a"));
+    await enqueueLogOutbox(OTHER, makeLog("x"));
     const { remote, putDocs } = fakeRemote();
     await flushLogOutbox(remote, ` ${SHOP} `);
     expect(putDocs[0].logs.map((l) => l.id)).toEqual(["a"]);
@@ -480,7 +482,7 @@ describe("flushLogOutbox", () => {
   });
 
   it("is idempotent: flushing again after success does nothing", async () => {
-    enqueueLogOutbox(SHOP, makeLog("a"));
+    await enqueueLogOutbox(SHOP, makeLog("a"));
     const { remote, putShop, current } = fakeRemote();
     await flushLogOutbox(remote, SHOP);
     expect(await flushLogOutbox(remote, SHOP)).toEqual({ ok: true, flushed: 0, remaining: 0 });
@@ -490,15 +492,15 @@ describe("flushLogOutbox", () => {
 
   it("re-flushing a log already on the remote replaces it rather than duplicating it", async () => {
     const { remote, current } = fakeRemote({ doc: shopDoc([makeLog("a")]) });
-    enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "edited" }));
+    await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "edited" }));
     await flushLogOutbox(remote, SHOP);
     expect(current().logs).toHaveLength(1);
     expect(current().logs[0].targetPestOrPurpose).toBe("edited");
   });
 
   it("on getShop failure: keeps the queue, annotates lastError, leaves queuedAt and payload alone", async () => {
-    enqueueLogOutbox(SHOP, makeLog("a"));
-    enqueueLogOutbox(OTHER, makeLog("a"));
+    await enqueueLogOutbox(SHOP, makeLog("a"));
+    await enqueueLogOutbox(OTHER, makeLog("a"));
     const before = outboxEntriesForShop(SHOP)[0];
     const { remote, putShop } = fakeRemote({ gets: [{ ok: false, error: "offline" }] });
     vi.setSystemTime(new Date(NOW.getTime() + 60_000));
@@ -510,7 +512,7 @@ describe("flushLogOutbox", () => {
   });
 
   it("does not annotate when the remote error is blank", async () => {
-    enqueueLogOutbox(SHOP, makeLog("a"));
+    await enqueueLogOutbox(SHOP, makeLog("a"));
     const { remote } = fakeRemote({ gets: [{ ok: false, error: "  " }] });
     const res = await flushLogOutbox(remote, SHOP);
     expect(res.ok).toBe(false);
@@ -518,7 +520,7 @@ describe("flushLogOutbox", () => {
   });
 
   it("does not put or clear when the session expired or switched shops during getShop", async () => {
-    enqueueLogOutbox(SHOP, makeLog("a"));
+    await enqueueLogOutbox(SHOP, makeLog("a"));
     const { remote, putShop } = fakeRemote({ onGet: () => signIn(OTHER) });
     expect(await flushLogOutbox(remote, SHOP)).toEqual({
       ok: false,
@@ -531,7 +533,7 @@ describe("flushLogOutbox", () => {
   });
 
   it("does not put when there is no authenticated session at all", async () => {
-    enqueueLogOutbox(SHOP, makeLog("a"));
+    await enqueueLogOutbox(SHOP, makeLog("a"));
     storage.removeItem(SHOP_SESSION_KEY);
     const { remote, putShop } = fakeRemote();
     const res = await flushLogOutbox(remote, SHOP);
@@ -540,7 +542,7 @@ describe("flushLogOutbox", () => {
   });
 
   it("does not put when the session is past its idle timeout", async () => {
-    enqueueLogOutbox(SHOP, makeLog("a"));
+    await enqueueLogOutbox(SHOP, makeLog("a"));
     vi.setSystemTime(new Date(NOW.getTime() + 9 * 60 * 60 * 1000)); // > 8h idle
     const { remote, putShop } = fakeRemote();
     expect((await flushLogOutbox(remote, SHOP)).ok).toBe(false);
@@ -548,7 +550,7 @@ describe("flushLogOutbox", () => {
   });
 
   it("on a non-conflict put failure: annotates, keeps the queue, does not retry", async () => {
-    enqueueLogOutbox(SHOP, makeLog("a"));
+    await enqueueLogOutbox(SHOP, makeLog("a"));
     const { remote, getShop, putShop } = fakeRemote({ puts: [{ ok: false, error: "permission denied" }] });
     expect(await flushLogOutbox(remote, SHOP)).toEqual({
       ok: false,
@@ -563,7 +565,7 @@ describe("flushLogOutbox", () => {
   });
 
   it("retries exactly once on a CAS conflict, with a fresh read", async () => {
-    enqueueLogOutbox(SHOP, makeLog("a"));
+    await enqueueLogOutbox(SHOP, makeLog("a"));
     const fresh = shopDoc([makeLog("other-device")]);
     const { remote, getShop, putShop, putDocs } = fakeRemote({
       gets: [{ ok: true, value: shopDoc() }, { ok: true, value: fresh }],
@@ -577,7 +579,7 @@ describe("flushLogOutbox", () => {
   });
 
   it("gives up after the second conflict and reports it", async () => {
-    enqueueLogOutbox(SHOP, makeLog("a"));
+    await enqueueLogOutbox(SHOP, makeLog("a"));
     const { remote, getShop, putShop } = fakeRemote({ puts: [conflict] });
     const res = await flushLogOutbox(remote, SHOP);
     expect(res).toMatchObject({ ok: false, flushed: 0, remaining: 1, conflict: true });
@@ -587,11 +589,11 @@ describe("flushLogOutbox", () => {
   });
 
   it("includes a payload queued during the first (conflicting) attempt in the retry", async () => {
-    enqueueLogOutbox(SHOP, makeLog("a"));
+    await enqueueLogOutbox(SHOP, makeLog("a"));
     const { remote, putDocs } = fakeRemote({
       puts: [conflict, { ok: true, value: { updatedAt: "x" } }],
-      onPut: (n) => {
-        if (n === 0) enqueueLogOutbox(SHOP, makeLog("b"));
+      onPut: async (n) => {
+        if (n === 0) await enqueueLogOutbox(SHOP, makeLog("b"));
       },
     });
     expect(await flushLogOutbox(remote, SHOP)).toEqual({ ok: true, flushed: 2, remaining: 0 });
@@ -599,10 +601,10 @@ describe("flushLogOutbox", () => {
   });
 
   it("skips entries superseded while getShop was awaiting", async () => {
-    enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v1" }));
-    enqueueLogOutbox(SHOP, makeLog("b"));
+    await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v1" }));
+    await enqueueLogOutbox(SHOP, makeLog("b"));
     const { remote, putDocs } = fakeRemote({
-      onGet: () => enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v2" })),
+      onGet: async () => await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v2" })),
     });
     const res = await flushLogOutbox(remote, SHOP);
     // Only "b" was still live; the superseding "a" v2 stays queued for the next flush.
@@ -614,9 +616,9 @@ describe("flushLogOutbox", () => {
   });
 
   it("returns ok with nothing flushed when every entry was superseded during getShop", async () => {
-    enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v1" }));
+    await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v1" }));
     const { remote, putShop } = fakeRemote({
-      onGet: () => enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v2" })),
+      onGet: async () => await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v2" })),
     });
     expect(await flushLogOutbox(remote, SHOP)).toEqual({ ok: true, flushed: 0, remaining: 0 });
     expect(putShop).not.toHaveBeenCalled();
@@ -624,16 +626,16 @@ describe("flushLogOutbox", () => {
   });
 
   it("keeps a newer version queued during putShop and reports it as remaining", async () => {
-    enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v1" }));
+    await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v1" }));
     const { remote } = fakeRemote({
-      onPut: () => enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v2" })),
+      onPut: async () => await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v2" })),
     });
     expect(await flushLogOutbox(remote, SHOP)).toEqual({ ok: true, flushed: 1, remaining: 1 });
     expect(outboxEntriesForShop(SHOP)[0].log.targetPestOrPurpose).toBe("v2");
   });
 
   it("reports when the remote put succeeded but the local outbox could not be cleared", async () => {
-    enqueueLogOutbox(SHOP, makeLog("a"));
+    await enqueueLogOutbox(SHOP, makeLog("a"));
     const { remote, current } = fakeRemote({ onPut: () => (storage.failSet = true) });
     expect(await flushLogOutbox(remote, SHOP)).toEqual({
       ok: false,
@@ -646,9 +648,9 @@ describe("flushLogOutbox", () => {
 
   it("adds several new logs to the remote newest-first, matching local upsert order", async () => {
     const { remote, current } = fakeRemote({ doc: shopDoc([makeLog("z")]) });
-    enqueueLogOutbox(SHOP, makeLog("a"));
-    enqueueLogOutbox(SHOP, makeLog("b"));
-    enqueueLogOutbox(SHOP, makeLog("c"));
+    await enqueueLogOutbox(SHOP, makeLog("a"));
+    await enqueueLogOutbox(SHOP, makeLog("b"));
+    await enqueueLogOutbox(SHOP, makeLog("c"));
     await flushLogOutbox(remote, SHOP);
     expect(current().logs.map((l) => l.id)).toEqual(["c", "b", "a", "z"]);
   });
@@ -657,9 +659,9 @@ describe("flushLogOutbox", () => {
     const { remote, current } = fakeRemote({
       doc: shopDoc([makeLog("x", { targetPestOrPurpose: "old" }), makeLog("z")]),
     });
-    enqueueLogOutbox(SHOP, makeLog("a"));
-    enqueueLogOutbox(SHOP, makeLog("x", { targetPestOrPurpose: "new" }));
-    enqueueLogOutbox(SHOP, makeLog("c"));
+    await enqueueLogOutbox(SHOP, makeLog("a"));
+    await enqueueLogOutbox(SHOP, makeLog("x", { targetPestOrPurpose: "new" }));
+    await enqueueLogOutbox(SHOP, makeLog("c"));
     expect(await flushLogOutbox(remote, SHOP)).toEqual({ ok: true, flushed: 3, remaining: 0 });
     expect(current().logs.map((l) => l.id)).toEqual(["c", "a", "x", "z"]);
     expect(current().logs.find((l) => l.id === "x")!.targetPestOrPurpose).toBe("new");
@@ -681,7 +683,7 @@ describe("flushLogOutbox", () => {
 // syncLogToRemote (queue-first push, conflict retry, supersede) — fake remote only
 // ---------------------------------------------------------------------------
 
-describe("syncLogToRemote", () => {
+describe("syncLogToRemote", async () => {
   it("queues first, pushes, then clears its own outbox version", async () => {
     let queuedDuringGet = 0;
     const { remote, putDocs } = fakeRemote({
@@ -702,7 +704,7 @@ describe("syncLogToRemote", () => {
   });
 
   it("leaves other queued logs alone", async () => {
-    enqueueLogOutbox(SHOP, makeLog("other"));
+    await enqueueLogOutbox(SHOP, makeLog("other"));
     const { remote } = fakeRemote();
     await syncLogToRemote(remote, SHOP, makeLog("a"));
     expect(outboxEntriesForShop(SHOP).map((e) => e.log.id)).toEqual(["other"]);
@@ -762,8 +764,8 @@ describe("syncLogToRemote", () => {
 
   it("skips the put (ok) when a newer save superseded it during getShop; the newer version stays queued", async () => {
     const { remote, putShop } = fakeRemote({
-      onGet: (n) => {
-        if (n === 0) enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v2" }));
+      onGet: async (n) => {
+        if (n === 0) await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v2" }));
       },
     });
     expect(await syncLogToRemote(remote, SHOP, makeLog("a", { targetPestOrPurpose: "v1" }))).toEqual({ ok: true });
@@ -774,7 +776,7 @@ describe("syncLogToRemote", () => {
   it("skips the conflict retry (ok) when superseded before the retry", async () => {
     const { remote, putShop } = fakeRemote({
       puts: [conflict],
-      onPut: () => enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v2" })),
+      onPut: async () => await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v2" })),
     });
     expect(await syncLogToRemote(remote, SHOP, makeLog("a", { targetPestOrPurpose: "v1" }))).toEqual({ ok: true });
     expect(putShop).toHaveBeenCalledOnce();
@@ -783,7 +785,7 @@ describe("syncLogToRemote", () => {
 
   it("does not remove a newer version queued during a successful put", async () => {
     const { remote } = fakeRemote({
-      onPut: () => enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v2" })),
+      onPut: async () => await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v2" })),
     });
     expect(await syncLogToRemote(remote, SHOP, makeLog("a", { targetPestOrPurpose: "v1" }))).toEqual({ ok: true });
     const left = outboxEntriesForShop(SHOP);
@@ -842,16 +844,16 @@ describe("syncLogToRemote", () => {
 // Branch-coverage follow-ups (target (a)): remaining uncovered paths
 // ---------------------------------------------------------------------------
 
-describe("logOutbox: remaining edge paths", () => {
-  it("falls back to a time-based entry id when crypto.randomUUID is unavailable", () => {
+describe("logOutbox: remaining edge paths", async () => {
+  it("falls back to a time-based entry id when crypto.randomUUID is unavailable", async () => {
     vi.stubGlobal("crypto", {});
-    expect(enqueueLogOutbox(SHOP, makeLog("a"))).toBe(true);
+    expect(await enqueueLogOutbox(SHOP, makeLog("a"))).toBe(true);
     const [entry] = outboxEntriesForShop(SHOP);
     expect(entry.entryId).toMatch(new RegExp(`^e-${NOW.getTime()}-[a-z0-9]+$`));
   });
 
   it("flush: the conflict retry finds an empty outbox (cleared elsewhere) and reports ok", async () => {
-    enqueueLogOutbox(SHOP, makeLog("a"));
+    await enqueueLogOutbox(SHOP, makeLog("a"));
     const { remote, getShop, putShop } = fakeRemote({
       puts: [conflict],
       onPut: (n) => {
@@ -916,10 +918,10 @@ describe("logOutbox: remaining edge paths", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Cross-tab compare-and-swap (BACKLOG outbox atomicity; locks still deferred)
+// Cross-tab exclusion: Web Lock around RMW, CAS only for a bypass writer
 // ---------------------------------------------------------------------------
 
-describe("outbox cross-tab CAS", () => {
+describe("outbox cross-tab CAS", async () => {
   /** Other tab commits during the confirming read (between snapshot and setItem). */
   function interleaveOnConfirm(mutate: (currentRaw: string | null) => void) {
     const originalGet = storage.getItem.bind(storage);
@@ -951,8 +953,8 @@ describe("outbox cross-tab CAS", () => {
     };
   }
 
-  it("retries an enqueue so another tab's row is kept instead of last-write-wins", () => {
-    enqueueLogOutbox(SHOP, makeLog("existing"));
+  it("retries an enqueue so another tab's row is kept instead of last-write-wins", async () => {
+    await enqueueLogOutbox(SHOP, makeLog("existing"));
     let commits = 0;
     const hook = interleaveOnConfirm((currentRaw) => {
       if (commits > 0) return;
@@ -969,16 +971,16 @@ describe("outbox cross-tab CAS", () => {
       if (k === LOG_OUTBOX_KEY) ourWrites += 1;
       originalSet(k, v);
     };
-    expect(enqueueLogOutbox(SHOP, makeLog("mine"))).toBe(true);
+    expect(await enqueueLogOutbox(SHOP, makeLog("mine"))).toBe(true);
     expect(ourWrites).toBe(1);
     hook.restore();
     expect(loadLogOutbox().map((e) => e.log.id)).toEqual(["mine", "other", "existing"]);
     expect(loadLogOutbox().find((e) => e.log.id === "other")?.entryId).toBe("other-tab");
   });
 
-  it("retries a versioned remove so a concurrent enqueue is not dropped", () => {
-    enqueueLogOutbox(SHOP, makeLog("a"));
-    enqueueLogOutbox(SHOP, makeLog("b"));
+  it("retries a versioned remove so a concurrent enqueue is not dropped", async () => {
+    await enqueueLogOutbox(SHOP, makeLog("a"));
+    await enqueueLogOutbox(SHOP, makeLog("b"));
     const dropId = outboxEntriesForShop(SHOP).find((e) => e.log.id === "a")!.entryId;
     let injected = false;
     const hook = interleaveOnConfirm((currentRaw) => {
@@ -990,21 +992,133 @@ describe("outbox cross-tab CAS", () => {
         JSON.stringify([otherEntry("other", "other-tab"), ...current]),
       );
     });
-    expect(removeOutboxVersions(SHOP, [dropId])).toBe(true);
+    expect(await removeOutboxVersions(SHOP, [dropId])).toBe(true);
     hook.restore();
     expect(loadLogOutbox().map((e) => e.log.id)).toEqual(["other", "b"]);
   });
 
-  it("gives up after 8 conflicts and leaves the other tab's write in place", () => {
-    enqueueLogOutbox(SHOP, makeLog("keep"));
+  it("gives up after 8 conflicts and leaves the other tab's write in place", async () => {
+    await enqueueLogOutbox(SHOP, makeLog("keep"));
     let confirms = 0;
     const hook = interleaveOnConfirm(() => {
       confirms += 1;
       hook.originalSet(LOG_OUTBOX_KEY, JSON.stringify([otherEntry("other", `tab-${confirms}`)]));
     });
-    expect(enqueueLogOutbox(SHOP, makeLog("mine"))).toBe(false);
+    expect(await enqueueLogOutbox(SHOP, makeLog("mine"))).toBe(false);
     expect(confirms).toBe(8);
     hook.restore();
     expect(loadLogOutbox().map((e) => e.entryId)).toEqual(["tab-8"]);
+  });
+});
+
+describe("outbox cross-tab lock", () => {
+  function installExclusiveLocks() {
+    let tail: Promise<void> = Promise.resolve();
+    const calls: { name: string; mode?: string; hasSignal: boolean }[] = [];
+    let held = false;
+    const request = vi.fn(
+      async (name: string, options: { mode?: string; signal?: AbortSignal }, callback: () => unknown) => {
+        calls.push({ name, mode: options?.mode, hasSignal: !!options?.signal });
+        const run = tail.then(async () => {
+          if (options?.signal?.aborted) {
+            throw new DOMException("The operation was aborted.", "AbortError");
+          }
+          held = true;
+          try {
+            return await callback();
+          } finally {
+            held = false;
+          }
+        });
+        tail = run.then(
+          () => undefined,
+          () => undefined,
+        );
+        return run;
+      },
+    );
+    vi.stubGlobal("navigator", { locks: { request } });
+    return {
+      request,
+      calls,
+      isHeld: () => held,
+    };
+  }
+
+  it("requests an exclusive Web Lock around confirm-read and setItem", async () => {
+    const locks = installExclusiveLocks();
+    const originalSet = storage.setItem.bind(storage);
+    let setWhileHeld = 0;
+    let setOutside = 0;
+    storage.setItem = (k: string, v: string) => {
+      if (k === LOG_OUTBOX_KEY) {
+        if (locks.isHeld()) setWhileHeld += 1;
+        else setOutside += 1;
+      }
+      originalSet(k, v);
+    };
+    expect(await enqueueLogOutbox(SHOP, makeLog("a"))).toBe(true);
+    expect(setWhileHeld).toBe(1);
+    expect(setOutside).toBe(0);
+    expect(locks.calls).toEqual([{ name: OUTBOX_LOCK_NAME, mode: "exclusive", hasSignal: true }]);
+    expect(loadLogOutbox().map((e) => e.log.id)).toEqual(["a"]);
+  });
+
+  it("serializes contending writers so neither clobbers the other's commit", async () => {
+    installExclusiveLocks();
+    const [first, second] = await Promise.all([
+      enqueueLogOutbox(SHOP, makeLog("a")),
+      enqueueLogOutbox(SHOP, makeLog("b")),
+    ]);
+    expect(first).toBe(true);
+    expect(second).toBe(true);
+    expect(loadLogOutbox().map((e) => e.log.id).sort()).toEqual(["a", "b"]);
+  });
+
+  it("returns false and does not write when the lock is not granted in time", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    storage.setItem(
+      LOG_OUTBOX_KEY,
+      JSON.stringify([
+        { shopId: SHOP, queuedAt: NOW.toISOString(), entryId: "keep", log: makeLog("keep") },
+      ]),
+    );
+    const request = vi.fn(
+      (_name: string, options: { signal?: AbortSignal }, _callback: () => unknown) =>
+        new Promise((_resolve, reject) => {
+          const abort = () => reject(new DOMException("The operation was aborted.", "AbortError"));
+          if (options?.signal?.aborted) {
+            abort();
+            return;
+          }
+          options?.signal?.addEventListener("abort", abort, { once: true });
+        }),
+    );
+    vi.stubGlobal("navigator", { locks: { request } });
+    const pending = enqueueLogOutbox(SHOP, makeLog("mine"));
+    await vi.advanceTimersByTimeAsync(OUTBOX_LOCK_WAIT_MS);
+    expect(await pending).toBe(false);
+    expect(loadLogOutbox().map((e) => e.log.id)).toEqual(["keep"]);
+  });
+
+  it("fails closed when lock acquisition rejects for a reason other than timeout", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("locks unavailable");
+    });
+    vi.stubGlobal("navigator", { locks: { request } });
+    expect(await enqueueLogOutbox(SHOP, makeLog("a"))).toBe(false);
+    expect(storage.getItem(LOG_OUTBOX_KEY)).toBeNull();
+  });
+
+  it("still serializes two writers in this agent when Web Locks is missing", async () => {
+    vi.stubGlobal("navigator", {});
+    const [first, second] = await Promise.all([
+      enqueueLogOutbox(SHOP, makeLog("a")),
+      removeOutboxVersions(SHOP, ["nope"]),
+    ]);
+    expect(first).toBe(true);
+    expect(second).toBe(true);
+    expect(loadLogOutbox().map((e) => e.log.id)).toEqual(["a"]);
   });
 });

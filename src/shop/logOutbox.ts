@@ -2,9 +2,8 @@
  * Offline log outbox (#6) — durable localStorage queue for shared-mode log puts.
  * Local upsert remains source of truth on device; this retries cloud merge without retyping.
  * Full ApplicationLog payloads keep § 7.144(a) fields intact through queue → sync.
- * Multi-tab read-modify-write retries with compare-and-swap on the raw localStorage
- * string so one tab's enqueue does not wipe another's. Full `navigator.locks` stays
- * deferred while App.tsx callers must remain synchronous.
+ * Cross-tab writers take an exclusive Web Lock around the whole read-modify-write.
+ * App keeps calling the async flush/sync entry points; the lock stays inside this module.
  */
 
 import type { ApplicationLog } from "../types";
@@ -79,10 +78,21 @@ export function loadLogOutbox(): LogOutboxEntry[] {
 }
 
 /**
- * Bounded CAS attempts. localStorage has no conditional write; this closes the
- * usual cross-tab clobber, not the last check-to-set sliver.
+ * Bounded retries for a writer that mutates storage without this lock.
+ * Not the cross-tab atomicity mechanism — see `withOutboxLock`.
  */
 const OUTBOX_CAS_ATTEMPTS = 8;
+
+/**
+ * Web Locks name (not a localStorage key). One exclusive holder per origin.
+ */
+export const OUTBOX_LOCK_NAME = "jobber-pest-logger:log-outbox:v1";
+
+/**
+ * Give up if another tab still holds the outbox lock. Fail closed: no write.
+ * Long enough for a localStorage read-modify-write, short enough to not hang a save.
+ */
+export const OUTBOX_LOCK_WAIT_MS = 2_000;
 
 function readOutboxRaw(): string | null | undefined {
   try {
@@ -93,35 +103,96 @@ function readOutboxRaw(): string | null | undefined {
 }
 
 /**
- * Optimistic concurrency for outbox read-modify-write.
- * Snapshot the raw string, apply `mutator` to the coerced entries, re-read,
- * and write only when that snapshot is still current. A changed raw means
- * another tab committed; retry. Quota (setItem throw) returns false, same as before.
- * `mutator` must be safe to run more than once.
+ * In-process queue used only when `navigator.locks` is missing (node tests,
+ * engines from before 2022). Serializes this agent; it does not exclude other tabs.
  */
-function updateOutbox(mutator: (entries: LogOutboxEntry[]) => LogOutboxEntry[]): boolean {
-  for (let attempt = 0; attempt < OUTBOX_CAS_ATTEMPTS; attempt++) {
-    const snapshot = readOutboxRaw();
-    if (snapshot === undefined) continue;
-    const next = mutator(parseOutboxRaw(snapshot));
-    const current = readOutboxRaw();
-    if (current === undefined || current !== snapshot) continue;
-    try {
-      localStorage.setItem(LOG_OUTBOX_KEY, JSON.stringify(next));
-      return true;
-    } catch {
-      return false;
-    }
+let fallbackTail: Promise<void> = Promise.resolve();
+
+/**
+ * Run `body` while no other outbox writer in this origin can.
+ *
+ * localStorage setItem is atomic for one key, but the HTML spec does not lock
+ * a read-modify-write across tabs. A confirming read can match and another tab
+ * can still commit before setItem; a retry never sees that interleaving.
+ * `navigator.locks` mode "exclusive" holds the lock from before the snapshot
+ * read until setItem returns, so a cooperating tab cannot enter that window.
+ *
+ * The wait is bounded. If the lock is not granted, request rejects and
+ * updateOutbox fails closed (no unlocked setItem).
+ */
+async function withOutboxLock<T>(body: () => T): Promise<T> {
+  const locks = globalThis.navigator?.locks;
+  if (!locks || typeof locks.request !== "function") {
+    const previous = fallbackTail;
+    let release!: () => void;
+    fallbackTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return previous.then(() => {
+      try {
+        return body();
+      } finally {
+        release();
+      }
+    });
   }
-  return false;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), OUTBOX_LOCK_WAIT_MS);
+  try {
+    return await locks.request(OUTBOX_LOCK_NAME, { mode: "exclusive", signal: controller.signal }, () => {
+      // Granted. Aborting a held lock does not release it; don't time out the critical section.
+      clearTimeout(timer);
+      return body();
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Read-modify-write under the cross-tab lock.
+ * Quota (setItem throw) returns false, same as before.
+ * `mutator` must be safe to run more than once (bypass retries).
+ * Returns false when the lock is not acquired — storage is left unchanged.
+ */
+async function updateOutbox(
+  mutator: (entries: LogOutboxEntry[]) => LogOutboxEntry[],
+): Promise<boolean> {
+  let entered = false;
+  try {
+    return await withOutboxLock(() => {
+      entered = true;
+      for (let attempt = 0; attempt < OUTBOX_CAS_ATTEMPTS; attempt++) {
+        const snapshot = readOutboxRaw();
+        if (snapshot === undefined) continue;
+        const next = mutator(parseOutboxRaw(snapshot));
+        const current = readOutboxRaw();
+        if (current === undefined || current !== snapshot) continue;
+        try {
+          localStorage.setItem(LOG_OUTBOX_KEY, JSON.stringify(next));
+          return true;
+        } catch {
+          return false;
+        }
+      }
+      return false;
+    });
+  } catch (err) {
+    // Lock never granted (timeout, abort, or request rejection). Do not write
+    // without the lock — that would reopen the confirm-read-to-setItem race.
+    // A throw from the critical section itself still surfaces.
+    if (!entered) return false;
+    throw err;
+  }
 }
 
 /** Upsert by shopId + log.id (latest payload wins). */
-export function enqueueLogOutbox(
+export async function enqueueLogOutbox(
   shopId: string,
   log: ApplicationLog,
   lastError?: string,
-): boolean {
+): Promise<boolean> {
   const id = shopId.trim();
   if (!id || !log.id) return false;
   return updateOutbox((entries) => {
@@ -138,7 +209,7 @@ export function enqueueLogOutbox(
 }
 
 /** Remove only exact entryId versions (preserve newer re-queues). */
-export function removeOutboxVersions(shopId: string, entryIds: string[]): boolean {
+export async function removeOutboxVersions(shopId: string, entryIds: string[]): Promise<boolean> {
   const id = shopId.trim();
   const drop = new Set(entryIds.filter(Boolean));
   return updateOutbox((entries) =>
@@ -147,7 +218,7 @@ export function removeOutboxVersions(shopId: string, entryIds: string[]): boolea
 }
 
 /** @deprecated Prefer removeOutboxVersions so a newer queued payload is not wiped. */
-export function removeOutboxLogIds(shopId: string, logIds: string[]): boolean {
+export async function removeOutboxLogIds(shopId: string, logIds: string[]): Promise<boolean> {
   const id = shopId.trim();
   const drop = new Set(logIds);
   return updateOutbox((entries) =>
@@ -161,11 +232,11 @@ export function outboxEntriesForShop(shopId: string): LogOutboxEntry[] {
 }
 
 /** Attach lastError without changing queuedAt or the stored payload. */
-function annotateOutboxErrors(
+async function annotateOutboxErrors(
   shopId: string,
   logIds: string[],
   lastError?: string,
-): boolean {
+): Promise<boolean> {
   const id = shopId.trim();
   const msg = lastError?.trim();
   if (!msg) return true;
@@ -207,7 +278,7 @@ export async function flushLogOutbox(
 
     const got = await remote.getShop();
     if (!got.ok) {
-      annotateOutboxErrors(
+      await annotateOutboxErrors(
         id,
         pending.map((e) => e.log.id),
         got.error,
@@ -249,7 +320,7 @@ export async function flushLogOutbox(
 
     const put = await remote.putShop({ ...got.value, logs });
     if (!put.ok) {
-      annotateOutboxErrors(
+      await annotateOutboxErrors(
         id,
         live.map((e) => e.log.id),
         put.error,
@@ -263,7 +334,7 @@ export async function flushLogOutbox(
       };
     }
 
-    const cleared = removeOutboxVersions(
+    const cleared = await removeOutboxVersions(
       id,
       live.map((e) => e.entryId),
     );
@@ -296,7 +367,7 @@ export async function syncLogToRemote(
 ): Promise<{ ok: true } | { ok: false; error: string; queued: boolean }> {
   const id = shopId.trim();
   // Queue before the network round-trip so a discarded tab cannot lose the cloud copy.
-  const queued = enqueueLogOutbox(id, log);
+  const queued = await enqueueLogOutbox(id, log);
   const entryId = outboxEntriesForShop(id).find((e) => e.log.id === log.id)?.entryId;
   const clearThisVersion = () => {
     // If enqueue failed, do not fall back to log.id — that can wipe a newer re-queue.
@@ -306,7 +377,7 @@ export async function syncLogToRemote(
 
   const got = await remote.getShop();
   if (!got.ok) {
-    if (queued) annotateOutboxErrors(id, [log.id], got.error);
+    if (queued) await annotateOutboxErrors(id, [log.id], got.error);
     return { ok: false, error: got.error, queued };
   }
 
@@ -341,7 +412,7 @@ export async function syncLogToRemote(
         else logs2[i2] = log;
         const put2 = await remote.putShop({ ...again.value, logs: logs2 });
         if (put2.ok) {
-          if (!clearThisVersion()) {
+          if (!(await clearThisVersion())) {
             return {
               ok: false,
               error: "Synced to shop but could not update the local outbox.",
@@ -350,15 +421,15 @@ export async function syncLogToRemote(
           }
           return { ok: true };
         }
-        if (queued) annotateOutboxErrors(id, [log.id], put2.error);
+        if (queued) await annotateOutboxErrors(id, [log.id], put2.error);
         return { ok: false, error: put2.error, queued };
       }
     }
-    if (queued) annotateOutboxErrors(id, [log.id], put.error);
+    if (queued) await annotateOutboxErrors(id, [log.id], put.error);
     return { ok: false, error: put.error, queued };
   }
 
-  if (!clearThisVersion()) {
+  if (!(await clearThisVersion())) {
     return {
       ok: false,
       error: "Synced to shop but could not update the local outbox.",
