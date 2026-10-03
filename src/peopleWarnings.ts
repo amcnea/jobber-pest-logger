@@ -7,12 +7,18 @@ export interface PersonWarning {
   messages: string[];
 }
 
+/** Shared-shop rows can omit ceDueDate; local storage already stores "". */
+function ceDueDateText(person: Person): string {
+  return typeof person.ceDueDate === "string" ? person.ceDueDate : "";
+}
+
 export function warningsForPerson(person: Person): string[] {
   const messages: string[] = [];
   const lic = formatLicenseDueLabel(person.licenseExpiry);
   if (lic) messages.push(lic);
-  if (person.ceDueDate.trim()) {
-    const ce = formatCeDueLabel(person.ceDueDate);
+  const ceDue = ceDueDateText(person);
+  if (ceDue.trim()) {
+    const ce = formatCeDueLabel(ceDue);
     if (ce) messages.push(ce);
   }
   return messages;
@@ -34,7 +40,8 @@ export function personHasWarning(person: Person): boolean {
 
 export function personWarningTone(person: Person): "overdue" | "soon" | null {
   const lic = licenseDueStatus(person.licenseExpiry);
-  const ce = person.ceDueDate.trim() ? ceDueStatus(person.ceDueDate) : "missing";
+  const ceDue = ceDueDateText(person);
+  const ce = ceDue.trim() ? ceDueStatus(ceDue) : "missing";
   if (lic === "overdue" || ce === "overdue") return "overdue";
   if (lic === "soon" || ce === "soon") return "soon";
   return null;

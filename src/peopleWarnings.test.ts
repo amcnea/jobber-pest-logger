@@ -73,6 +73,15 @@ describe("warningsForPerson", () => {
     expect(warningsForPerson(person({ licenseExpiry: "2026-10-27" }))).toEqual([]);
   });
 
+  it("treats a missing ceDueDate as empty instead of throwing", () => {
+    const missing = person();
+    delete (missing as { ceDueDate?: string }).ceDueDate;
+    expect(warningsForPerson(missing)).toEqual([]);
+    expect(personWarningTone(missing)).toBeNull();
+    expect(personHasWarning(missing)).toBe(false);
+    expect(collectPeopleWarnings([missing])).toEqual([]);
+  });
+
   it("does not warn for a missing or invalid license expiry", () => {
     expect(warningsForPerson(person({ licenseExpiry: "" }))).toEqual([]);
     expect(warningsForPerson(person({ licenseExpiry: "   " }))).toEqual([]);
