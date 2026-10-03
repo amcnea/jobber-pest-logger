@@ -638,9 +638,11 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
               Reset search &amp; filters
             </button>
           )}
-          <div className="hint" role="status" aria-live="polite">
-            {formatStarterResultCount(starterResults.length, TEXAS_COMMON_STARTER.length)}. Add
-            copies into your shop list; techs still only pick shop-owned active rows.{" "}
+          <div className="hint">
+            <span role="status" aria-live="polite">
+              {formatStarterResultCount(starterResults.length, TEXAS_COMMON_STARTER.length)}. Add
+              copies into your shop list; techs still only pick shop-owned active rows.
+            </span>{" "}
             {(
               [
                 ["not-added", "Not on shop list yet", starterStatusCounts.notAdded],

@@ -178,9 +178,10 @@ describe("Products starter search: initial render", () => {
     expect(search()).toHaveAttribute("placeholder", "Name or EPA reg. no. (dashes optional)");
     expect(rowNames()).toEqual(TEXAS_COMMON_STARTER.map((s) => s.name));
     expect(resultsLine()).toHaveTextContent(`Showing ${TOTAL} of ${TOTAL} starters.`);
-    expect(resultsLine()).toHaveTextContent(
-      `Not on shop list yet: ${TOTAL} · Pending label confirm: 0 · Archived on shop list: 0 · Already on shop list: 0.`,
-    );
+    expect(within(starterPanel()).getByRole("button", { name: `Not on shop list yet: ${TOTAL}` })).toBeInTheDocument();
+    expect(within(starterPanel()).getByRole("button", { name: "Pending label confirm: 0" })).toBeInTheDocument();
+    expect(within(starterPanel()).getByRole("button", { name: "Archived on shop list: 0" })).toBeInTheDocument();
+    expect(within(starterPanel()).getByRole("button", { name: "Already on shop list: 0" })).toBeInTheDocument();
   });
 
   it("the results line is a polite live region", () => {
@@ -248,7 +249,7 @@ describe("Products starter search: query filtering", () => {
     expect(rows()).toHaveLength(0);
     expect(within(starterPanel()).getByText("No starter rows match this search/filter.")).toBeInTheDocument();
     expect(resultsLine()).toHaveTextContent(`Showing 0 of ${TOTAL} starters.`);
-    expect(resultsLine()).toHaveTextContent("Not on shop list yet: 0 ·");
+    expect(within(starterPanel()).getByRole("button", { name: "Not on shop list yet: 0" })).toBeInTheDocument();
   });
 
   it("has no result cap: a broad query lists every match", async () => {
@@ -388,7 +389,7 @@ describe("Products starter search: shop status", () => {
     expect(within(r).getByText("on shop list")).toBeInTheDocument();
     expect(within(r).getByText("Already in catalog")).toBeInTheDocument();
     expect(within(r).queryByRole("button")).toBeNull();
-    expect(resultsLine()).toHaveTextContent("Already on shop list: 1.");
+    expect(within(starterPanel()).getByRole("button", { name: "Already on shop list: 1" })).toBeInTheDocument();
   });
 
   it("matches 25(b) / device starters by kind + name (no EPA #)", () => {
@@ -403,7 +404,7 @@ describe("Products starter search: shop status", () => {
     const r = row("Termidor SC");
     expect(within(r).getByText("archived on shop list")).toBeInTheDocument();
     expect(within(r).getByRole("button", { name: "Confirm label…" })).toBeInTheDocument();
-    expect(resultsLine()).toHaveTextContent("Archived on shop list: 1 ·");
+    expect(within(starterPanel()).getByRole("button", { name: "Archived on shop list: 1" })).toBeInTheDocument();
   });
 
   it("an archived match that is pending label confirm shows 'pending label confirm'", () => {
@@ -412,7 +413,7 @@ describe("Products starter search: shop status", () => {
     const r = row("Termidor SC");
     expect(within(r).getByText("pending label confirm")).toBeInTheDocument();
     expect(within(r).getByRole("button", { name: "Confirm label…" })).toBeInTheDocument();
-    expect(resultsLine()).toHaveTextContent("Pending label confirm: 1 ·");
+    expect(within(starterPanel()).getByRole("button", { name: "Pending label confirm: 1" })).toBeInTheDocument();
   });
 
   it("status filter options narrow the list", async () => {
