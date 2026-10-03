@@ -590,6 +590,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
               >
                 <option value="all">All starters</option>
                 <option value="hide-active">Hide already on shop list</option>
+                <option value="active">Already on shop list</option>
                 <option value="not-added">Not on shop list yet</option>
                 <option value="pending">Pending label confirm</option>
                 <option value="archived">Archived on shop list</option>
@@ -637,13 +638,43 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
               Reset search &amp; filters
             </button>
           )}
-          <p className="hint" role="status" aria-live="polite">
+          <div className="hint" role="status" aria-live="polite">
             {formatStarterResultCount(starterResults.length, TEXAS_COMMON_STARTER.length)}. Add
             copies into your shop list; techs still only pick shop-owned active rows.{" "}
-            Not on shop list yet: {starterStatusCounts.notAdded} · Pending label confirm:{" "}
-            {starterStatusCounts.pending} · Archived on shop list: {starterStatusCounts.archived} ·
-            Already on shop list: {starterStatusCounts.active}.
-          </p>
+            {(
+              [
+                ["not-added", "Not on shop list yet", starterStatusCounts.notAdded],
+                ["pending", "Pending label confirm", starterStatusCounts.pending],
+                ["archived", "Archived on shop list", starterStatusCounts.archived],
+                ["active", "Already on shop list", starterStatusCounts.active],
+              ] as const
+            ).map(([value, label, count], index) => (
+              <span key={value}>
+                {index > 0 ? " · " : null}
+                <button
+                  type="button"
+                  aria-pressed={starterShopStatus === value}
+                  disabled={labelConfirmId !== null}
+                  onClick={() =>
+                    setStarterShopStatus((current) => (current === value ? "all" : value))
+                  }
+                  style={{
+                    background: "transparent",
+                    border: 0,
+                    padding: 0,
+                    color: "inherit",
+                    font: "inherit",
+                    cursor: "pointer",
+                    textDecoration: "underline",
+                    fontWeight: starterShopStatus === value ? 700 : 400,
+                  }}
+                >
+                  {label}: {count}
+                </button>
+                {value === "active" ? "." : null}
+              </span>
+            ))}
+          </div>
           <div className="starter-results">
             {starterResults.length === 0 ? (
               <p className="hint">No starter rows match this search/filter.</p>
