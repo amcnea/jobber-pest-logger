@@ -2,6 +2,9 @@
  * Offline log outbox (#6) — durable localStorage queue for shared-mode log puts.
  * Local upsert remains source of truth on device; this retries cloud merge without retyping.
  * Full ApplicationLog payloads keep § 7.144(a) fields intact through queue → sync.
+ * Multi-tab read-modify-write retries with compare-and-swap on the raw localStorage
+ * string so one tab's enqueue does not wipe another's. Full `navigator.locks` stays
+ * deferred while App.tsx callers must remain synchronous.
  */
 
 import type { ApplicationLog } from "../types";
@@ -56,10 +59,9 @@ function coerceEntry(raw: unknown): LogOutboxEntry | null {
   return entry;
 }
 
-export function loadLogOutbox(): LogOutboxEntry[] {
+function parseOutboxRaw(raw: string | null): LogOutboxEntry[] {
+  if (!raw) return [];
   try {
-    const raw = localStorage.getItem(LOG_OUTBOX_KEY);
-    if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
     return parsed.map(coerceEntry).filter((e): e is LogOutboxEntry => e !== null);
@@ -68,13 +70,50 @@ export function loadLogOutbox(): LogOutboxEntry[] {
   }
 }
 
-function writeOutbox(entries: LogOutboxEntry[]): boolean {
+export function loadLogOutbox(): LogOutboxEntry[] {
   try {
-    localStorage.setItem(LOG_OUTBOX_KEY, JSON.stringify(entries));
-    return true;
+    return parseOutboxRaw(localStorage.getItem(LOG_OUTBOX_KEY));
   } catch {
-    return false;
+    return [];
   }
+}
+
+/**
+ * Bounded CAS attempts. localStorage has no conditional write; this closes the
+ * usual cross-tab clobber, not the last check-to-set sliver.
+ */
+const OUTBOX_CAS_ATTEMPTS = 8;
+
+function readOutboxRaw(): string | null | undefined {
+  try {
+    return localStorage.getItem(LOG_OUTBOX_KEY);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Optimistic concurrency for outbox read-modify-write.
+ * Snapshot the raw string, apply `mutator` to the coerced entries, re-read,
+ * and write only when that snapshot is still current. A changed raw means
+ * another tab committed; retry. Quota (setItem throw) returns false, same as before.
+ * `mutator` must be safe to run more than once.
+ */
+function updateOutbox(mutator: (entries: LogOutboxEntry[]) => LogOutboxEntry[]): boolean {
+  for (let attempt = 0; attempt < OUTBOX_CAS_ATTEMPTS; attempt++) {
+    const snapshot = readOutboxRaw();
+    if (snapshot === undefined) continue;
+    const next = mutator(parseOutboxRaw(snapshot));
+    const current = readOutboxRaw();
+    if (current === undefined || current !== snapshot) continue;
+    try {
+      localStorage.setItem(LOG_OUTBOX_KEY, JSON.stringify(next));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 /** Upsert by shopId + log.id (latest payload wins). */
@@ -85,31 +124,35 @@ export function enqueueLogOutbox(
 ): boolean {
   const id = shopId.trim();
   if (!id || !log.id) return false;
-  const rest = loadLogOutbox().filter((e) => !(e.shopId === id && e.log.id === log.id));
-  const entry: LogOutboxEntry = {
-    shopId: id,
-    queuedAt: new Date().toISOString(),
-    entryId: newEntryId(),
-    log,
-  };
-  if (lastError?.trim()) entry.lastError = lastError.trim();
-  return writeOutbox([entry, ...rest]);
+  return updateOutbox((entries) => {
+    const rest = entries.filter((e) => !(e.shopId === id && e.log.id === log.id));
+    const entry: LogOutboxEntry = {
+      shopId: id,
+      queuedAt: new Date().toISOString(),
+      entryId: newEntryId(),
+      log,
+    };
+    if (lastError?.trim()) entry.lastError = lastError.trim();
+    return [entry, ...rest];
+  });
 }
 
 /** Remove only exact entryId versions (preserve newer re-queues). */
 export function removeOutboxVersions(shopId: string, entryIds: string[]): boolean {
   const id = shopId.trim();
   const drop = new Set(entryIds.filter(Boolean));
-  const next = loadLogOutbox().filter((e) => !(e.shopId === id && drop.has(e.entryId)));
-  return writeOutbox(next);
+  return updateOutbox((entries) =>
+    entries.filter((e) => !(e.shopId === id && drop.has(e.entryId))),
+  );
 }
 
 /** @deprecated Prefer removeOutboxVersions so a newer queued payload is not wiped. */
 export function removeOutboxLogIds(shopId: string, logIds: string[]): boolean {
   const id = shopId.trim();
   const drop = new Set(logIds);
-  const next = loadLogOutbox().filter((e) => !(e.shopId === id && drop.has(e.log.id)));
-  return writeOutbox(next);
+  return updateOutbox((entries) =>
+    entries.filter((e) => !(e.shopId === id && drop.has(e.log.id))),
+  );
 }
 
 export function outboxEntriesForShop(shopId: string): LogOutboxEntry[] {
@@ -127,10 +170,9 @@ function annotateOutboxErrors(
   const msg = lastError?.trim();
   if (!msg) return true;
   const drop = new Set(logIds);
-  const next = loadLogOutbox().map((e) =>
-    e.shopId === id && drop.has(e.log.id) ? { ...e, lastError: msg } : e,
+  return updateOutbox((entries) =>
+    entries.map((e) => (e.shopId === id && drop.has(e.log.id) ? { ...e, lastError: msg } : e)),
   );
-  return writeOutbox(next);
 }
 
 /**
