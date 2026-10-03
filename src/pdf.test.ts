@@ -371,6 +371,20 @@ describe("per-log lines", () => {
     expect(joinedCalls(render([makeLog({ dateUsed: "   " })]))).toContain("Log 1 — (no date)");
   });
 
+  it("uses the same trimmed dateUsed for the title and the Date used line (#91)", () => {
+    // Regression: title and "Date used:" once diverged when whitespace was trimmed in only one place.
+    for (const [dateUsed, shown] of [
+      ["", "(no date)"],
+      ["   ", "(no date)"],
+      [" 2026-09-26 ", "2026-09-26"],
+    ] as const) {
+      FakeJsPDF.instances = [];
+      const text = joinedCalls(render([makeLog({ dateUsed })]));
+      expect(text).toContain(`Log 1 — ${shown}`);
+      expect(text).toContain(`Date used: ${shown}`);
+    }
+  });
+
   it("trims a padded date in the title", () => {
     expect(joinedCalls(render([makeLog({ dateUsed: " 2026-09-26 " })]))).toContain("Log 1 — 2026-09-26");
   });
