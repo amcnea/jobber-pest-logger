@@ -290,16 +290,17 @@ describe("loadLogOutbox", () => {
 
 describe("enqueueLogOutbox", async () => {
   it("rejects a blank shop id or a log without id, writing nothing", async () => {
-    expect(await enqueueLogOutbox("", makeLog("a"))).toBe(false);
-    expect(await enqueueLogOutbox("   ", makeLog("a"))).toBe(false);
-    expect(await enqueueLogOutbox(SHOP, makeLog(""))).toBe(false);
+    expect(await enqueueLogOutbox("", makeLog("a"))).toBeNull();
+    expect(await enqueueLogOutbox("   ", makeLog("a"))).toBeNull();
+    expect(await enqueueLogOutbox(SHOP, makeLog(""))).toBeNull();
     expect(storage.getItem(LOG_OUTBOX_KEY)).toBeNull();
   });
 
   it("stores a trimmed shop id, the current time, a unique entry id, and the full log", async () => {
     const log = makeLog("a");
-    expect(await enqueueLogOutbox(`  ${SHOP}  `, log)).toBe(true);
+    const committedId = await enqueueLogOutbox(`  ${SHOP}  `, log);
     const [entry] = loadLogOutbox();
+    expect(committedId).toBe(entry.entryId);
     expect(entry.shopId).toBe(SHOP);
     expect(entry.queuedAt).toBe(NOW.toISOString());
     expect(entry.entryId).toMatch(/^[0-9a-f-]{36}$/);
@@ -361,7 +362,7 @@ describe("enqueueLogOutbox", async () => {
   it("returns false and leaves the previous queue when storage is full", async () => {
     await enqueueLogOutbox(SHOP, makeLog("a"));
     storage.failSet = true;
-    expect(await enqueueLogOutbox(SHOP, makeLog("b"))).toBe(false);
+    expect(await enqueueLogOutbox(SHOP, makeLog("b"))).toBeNull();
     expect(loadLogOutbox().map((e) => e.log.id)).toEqual(["a"]);
   });
 });
@@ -838,6 +839,119 @@ describe("syncLogToRemote", async () => {
       queued: true,
     });
   });
+
+  it("null enqueue with shared legacy entryId only clears the synced log", async () => {
+    // Two legacy rows (no entryId) with the same queuedAt coerce to the same
+    // legacy:… identity. Failed-enqueue cleanup must not drop the other log.
+    const sharedQueuedAt = "2026-01-15T12:00:00.000Z";
+    writeRaw([
+      { shopId: SHOP, queuedAt: sharedQueuedAt, log: makeLog("keep", { targetPestOrPurpose: "other" }) },
+      { shopId: SHOP, queuedAt: sharedQueuedAt, log: makeLog("drop", { targetPestOrPurpose: "stale" }) },
+    ]);
+    const before = outboxEntriesForShop(SHOP);
+    expect(before).toHaveLength(2);
+    expect(before.every((e) => e.entryId === `legacy:${sharedQueuedAt}`)).toBe(true);
+
+    let quotaTripped = false;
+    const origSet = storage.setItem.bind(storage);
+    storage.setItem = (k: string, v: string) => {
+      if (!quotaTripped && k === LOG_OUTBOX_KEY) {
+        quotaTripped = true;
+        throw new Error("QuotaExceededError");
+      }
+      origSet(k, v);
+    };
+    const { remote, putDocs } = fakeRemote();
+    expect(
+      await syncLogToRemote(remote, SHOP, makeLog("drop", { targetPestOrPurpose: "fresh" })),
+    ).toEqual({ ok: true });
+    expect(putDocs[0].logs[0].id).toBe("drop");
+    const left = outboxEntriesForShop(SHOP);
+    expect(left).toHaveLength(1);
+    expect(left[0].log.id).toBe("keep");
+    expect(left[0].log.targetPestOrPurpose).toBe("other");
+    expect(left[0].entryId).toBe(`legacy:${sharedQueuedAt}`);
+  });
+
+  it("null enqueue clears the prior entry so a later flush cannot restore it", async () => {
+    const priorId = await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "stale" }));
+    expect(priorId).toEqual(expect.any(String));
+    // First outbox write (this sync's enqueue) fails; later clear of the prior id must succeed.
+    let quotaTripped = false;
+    const origSet = storage.setItem.bind(storage);
+    storage.setItem = (k: string, v: string) => {
+      if (!quotaTripped && k === LOG_OUTBOX_KEY) {
+        quotaTripped = true;
+        throw new Error("QuotaExceededError");
+      }
+      origSet(k, v);
+    };
+    const { remote, putDocs } = fakeRemote();
+    expect(
+      await syncLogToRemote(remote, SHOP, makeLog("a", { targetPestOrPurpose: "fresh" })),
+    ).toEqual({ ok: true });
+    expect(putDocs[0].logs[0].targetPestOrPurpose).toBe("fresh");
+    expect(outboxEntriesForShop(SHOP)).toEqual([]);
+  });
+
+  it("successful enqueue clears the returned entryId only", async () => {
+    await enqueueLogOutbox(SHOP, makeLog("other"));
+    let committedId: string | undefined;
+    const { remote } = fakeRemote({
+      onGet: () => {
+        committedId = outboxEntriesForShop(SHOP).find((e) => e.log.id === "a")?.entryId;
+      },
+    });
+    expect(await syncLogToRemote(remote, SHOP, makeLog("a"))).toEqual({ ok: true });
+    expect(committedId).toEqual(expect.any(String));
+    const left = outboxEntriesForShop(SHOP);
+    expect(left.map((e) => e.entryId)).not.toContain(committedId);
+    expect(left.map((e) => e.log.id)).toEqual(["other"]);
+  });
+
+  it("null enqueue does not clear a concurrent replacement queued under a new entryId", async () => {
+    const priorId = await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "stale" }));
+    expect(priorId).toEqual(expect.any(String));
+    let quotaTripped = false;
+    const origSet = storage.setItem.bind(storage);
+    storage.setItem = (k: string, v: string) => {
+      if (!quotaTripped && k === LOG_OUTBOX_KEY) {
+        quotaTripped = true;
+        throw new Error("QuotaExceededError");
+      }
+      origSet(k, v);
+    };
+    let newerId: string | null = null;
+    const { remote } = fakeRemote({
+      onGet: async () => {
+        newerId = await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "newer" }));
+      },
+    });
+    expect(
+      await syncLogToRemote(remote, SHOP, makeLog("a", { targetPestOrPurpose: "fresh" })),
+    ).toEqual({ ok: true });
+    expect(newerId).toEqual(expect.any(String));
+    expect(newerId).not.toBe(priorId);
+    const left = outboxEntriesForShop(SHOP);
+    expect(left).toHaveLength(1);
+    expect(left[0].entryId).toBe(newerId);
+    expect(left[0].log.targetPestOrPurpose).toBe("newer");
+  });
+
+  it("#118: enqueue returns the committed entryId; sync clears that identity only", async () => {
+    const committedId = await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v1" }));
+    expect(committedId).toBe(outboxEntriesForShop(SHOP)[0].entryId);
+    // Concurrent replacement for the same shop+log after our identity was captured.
+    const newerId = await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v2" }));
+    expect(newerId).not.toBe(committedId);
+    expect(outboxEntriesForShop(SHOP)[0].entryId).toBe(newerId);
+    // Clearing the older identity must leave the newer retry path intact.
+    expect(await removeOutboxVersions(SHOP, [committedId!])).toBe(true);
+    const left = outboxEntriesForShop(SHOP);
+    expect(left).toHaveLength(1);
+    expect(left[0].entryId).toBe(newerId);
+    expect(left[0].log.targetPestOrPurpose).toBe("v2");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -847,8 +961,9 @@ describe("syncLogToRemote", async () => {
 describe("logOutbox: remaining edge paths", async () => {
   it("falls back to a time-based entry id when crypto.randomUUID is unavailable", async () => {
     vi.stubGlobal("crypto", {});
-    expect(await enqueueLogOutbox(SHOP, makeLog("a"))).toBe(true);
+    const committedId = await enqueueLogOutbox(SHOP, makeLog("a"));
     const [entry] = outboxEntriesForShop(SHOP);
+    expect(committedId).toBe(entry.entryId);
     expect(entry.entryId).toMatch(new RegExp(`^e-${NOW.getTime()}-[a-z0-9]+$`));
   });
 
@@ -971,7 +1086,7 @@ describe("outbox cross-tab CAS", async () => {
       if (k === LOG_OUTBOX_KEY) ourWrites += 1;
       originalSet(k, v);
     };
-    expect(await enqueueLogOutbox(SHOP, makeLog("mine"))).toBe(true);
+    expect(await enqueueLogOutbox(SHOP, makeLog("mine"))).toEqual(expect.any(String));
     expect(ourWrites).toBe(1);
     hook.restore();
     expect(loadLogOutbox().map((e) => e.log.id)).toEqual(["mine", "other", "existing"]);
@@ -1004,7 +1119,7 @@ describe("outbox cross-tab CAS", async () => {
       confirms += 1;
       hook.originalSet(LOG_OUTBOX_KEY, JSON.stringify([otherEntry("other", `tab-${confirms}`)]));
     });
-    expect(await enqueueLogOutbox(SHOP, makeLog("mine"))).toBe(false);
+    expect(await enqueueLogOutbox(SHOP, makeLog("mine"))).toBeNull();
     expect(confirms).toBe(8);
     hook.restore();
     expect(loadLogOutbox().map((e) => e.entryId)).toEqual(["tab-8"]);
@@ -1057,7 +1172,7 @@ describe("outbox cross-tab lock", () => {
       }
       originalSet(k, v);
     };
-    expect(await enqueueLogOutbox(SHOP, makeLog("a"))).toBe(true);
+    expect(await enqueueLogOutbox(SHOP, makeLog("a"))).toEqual(expect.any(String));
     expect(setWhileHeld).toBe(1);
     expect(setOutside).toBe(0);
     expect(locks.calls).toEqual([{ name: OUTBOX_LOCK_NAME, mode: "exclusive", hasSignal: true }]);
@@ -1070,8 +1185,9 @@ describe("outbox cross-tab lock", () => {
       enqueueLogOutbox(SHOP, makeLog("a")),
       enqueueLogOutbox(SHOP, makeLog("b")),
     ]);
-    expect(first).toBe(true);
-    expect(second).toBe(true);
+    expect(first).toEqual(expect.any(String));
+    expect(second).toEqual(expect.any(String));
+    expect(first).not.toBe(second);
     expect(loadLogOutbox().map((e) => e.log.id).sort()).toEqual(["a", "b"]);
   });
 
@@ -1098,7 +1214,7 @@ describe("outbox cross-tab lock", () => {
     vi.stubGlobal("navigator", { locks: { request } });
     const pending = enqueueLogOutbox(SHOP, makeLog("mine"));
     await vi.advanceTimersByTimeAsync(OUTBOX_LOCK_WAIT_MS);
-    expect(await pending).toBe(false);
+    expect(await pending).toBeNull();
     expect(loadLogOutbox().map((e) => e.log.id)).toEqual(["keep"]);
   });
 
@@ -1107,7 +1223,7 @@ describe("outbox cross-tab lock", () => {
       throw new Error("locks unavailable");
     });
     vi.stubGlobal("navigator", { locks: { request } });
-    expect(await enqueueLogOutbox(SHOP, makeLog("a"))).toBe(false);
+    expect(await enqueueLogOutbox(SHOP, makeLog("a"))).toBeNull();
     expect(storage.getItem(LOG_OUTBOX_KEY)).toBeNull();
   });
 
@@ -1117,7 +1233,7 @@ describe("outbox cross-tab lock", () => {
       enqueueLogOutbox(SHOP, makeLog("a")),
       removeOutboxVersions(SHOP, ["nope"]),
     ]);
-    expect(first).toBe(true);
+    expect(first).toEqual(expect.any(String));
     expect(second).toBe(true);
     expect(loadLogOutbox().map((e) => e.log.id)).toEqual(["a"]);
   });
