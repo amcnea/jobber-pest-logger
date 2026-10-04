@@ -3,6 +3,7 @@
  * Local upsert remains source of truth on device; this retries cloud merge without retyping.
  * Full ApplicationLog payloads keep § 7.144(a) fields intact through queue → sync.
  * Cross-tab writers take an exclusive Web Lock around the whole read-modify-write.
+ * Enqueue returns the committed entryId so immediate sync cleans up only that version.
  * App keeps calling the async flush/sync entry points; the lock stays inside this module.
  */
 
@@ -187,25 +188,34 @@ async function updateOutbox(
   }
 }
 
-/** Upsert by shopId + log.id (latest payload wins). */
+/**
+ * Upsert by shopId + log.id (latest payload wins).
+ * On success returns the committed entryId (use for supersession + cleanup).
+ * On failure returns null — callers must not look up by log.id for cleanup,
+ * or they may claim a concurrent replacement's retry path.
+ */
 export async function enqueueLogOutbox(
   shopId: string,
   log: ApplicationLog,
   lastError?: string,
-): Promise<boolean> {
+): Promise<string | null> {
   const id = shopId.trim();
-  if (!id || !log.id) return false;
-  return updateOutbox((entries) => {
+  if (!id || !log.id) return null;
+  let committedId: string | null = null;
+  const ok = await updateOutbox((entries) => {
     const rest = entries.filter((e) => !(e.shopId === id && e.log.id === log.id));
+    const entryId = newEntryId();
     const entry: LogOutboxEntry = {
       shopId: id,
       queuedAt: new Date().toISOString(),
-      entryId: newEntryId(),
+      entryId,
       log,
     };
     if (lastError?.trim()) entry.lastError = lastError.trim();
+    committedId = entryId;
     return [entry, ...rest];
   });
+  return ok ? committedId : null;
 }
 
 /** Remove only exact entryId versions (preserve newer re-queues). */
@@ -367,12 +377,18 @@ export async function syncLogToRemote(
 ): Promise<{ ok: true } | { ok: false; error: string; queued: boolean }> {
   const id = shopId.trim();
   // Queue before the network round-trip so a discarded tab cannot lose the cloud copy.
-  const queued = await enqueueLogOutbox(id, log);
-  const entryId = outboxEntriesForShop(id).find((e) => e.log.id === log.id)?.entryId;
+  // Remember the id already queued for this log, then carry enqueue's committed id.
+  // Never re-look up by shop+log.id after an await — another tab may have replaced it.
+  const priorEntryId = outboxEntriesForShop(id).find((entry) => entry.log.id === log.id)?.entryId;
+  const entryId = await enqueueLogOutbox(id, log);
+  const queued = entryId !== null;
   const clearThisVersion = () => {
-    // If enqueue failed, do not fall back to log.id — that can wipe a newer re-queue.
-    if (!entryId) return true;
-    return removeOutboxVersions(id, [entryId]);
+    // Success: drop the id enqueue just committed. Null enqueue: drop only the id
+    // captured before the call, so a stale older payload cannot flush over a fresher
+    // remote log. A concurrent replacement has a different entryId and stays queued.
+    const idToClear = entryId ?? priorEntryId;
+    if (!idToClear) return true;
+    return removeOutboxVersions(id, [idToClear]);
   };
 
   const got = await remote.getShop();
