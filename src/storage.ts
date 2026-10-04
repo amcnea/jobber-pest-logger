@@ -4,10 +4,137 @@ import type { ApplicationLog, AppliedProduct, Person, PersonnelRole, ShopProduct
 
 const LOGS_KEY = "jobber-pest-logger:logs:v1";
 const CATALOG_KEY = "jobber-pest-logger:catalog:v1";
+/** Raw log rows that failed normalizeLog. Not part of backup or the visible notice (later tip). */
+export const LOGS_QUARANTINE_KEY = "jobber-pest-logger:logs-quarantine:v1";
+/** Raw catalog rows that failed normalizeShopProduct. */
+export const CATALOG_QUARANTINE_KEY = "jobber-pest-logger:catalog-quarantine:v1";
+/** Raw person rows that failed normalizePerson. */
+export const PEOPLE_QUARANTINE_KEY = "jobber-pest-logger:people-quarantine:v1";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+/** Stable JSON of a raw row. Key order does not matter; id is not a shortcut. */
+function stableStringify(value: unknown): string {
+  const stack = new WeakSet<object>();
+  const encode = (v: unknown): unknown => {
+    if (Array.isArray(v)) {
+      if (stack.has(v)) throw new TypeError("cycle");
+      stack.add(v);
+      const out = v.map(encode);
+      stack.delete(v);
+      return out;
+    }
+    if (isRecord(v)) {
+      if (stack.has(v)) throw new TypeError("cycle");
+      stack.add(v);
+      const out: Record<string, unknown> = {};
+      for (const key of Object.keys(v).sort()) out[key] = encode(v[key]);
+      stack.delete(v);
+      return out;
+    }
+    return v;
+  };
+  return JSON.stringify(encode(value));
+}
+
+function quarantineIdentity(value: unknown): string {
+  try {
+    return `json:${stableStringify(value)}`;
+  } catch {
+    return "json:unserializable";
+  }
+}
+
+/** Read a quarantine array. Corrupt or missing storage yields []. Never throws. */
+function readQuarantine(key: string): unknown[] {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Append raw failed rows to a quarantine key. Dedupe by full JSON of the raw row
+ * (stable key order), never by id. Identical rows collapse; same id with different
+ * content both stay.
+ * Returns true when every failed row is in the quarantine store afterward (already
+ * present counts, and that path does not rewrite). Returns false when setItem throws
+ * or a needed row is not retained. Empty failed is success.
+ */
+function appendQuarantine(key: string, failed: unknown[]): boolean {
+  if (failed.length === 0) return true;
+  try {
+    const existing = readQuarantine(key);
+    const seen = new Set(existing.map(quarantineIdentity));
+    const next = existing.slice();
+    for (const row of failed) {
+      const identity = quarantineIdentity(row);
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      next.push(row);
+    }
+    if (next.length === existing.length) return true;
+    localStorage.setItem(key, JSON.stringify(next));
+    const stored = new Set(readQuarantine(key).map(quarantineIdentity));
+    return failed.every((row) => stored.has(quarantineIdentity(row)));
+  } catch {
+    return false;
+  }
+}
+
+/** Current main-key payload when it is a JSON array. Missing, corrupt, or non-array → null. */
+function readStoredArray(key: string): unknown[] | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Before a main-key write that would drop raw rows, those rows must already be in quarantine.
+ * False means do not write the main key — the raw row would otherwise be gone.
+ */
+function quarantineRawFailuresBeforeWrite<T>(
+  mainKey: string,
+  quarantineKey: string,
+  normalize: (value: unknown) => T | null,
+): boolean {
+  const current = readStoredArray(mainKey);
+  if (!current) return true;
+  const failed: unknown[] = [];
+  for (const row of current) {
+    if (normalize(row) === null) failed.push(row);
+  }
+  return appendQuarantine(quarantineKey, failed);
+}
+
+function partitionNormalized<T>(
+  rows: unknown[],
+  normalize: (value: unknown) => T | null,
+  quarantineKey: string,
+): T[] {
+  const ok: T[] = [];
+  const failed: unknown[] = [];
+  for (const row of rows) {
+    const normalized = normalize(row);
+    if (normalized === null) failed.push(row);
+    else ok.push(normalized);
+  }
+  // Quarantine before returning so the next main-key save cannot drop these raw rows first.
+  appendQuarantine(quarantineKey, failed);
+  return ok;
+}
+
 
 function isProductShape(value: unknown): boolean {
   if (!isRecord(value)) return false;
@@ -140,13 +267,25 @@ export function loadLogs(): ApplicationLog[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.map(normalizeLog).filter((l): l is ApplicationLog => l !== null);
+    return partitionNormalized(parsed, normalizeLog, LOGS_QUARANTINE_KEY);
   } catch {
     return [];
   }
 }
 
+/** Raw log rows kept after normalizeLog rejected them. Read-only. */
+export function loadLogsQuarantine(): unknown[] {
+  return readQuarantine(LOGS_QUARANTINE_KEY);
+}
+
 export function saveLogs(logs: ApplicationLog[]): boolean {
+  if (!quarantineRawFailuresBeforeWrite(LOGS_KEY, LOGS_QUARANTINE_KEY, normalizeLog)) {
+    console.error(
+      "jobber-pest-logger: could not save logs",
+      new Error("quarantine write failed; main key left unchanged"),
+    );
+    return false;
+  }
   try {
     localStorage.setItem(LOGS_KEY, JSON.stringify(logs));
     return true;
@@ -274,6 +413,13 @@ function normalizeShopProduct(value: unknown): ShopProduct | null {
 }
 
 export function saveCatalog(products: ShopProduct[]): boolean {
+  if (!quarantineRawFailuresBeforeWrite(CATALOG_KEY, CATALOG_QUARANTINE_KEY, normalizeShopProduct)) {
+    console.error(
+      "jobber-pest-logger: could not save catalog",
+      new Error("quarantine write failed; main key left unchanged"),
+    );
+    return false;
+  }
   try {
     localStorage.setItem(CATALOG_KEY, JSON.stringify(products));
     return true;
@@ -297,12 +443,20 @@ export function loadCatalog(): ShopProduct[] {
       saveCatalog(seed);
       return seed;
     }
-    return parsed.map(normalizeShopProduct).filter((p): p is ShopProduct => p !== null);
+    // Array (including empty or partly invalid): do not re-seed. Quarantine failed rows
+    // before any later saveCatalog writes the main key. Missing/non-array/parse-fail paths
+    // above and below seed without quarantining — there was no raw array to keep.
+    return partitionNormalized(parsed, normalizeShopProduct, CATALOG_QUARANTINE_KEY);
   } catch {
     const seed = EXAMPLE_SEEDS.map((p) => ({ ...p }));
     saveCatalog(seed);
     return seed;
   }
+}
+
+/** Raw catalog rows kept after normalizeShopProduct rejected them. Read-only. */
+export function loadCatalogQuarantine(): unknown[] {
+  return readQuarantine(CATALOG_QUARANTINE_KEY);
 }
 
 export function upsertProduct(
@@ -433,6 +587,13 @@ function normalizePerson(value: unknown): Person | null {
 }
 
 export function savePeople(people: Person[]): boolean {
+  if (!quarantineRawFailuresBeforeWrite(PEOPLE_KEY, PEOPLE_QUARANTINE_KEY, normalizePerson)) {
+    console.error(
+      "jobber-pest-logger: could not save people",
+      new Error("quarantine write failed; main key left unchanged"),
+    );
+    return false;
+  }
   try {
     localStorage.setItem(PEOPLE_KEY, JSON.stringify(people));
     return true;
@@ -448,10 +609,15 @@ export function loadPeople(): Person[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.map(normalizePerson).filter((p): p is Person => p !== null);
+    return partitionNormalized(parsed, normalizePerson, PEOPLE_QUARANTINE_KEY);
   } catch {
     return [];
   }
+}
+
+/** Raw person rows kept after normalizePerson rejected them. Read-only. */
+export function loadPeopleQuarantine(): unknown[] {
+  return readQuarantine(PEOPLE_QUARANTINE_KEY);
 }
 
 export function upsertPerson(person: Person): { people: Person[]; saved: boolean } {
