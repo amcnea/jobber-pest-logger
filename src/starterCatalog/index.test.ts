@@ -77,9 +77,20 @@ describe("starterShopState / filterStartersByShopStatus", () => {
       B25.name,
       DEV.name,
     ]);
+    // #108: "Already on shop list" keeps only active (non-archived) matches.
+    expect(filterStartersByShopStatus(rows, catalog, "active", pendingIds).map((s) => s.id)).toEqual([REG.id]);
     expect(filterStartersByShopStatus(rows, catalog, "not-added", pendingIds)).toEqual([]);
     expect(filterStartersByShopStatus(rows, catalog, "pending", pendingIds).map((s) => s.id)).toEqual([B25.id]);
     expect(filterStartersByShopStatus(rows, catalog, "archived", pendingIds).map((s) => s.id)).toEqual([DEV.id]);
+  });
+
+  it("active filter excludes pending and archived matches (only non-archived shop rows)", () => {
+    // Same catalog as above: REG active, B25 pending, DEV archived, plus a not-added starter.
+    const onlyActive = filterStartersByShopStatus(rows, catalog, "active", pendingIds);
+    expect(onlyActive).toHaveLength(1);
+    expect(starterShopState(catalog, onlyActive[0]!, pendingIds)).toBe("active");
+    expect(onlyActive.map((s) => s.id)).not.toContain(B25.id);
+    expect(onlyActive.map((s) => s.id)).not.toContain(DEV.id);
   });
 });
 
