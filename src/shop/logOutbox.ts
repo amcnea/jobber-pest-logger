@@ -377,14 +377,18 @@ export async function syncLogToRemote(
 ): Promise<{ ok: true } | { ok: false; error: string; queued: boolean }> {
   const id = shopId.trim();
   // Queue before the network round-trip so a discarded tab cannot lose the cloud copy.
-  // Carry the committed entryId from enqueue — never re-look up by shop+log.id after
-  // an await (another tab may have replaced this log with a newer entryId).
+  // Remember the id already queued for this log, then carry enqueue's committed id.
+  // Never re-look up by shop+log.id after an await — another tab may have replaced it.
+  const priorEntryId = outboxEntriesForShop(id).find((entry) => entry.log.id === log.id)?.entryId;
   const entryId = await enqueueLogOutbox(id, log);
   const queued = entryId !== null;
   const clearThisVersion = () => {
-    // Failed enqueue must not claim cleanup of an existing matching entry.
-    if (!entryId) return true;
-    return removeOutboxVersions(id, [entryId]);
+    // Success: drop the id enqueue just committed. Null enqueue: drop only the id
+    // captured before the call, so a stale older payload cannot flush over a fresher
+    // remote log. A concurrent replacement has a different entryId and stays queued.
+    const idToClear = entryId ?? priorEntryId;
+    if (!idToClear) return true;
+    return removeOutboxVersions(id, [idToClear]);
   };
 
   const got = await remote.getShop();

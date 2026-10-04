@@ -840,19 +840,69 @@ describe("syncLogToRemote", async () => {
     });
   });
 
-  it("#118: failed enqueue does not clear an existing entry after a successful push", async () => {
-    const existingId = await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "queued" }));
-    expect(existingId).toEqual(expect.any(String));
-    storage.failSet = true; // next enqueue fails — must not claim cleanup of existingId
+  it("null enqueue clears the prior entry so a later flush cannot restore it", async () => {
+    const priorId = await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "stale" }));
+    expect(priorId).toEqual(expect.any(String));
+    // First outbox write (this sync's enqueue) fails; later clear of the prior id must succeed.
+    let quotaTripped = false;
+    const origSet = storage.setItem.bind(storage);
+    storage.setItem = (k: string, v: string) => {
+      if (!quotaTripped && k === LOG_OUTBOX_KEY) {
+        quotaTripped = true;
+        throw new Error("QuotaExceededError");
+      }
+      origSet(k, v);
+    };
     const { remote, putDocs } = fakeRemote();
     expect(
       await syncLogToRemote(remote, SHOP, makeLog("a", { targetPestOrPurpose: "fresh" })),
     ).toEqual({ ok: true });
     expect(putDocs[0].logs[0].targetPestOrPurpose).toBe("fresh");
+    expect(outboxEntriesForShop(SHOP)).toEqual([]);
+  });
+
+  it("successful enqueue clears the returned entryId only", async () => {
+    await enqueueLogOutbox(SHOP, makeLog("other"));
+    let committedId: string | undefined;
+    const { remote } = fakeRemote({
+      onGet: () => {
+        committedId = outboxEntriesForShop(SHOP).find((e) => e.log.id === "a")?.entryId;
+      },
+    });
+    expect(await syncLogToRemote(remote, SHOP, makeLog("a"))).toEqual({ ok: true });
+    expect(committedId).toEqual(expect.any(String));
+    const left = outboxEntriesForShop(SHOP);
+    expect(left.map((e) => e.entryId)).not.toContain(committedId);
+    expect(left.map((e) => e.log.id)).toEqual(["other"]);
+  });
+
+  it("null enqueue does not clear a concurrent replacement queued under a new entryId", async () => {
+    const priorId = await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "stale" }));
+    expect(priorId).toEqual(expect.any(String));
+    let quotaTripped = false;
+    const origSet = storage.setItem.bind(storage);
+    storage.setItem = (k: string, v: string) => {
+      if (!quotaTripped && k === LOG_OUTBOX_KEY) {
+        quotaTripped = true;
+        throw new Error("QuotaExceededError");
+      }
+      origSet(k, v);
+    };
+    let newerId: string | null = null;
+    const { remote } = fakeRemote({
+      onGet: async () => {
+        newerId = await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "newer" }));
+      },
+    });
+    expect(
+      await syncLogToRemote(remote, SHOP, makeLog("a", { targetPestOrPurpose: "fresh" })),
+    ).toEqual({ ok: true });
+    expect(newerId).toEqual(expect.any(String));
+    expect(newerId).not.toBe(priorId);
     const left = outboxEntriesForShop(SHOP);
     expect(left).toHaveLength(1);
-    expect(left[0].entryId).toBe(existingId);
-    expect(left[0].log.targetPestOrPurpose).toBe("queued");
+    expect(left[0].entryId).toBe(newerId);
+    expect(left[0].log.targetPestOrPurpose).toBe("newer");
   });
 
   it("#118: enqueue returns the committed entryId; sync clears that identity only", async () => {
