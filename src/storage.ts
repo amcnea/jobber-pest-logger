@@ -281,7 +281,7 @@ export function loadLogsQuarantine(): unknown[] {
 /**
  * Persist logs. Raw main-key rows that fail normalizeLog are quarantined before
  * the main key is rewritten.
- * `skipQuarantine` is wipe-only (wipeAllDeviceData). A normal save must not set it.
+ * `skipQuarantine` is for wipeAllDeviceData and applyBackup only. A normal save must not set it.
  */
 export function saveLogs(
   logs: ApplicationLog[],
@@ -426,7 +426,7 @@ function normalizeShopProduct(value: unknown): ShopProduct | null {
 /**
  * Persist the shop catalog. Raw main-key rows that fail normalizeShopProduct
  * are quarantined before the main key is rewritten.
- * `skipQuarantine` is wipe-only (wipeAllDeviceData). A normal save must not set it.
+ * `skipQuarantine` is for wipeAllDeviceData and applyBackup only. A normal save must not set it.
  */
 export function saveCatalog(
   products: ShopProduct[],
@@ -611,7 +611,7 @@ function normalizePerson(value: unknown): Person | null {
 /**
  * Persist people. Raw main-key rows that fail normalizePerson are quarantined
  * before the main key is rewritten.
- * `skipQuarantine` is wipe-only (wipeAllDeviceData). A normal save must not set it.
+ * `skipQuarantine` is for wipeAllDeviceData and applyBackup only. A normal save must not set it.
  */
 export function savePeople(
   people: Person[],
@@ -861,12 +861,13 @@ export function quarantineNoticeMessage(
     parts.push(`${counts.catalog} catalog`);
   }
   if (counts.people > 0) {
-    parts.push(`${counts.people} people`);
+    parts.push(`${counts.people} ${counts.people === 1 ? "person" : "people"}`);
   }
   const breakdown = parts.length > 0 ? ` (${parts.join(", ")})` : "";
   const n = counts.total;
+  const verb = n === 1 ? "was" : "were";
   return (
-    `${n} saved record${n === 1 ? "" : "s"} couldn't be read${breakdown} and were set aside ` +
+    `${n} saved record${n === 1 ? "" : "s"} couldn't be read${breakdown} and ${verb} set aside ` +
     `(not deleted). They are not included in the PDF or CSV use-record export. ` +
     `Download a backup JSON to keep those raw rows with the premises copy.`
   );
@@ -1450,9 +1451,11 @@ export function applyBackup(backup: DeviceBackup): ApplyBackupResult {
     return unrestored;
   };
 
-  const logsOk = saveLogs(backup.logs);
-  const catalogOk = saveCatalog(backup.catalog);
-  const peopleOk = savePeople(backup.people);
+  // skipQuarantine: writeBackupQuarantine replaces those keys next. Appending
+  // the replaced invalid rows first can fail on quota and abort the restore.
+  const logsOk = saveLogs(backup.logs, { skipQuarantine: true });
+  const catalogOk = saveCatalog(backup.catalog, { skipQuarantine: true });
+  const peopleOk = savePeople(backup.people, { skipQuarantine: true });
   const settingsOk = saveSettings(backup.settings);
   if (!(logsOk && catalogOk && peopleOk && settingsOk)) {
     return applyBackupFailed(rollback());
