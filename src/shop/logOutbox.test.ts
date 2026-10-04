@@ -290,16 +290,17 @@ describe("loadLogOutbox", () => {
 
 describe("enqueueLogOutbox", async () => {
   it("rejects a blank shop id or a log without id, writing nothing", async () => {
-    expect(await enqueueLogOutbox("", makeLog("a"))).toBe(false);
-    expect(await enqueueLogOutbox("   ", makeLog("a"))).toBe(false);
-    expect(await enqueueLogOutbox(SHOP, makeLog(""))).toBe(false);
+    expect(await enqueueLogOutbox("", makeLog("a"))).toBeNull();
+    expect(await enqueueLogOutbox("   ", makeLog("a"))).toBeNull();
+    expect(await enqueueLogOutbox(SHOP, makeLog(""))).toBeNull();
     expect(storage.getItem(LOG_OUTBOX_KEY)).toBeNull();
   });
 
   it("stores a trimmed shop id, the current time, a unique entry id, and the full log", async () => {
     const log = makeLog("a");
-    expect(await enqueueLogOutbox(`  ${SHOP}  `, log)).toBe(true);
+    const committedId = await enqueueLogOutbox(`  ${SHOP}  `, log);
     const [entry] = loadLogOutbox();
+    expect(committedId).toBe(entry.entryId);
     expect(entry.shopId).toBe(SHOP);
     expect(entry.queuedAt).toBe(NOW.toISOString());
     expect(entry.entryId).toMatch(/^[0-9a-f-]{36}$/);
@@ -361,7 +362,7 @@ describe("enqueueLogOutbox", async () => {
   it("returns false and leaves the previous queue when storage is full", async () => {
     await enqueueLogOutbox(SHOP, makeLog("a"));
     storage.failSet = true;
-    expect(await enqueueLogOutbox(SHOP, makeLog("b"))).toBe(false);
+    expect(await enqueueLogOutbox(SHOP, makeLog("b"))).toBeNull();
     expect(loadLogOutbox().map((e) => e.log.id)).toEqual(["a"]);
   });
 });
@@ -838,6 +839,36 @@ describe("syncLogToRemote", async () => {
       queued: true,
     });
   });
+
+  it("#118: failed enqueue does not clear an existing entry after a successful push", async () => {
+    const existingId = await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "queued" }));
+    expect(existingId).toEqual(expect.any(String));
+    storage.failSet = true; // next enqueue fails — must not claim cleanup of existingId
+    const { remote, putDocs } = fakeRemote();
+    expect(
+      await syncLogToRemote(remote, SHOP, makeLog("a", { targetPestOrPurpose: "fresh" })),
+    ).toEqual({ ok: true });
+    expect(putDocs[0].logs[0].targetPestOrPurpose).toBe("fresh");
+    const left = outboxEntriesForShop(SHOP);
+    expect(left).toHaveLength(1);
+    expect(left[0].entryId).toBe(existingId);
+    expect(left[0].log.targetPestOrPurpose).toBe("queued");
+  });
+
+  it("#118: enqueue returns the committed entryId; sync clears that identity only", async () => {
+    const committedId = await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v1" }));
+    expect(committedId).toBe(outboxEntriesForShop(SHOP)[0].entryId);
+    // Concurrent replacement for the same shop+log after our identity was captured.
+    const newerId = await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "v2" }));
+    expect(newerId).not.toBe(committedId);
+    expect(outboxEntriesForShop(SHOP)[0].entryId).toBe(newerId);
+    // Clearing the older identity must leave the newer retry path intact.
+    expect(await removeOutboxVersions(SHOP, [committedId!])).toBe(true);
+    const left = outboxEntriesForShop(SHOP);
+    expect(left).toHaveLength(1);
+    expect(left[0].entryId).toBe(newerId);
+    expect(left[0].log.targetPestOrPurpose).toBe("v2");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -847,8 +878,9 @@ describe("syncLogToRemote", async () => {
 describe("logOutbox: remaining edge paths", async () => {
   it("falls back to a time-based entry id when crypto.randomUUID is unavailable", async () => {
     vi.stubGlobal("crypto", {});
-    expect(await enqueueLogOutbox(SHOP, makeLog("a"))).toBe(true);
+    const committedId = await enqueueLogOutbox(SHOP, makeLog("a"));
     const [entry] = outboxEntriesForShop(SHOP);
+    expect(committedId).toBe(entry.entryId);
     expect(entry.entryId).toMatch(new RegExp(`^e-${NOW.getTime()}-[a-z0-9]+$`));
   });
 
@@ -971,7 +1003,7 @@ describe("outbox cross-tab CAS", async () => {
       if (k === LOG_OUTBOX_KEY) ourWrites += 1;
       originalSet(k, v);
     };
-    expect(await enqueueLogOutbox(SHOP, makeLog("mine"))).toBe(true);
+    expect(await enqueueLogOutbox(SHOP, makeLog("mine"))).toEqual(expect.any(String));
     expect(ourWrites).toBe(1);
     hook.restore();
     expect(loadLogOutbox().map((e) => e.log.id)).toEqual(["mine", "other", "existing"]);
@@ -1004,7 +1036,7 @@ describe("outbox cross-tab CAS", async () => {
       confirms += 1;
       hook.originalSet(LOG_OUTBOX_KEY, JSON.stringify([otherEntry("other", `tab-${confirms}`)]));
     });
-    expect(await enqueueLogOutbox(SHOP, makeLog("mine"))).toBe(false);
+    expect(await enqueueLogOutbox(SHOP, makeLog("mine"))).toBeNull();
     expect(confirms).toBe(8);
     hook.restore();
     expect(loadLogOutbox().map((e) => e.entryId)).toEqual(["tab-8"]);
@@ -1057,7 +1089,7 @@ describe("outbox cross-tab lock", () => {
       }
       originalSet(k, v);
     };
-    expect(await enqueueLogOutbox(SHOP, makeLog("a"))).toBe(true);
+    expect(await enqueueLogOutbox(SHOP, makeLog("a"))).toEqual(expect.any(String));
     expect(setWhileHeld).toBe(1);
     expect(setOutside).toBe(0);
     expect(locks.calls).toEqual([{ name: OUTBOX_LOCK_NAME, mode: "exclusive", hasSignal: true }]);
@@ -1070,8 +1102,9 @@ describe("outbox cross-tab lock", () => {
       enqueueLogOutbox(SHOP, makeLog("a")),
       enqueueLogOutbox(SHOP, makeLog("b")),
     ]);
-    expect(first).toBe(true);
-    expect(second).toBe(true);
+    expect(first).toEqual(expect.any(String));
+    expect(second).toEqual(expect.any(String));
+    expect(first).not.toBe(second);
     expect(loadLogOutbox().map((e) => e.log.id).sort()).toEqual(["a", "b"]);
   });
 
@@ -1098,7 +1131,7 @@ describe("outbox cross-tab lock", () => {
     vi.stubGlobal("navigator", { locks: { request } });
     const pending = enqueueLogOutbox(SHOP, makeLog("mine"));
     await vi.advanceTimersByTimeAsync(OUTBOX_LOCK_WAIT_MS);
-    expect(await pending).toBe(false);
+    expect(await pending).toBeNull();
     expect(loadLogOutbox().map((e) => e.log.id)).toEqual(["keep"]);
   });
 
@@ -1107,7 +1140,7 @@ describe("outbox cross-tab lock", () => {
       throw new Error("locks unavailable");
     });
     vi.stubGlobal("navigator", { locks: { request } });
-    expect(await enqueueLogOutbox(SHOP, makeLog("a"))).toBe(false);
+    expect(await enqueueLogOutbox(SHOP, makeLog("a"))).toBeNull();
     expect(storage.getItem(LOG_OUTBOX_KEY)).toBeNull();
   });
 
@@ -1117,7 +1150,7 @@ describe("outbox cross-tab lock", () => {
       enqueueLogOutbox(SHOP, makeLog("a")),
       removeOutboxVersions(SHOP, ["nope"]),
     ]);
-    expect(first).toBe(true);
+    expect(first).toEqual(expect.any(String));
     expect(second).toBe(true);
     expect(loadLogOutbox().map((e) => e.log.id)).toEqual(["a"]);
   });
