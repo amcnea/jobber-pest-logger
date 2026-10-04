@@ -4,7 +4,7 @@ services:
   app:
     build: .
     ports:
-      - "5173:5173"
+      - "127.0.0.1:5173:5173"
     volumes:
       # Source bind-mount so edits reload like `npm run dev`.
       - .:/app
