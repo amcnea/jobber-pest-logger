@@ -5,6 +5,7 @@ import {
   applyBackup,
   backupNagMessage,
   downloadBackup,
+  IncompleteBackupError,
   formatLastBackupLabel,
   loadCatalog,
   loadLastBackupAt,
@@ -819,10 +820,21 @@ export function Settings({
                   recordCount: pulled.sections.logs.length,
                   rangeLabel: "All dates (full backup)",
                 });
-                downloadBackup(pulled.sections, {
-                  fileSuffix: provenanceFileSuffix(provenance, false),
-                  provenance: { ...provenance },
-                });
+                try {
+                  downloadBackup(pulled.sections, {
+                    fileSuffix: provenanceFileSuffix(provenance, false),
+                    provenance: { ...provenance },
+                  });
+                } catch (err) {
+                  setBackupError(
+                    err instanceof IncompleteBackupError
+                      ? err.message
+                      : err instanceof Error
+                        ? err.message
+                        : "Backup download failed.",
+                  );
+                  return;
+                }
                 onBackupStampChange(loadLastBackupAt());
                 setBackupMsg(
                   pulled.kind === "shared"

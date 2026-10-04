@@ -15,6 +15,7 @@ import {
   dismissPilotCard,
   displayServiceAddress,
   downloadBackup,
+  IncompleteBackupError,
   emptyPerson,
   emptySettings,
   emptyShopProduct,
@@ -1285,6 +1286,33 @@ describe("buildBackup", () => {
     });
   });
 
+  it("aborts when an invalid main-key row was not retained in quarantine", () => {
+    const legacy = { id: "legacy-without-termite" };
+    const badProduct = { id: "bad-prod", kind: "nope" };
+    const badPerson = { id: "bad-person" };
+    put(LOGS_KEY, [makeLog("L1"), legacy]);
+    put(CATALOG_KEY, [shopProduct(), badProduct]);
+    put(PEOPLE_KEY, [person(), badPerson]);
+    storage.failSetKeys.add(LOGS_QUARANTINE_KEY);
+    storage.failSetKeys.add(CATALOG_QUARANTINE_KEY);
+    storage.failSetKeys.add(PEOPLE_QUARANTINE_KEY);
+    expect(() => buildBackup()).toThrow(IncompleteBackupError);
+    expect(() => buildBackup()).toThrow(/Incomplete backup/);
+    expect(stored(LOGS_KEY)).toEqual([makeLog("L1"), legacy]);
+    expect(loadLogsQuarantine()).toEqual([]);
+    expect(loadCatalogQuarantine()).toEqual([]);
+    expect(loadPeopleQuarantine()).toEqual([]);
+  });
+
+  it("includes an invalid main-key row after set-aside retains it", () => {
+    const legacy = { id: "legacy-without-termite" };
+    put(LOGS_KEY, [makeLog("L1"), legacy]);
+    const b = buildBackup();
+    expect(b.logs.map((l) => l.id)).toEqual(["L1"]);
+    expect(b.quarantine.logs).toEqual([legacy]);
+    expect(loadLogsQuarantine()).toEqual([legacy]);
+  });
+
   it("on an empty device includes seeded examples and empty sections", () => {
     const b = buildBackup();
     expect(b.catalog).toEqual(EXAMPLE_SEEDS);
@@ -1651,6 +1679,56 @@ describe("applyBackup", () => {
     storage.failSet = true;
     expect(applyBackup(backup())).toBe(false);
   });
+
+  it("restores the other snapshot keys when one rollback write keeps failing", () => {
+    saveLogs([makeLog("OLD")]);
+    saveCatalog([shopProduct({ id: "old-prod" })]);
+    savePeople([person({ id: "old-p" })]);
+    saveSettings(SETTINGS);
+    const prior = { id: "prior-q" };
+    put(LOGS_QUARANTINE_KEY, [prior]);
+    storage.failSetKeys.add(SETTINGS_KEY);
+    expect(
+      applyBackup(
+        backup({
+          quarantine: { logs: [{ id: "new-q" }], catalog: [], people: [] },
+        }),
+      ),
+    ).toBe(false);
+    expect(stored(LOGS_KEY)).toEqual([makeLog("OLD")]);
+    expect(stored(CATALOG_KEY)).toEqual([shopProduct({ id: "old-prod" })]);
+    expect(stored(PEOPLE_KEY)).toEqual([person({ id: "old-p" })]);
+    expect(loadLogsQuarantine()).toEqual([prior]);
+    expect(storage.getItem(SETTINGS_KEY)).toBeNull();
+    expect(loadCatalogQuarantine()).toEqual([]);
+    expect(loadPeopleQuarantine()).toEqual([]);
+  });
+
+  it("frees incoming values before rollback so a smaller prior log can be restored", () => {
+    saveLogs([makeLog("OLD")]);
+    saveCatalog([shopProduct({ id: "old-prod" })]);
+    put(LOGS_QUARANTINE_KEY, [{ id: "prior-q" }]);
+    const origSet = storage.setItem.bind(storage);
+    storage.setItem = (k: string, v: string) => {
+      if (k === LOGS_KEY && storage.map.get(CATALOG_KEY)?.includes("incoming-huge")) {
+        throw new Error("QuotaExceededError");
+      }
+      origSet(k, v);
+    };
+    storage.failOnceKeys.add(SETTINGS_KEY);
+    expect(
+      applyBackup(
+        backup({
+          catalog: [shopProduct({ id: "incoming-huge" })],
+          quarantine: { logs: [{ id: "new-q" }], catalog: [], people: [] },
+        }),
+      ),
+    ).toBe(false);
+    expect(stored(LOGS_KEY)).toEqual([makeLog("OLD")]);
+    expect(stored(CATALOG_KEY)).toEqual([shopProduct({ id: "old-prod" })]);
+    expect(loadLogsQuarantine()).toEqual([{ id: "prior-q" }]);
+    expect(loadSettings()).toEqual(emptySettings());
+  });
 });
 
 describe("downloadBackup", () => {
@@ -1762,6 +1840,33 @@ describe("downloadBackup", () => {
     storage.failSetKeys.add(LAST_BACKUP_KEY);
     expect(() => downloadBackup()).not.toThrow();
     expect(anchor.click).toHaveBeenCalled();
+    expect(loadLastBackupAt()).toBeNull();
+  });
+
+  it("does not download when an invalid main-key row was not set aside", () => {
+    const legacy = { id: "legacy-without-termite" };
+    put(LOGS_KEY, [makeLog("L1"), legacy]);
+    storage.failSetKeys.add(LOGS_QUARANTINE_KEY);
+    expect(() => downloadBackup()).toThrow(IncompleteBackupError);
+    expect(blobs).toHaveLength(0);
+    expect(anchor.click).not.toHaveBeenCalled();
+    expect(loadLastBackupAt()).toBeNull();
+    expect(stored(LOGS_KEY)).toEqual([makeLog("L1"), legacy]);
+  });
+
+  it("does not download a shared-shop file that would omit an unretained device row", () => {
+    const legacy = { id: "legacy-without-termite" };
+    put(LOGS_KEY, [makeLog("LOCAL"), legacy]);
+    storage.failSetKeys.add(LOGS_QUARANTINE_KEY);
+    const sections: ShopSections = {
+      logs: [makeLog("SHARED")],
+      catalog: [shopProduct({ id: "shared" })],
+      people: [],
+      settings: SETTINGS,
+    };
+    expect(() => downloadBackup(sections)).toThrow(/Incomplete backup/);
+    expect(blobs).toHaveLength(0);
+    expect(anchor.click).not.toHaveBeenCalled();
     expect(loadLastBackupAt()).toBeNull();
   });
 });
