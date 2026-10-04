@@ -1182,6 +1182,69 @@ describe("wipeAllDeviceData", () => {
     expect(res.catalog).toEqual(EXAMPLE_SEEDS);
     expect(res.logs).toEqual([]);
   });
+
+  it("clears quarantine keys and does not re-quarantine invalid main-key rows", () => {
+    const badLog = { id: "legacy-without-termite" };
+    const badProduct = { id: "bad", kind: "spray" };
+    const badPerson = { id: "x" };
+    const priorLog = { id: "already-quarantined-log" };
+    const priorProduct = { id: "already-quarantined-product", kind: "nope" };
+    const priorPerson = { id: "already-quarantined-person" };
+    put(LOGS_KEY, [makeLog("L1"), badLog]);
+    put(CATALOG_KEY, [shopProduct(), badProduct]);
+    put(PEOPLE_KEY, [person(), badPerson]);
+    put(LOGS_QUARANTINE_KEY, [priorLog]);
+    put(CATALOG_QUARANTINE_KEY, [priorProduct]);
+    put(PEOPLE_QUARANTINE_KEY, [priorPerson]);
+    saveSettings(SETTINGS);
+
+    const res = wipeAllDeviceData();
+
+    expect(res.saved).toBe(true);
+    expect(res.logs).toEqual([]);
+    expect(res.catalog).toEqual(EXAMPLE_SEEDS);
+    expect(res.people).toEqual([]);
+    expect(loadLogs()).toEqual([]);
+    expect(loadCatalog()).toEqual(EXAMPLE_SEEDS);
+    expect(loadPeople()).toEqual([]);
+    expect(storage.getItem(LOGS_QUARANTINE_KEY)).toBeNull();
+    expect(storage.getItem(CATALOG_QUARANTINE_KEY)).toBeNull();
+    expect(storage.getItem(PEOPLE_QUARANTINE_KEY)).toBeNull();
+    expect(loadLogsQuarantine()).toEqual([]);
+    expect(loadCatalogQuarantine()).toEqual([]);
+    expect(loadPeopleQuarantine()).toEqual([]);
+    const raw = [...storage.map.values()].join("\n");
+    expect(raw).not.toContain("legacy-without-termite");
+    expect(raw).not.toContain("already-quarantined");
+    expect(raw).not.toContain(JSON.stringify(badProduct));
+    expect(raw).not.toContain(JSON.stringify(badPerson));
+  });
+
+  it("rolls back prior quarantine contents when a wipe write fails", () => {
+    const badLog = { id: "legacy-without-termite" };
+    const priorLog = { id: "already-quarantined-log" };
+    const priorProduct = { id: "already-quarantined-product", kind: "nope" };
+    const priorPerson = { id: "already-quarantined-person" };
+    put(LOGS_KEY, [makeLog("L1"), badLog]);
+    put(CATALOG_KEY, [shopProduct()]);
+    put(PEOPLE_KEY, [person()]);
+    put(LOGS_QUARANTINE_KEY, [priorLog]);
+    put(CATALOG_QUARANTINE_KEY, [priorProduct]);
+    put(PEOPLE_QUARANTINE_KEY, [priorPerson]);
+    saveSettings(SETTINGS);
+    const before = new Map(storage.map);
+
+    storage.failOnceKeys.add(SETTINGS_KEY);
+    const res = wipeAllDeviceData();
+
+    expect(res.saved).toBe(false);
+    expect(storage.map).toEqual(before);
+    expect(stored(LOGS_QUARANTINE_KEY)).toEqual([priorLog]);
+    expect(stored(CATALOG_QUARANTINE_KEY)).toEqual([priorProduct]);
+    expect(stored(PEOPLE_QUARANTINE_KEY)).toEqual([priorPerson]);
+    expect(stored(LOGS_KEY)).toEqual([makeLog("L1"), badLog]);
+    expect(stored(LOGS_QUARANTINE_KEY)).not.toContainEqual(badLog);
+  });
 });
 
 // ---------------------------------------------------------------------------

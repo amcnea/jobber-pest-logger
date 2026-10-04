@@ -278,8 +278,19 @@ export function loadLogsQuarantine(): unknown[] {
   return readQuarantine(LOGS_QUARANTINE_KEY);
 }
 
-export function saveLogs(logs: ApplicationLog[]): boolean {
-  if (!quarantineRawFailuresBeforeWrite(LOGS_KEY, LOGS_QUARANTINE_KEY, normalizeLog)) {
+/**
+ * Persist logs. Raw main-key rows that fail normalizeLog are quarantined before
+ * the main key is rewritten.
+ * `skipQuarantine` is wipe-only (wipeAllDeviceData). A normal save must not set it.
+ */
+export function saveLogs(
+  logs: ApplicationLog[],
+  options?: { skipQuarantine?: boolean },
+): boolean {
+  if (
+    !options?.skipQuarantine &&
+    !quarantineRawFailuresBeforeWrite(LOGS_KEY, LOGS_QUARANTINE_KEY, normalizeLog)
+  ) {
     console.error(
       "jobber-pest-logger: could not save logs",
       new Error("quarantine write failed; main key left unchanged"),
@@ -412,8 +423,19 @@ function normalizeShopProduct(value: unknown): ShopProduct | null {
   };
 }
 
-export function saveCatalog(products: ShopProduct[]): boolean {
-  if (!quarantineRawFailuresBeforeWrite(CATALOG_KEY, CATALOG_QUARANTINE_KEY, normalizeShopProduct)) {
+/**
+ * Persist the shop catalog. Raw main-key rows that fail normalizeShopProduct
+ * are quarantined before the main key is rewritten.
+ * `skipQuarantine` is wipe-only (wipeAllDeviceData). A normal save must not set it.
+ */
+export function saveCatalog(
+  products: ShopProduct[],
+  options?: { skipQuarantine?: boolean },
+): boolean {
+  if (
+    !options?.skipQuarantine &&
+    !quarantineRawFailuresBeforeWrite(CATALOG_KEY, CATALOG_QUARANTINE_KEY, normalizeShopProduct)
+  ) {
     console.error(
       "jobber-pest-logger: could not save catalog",
       new Error("quarantine write failed; main key left unchanged"),
@@ -586,8 +608,19 @@ function normalizePerson(value: unknown): Person | null {
   };
 }
 
-export function savePeople(people: Person[]): boolean {
-  if (!quarantineRawFailuresBeforeWrite(PEOPLE_KEY, PEOPLE_QUARANTINE_KEY, normalizePerson)) {
+/**
+ * Persist people. Raw main-key rows that fail normalizePerson are quarantined
+ * before the main key is rewritten.
+ * `skipQuarantine` is wipe-only (wipeAllDeviceData). A normal save must not set it.
+ */
+export function savePeople(
+  people: Person[],
+  options?: { skipQuarantine?: boolean },
+): boolean {
+  if (
+    !options?.skipQuarantine &&
+    !quarantineRawFailuresBeforeWrite(PEOPLE_KEY, PEOPLE_QUARANTINE_KEY, normalizePerson)
+  ) {
     console.error(
       "jobber-pest-logger: could not save people",
       new Error("quarantine write failed; main key left unchanged"),
@@ -804,7 +837,10 @@ export function dismissPilotCard(): boolean {
 /**
  * Wipe all Jobber Pest Logger keys on this device. Caller must confirm.
  * Re-seeds example catalog so first-run can start again. Does not touch other origins.
- * Snapshots first and rolls back on any failed write so saved:false means prior data is intact.
+ * Clears the logs, catalog, and people quarantine keys so raw set-aside rows do not remain.
+ * An intentional wipe does not re-quarantine still-invalid main-key rows before deleting them.
+ * Snapshots first (including those quarantine keys) and rolls back on any failed write
+ * so saved:false means prior data, including quarantine, is intact.
  */
 export function wipeAllDeviceData(): {
   saved: boolean;
@@ -824,6 +860,9 @@ export function wipeAllDeviceData(): {
     LAST_BACKUP_KEY,
     PILOT_CARD_KEY,
     A2HS_TIP_KEY,
+    LOGS_QUARANTINE_KEY,
+    CATALOG_QUARANTINE_KEY,
+    PEOPLE_QUARANTINE_KEY,
   ] as const;
   const snapshot: Record<string, string | null> = {};
   try {
@@ -854,25 +893,46 @@ export function wipeAllDeviceData(): {
     }
   };
 
+  // loadLogs / loadCatalog / loadPeople quarantine raw failures as they read.
+  // A failed wipe must not leave that side effect after rollback.
+  const failedState = () => {
+    const state = {
+      saved: false as const,
+      catalog: loadCatalog(),
+      logs: loadLogs(),
+      people: loadPeople(),
+      settings: loadSettings(),
+      lastBackupAt: loadLastBackupAt(),
+    };
+    const quarantineKeys = [LOGS_QUARANTINE_KEY, CATALOG_QUARANTINE_KEY, PEOPLE_QUARANTINE_KEY] as const;
+    try {
+      for (const key of quarantineKeys) {
+        const prev = snapshot[key];
+        if (prev === null) localStorage.removeItem(key);
+        else localStorage.setItem(key, prev);
+      }
+    } catch (err) {
+      console.error("jobber-pest-logger: could not restore quarantine after failed wipe", err);
+    }
+    return state;
+  };
+
   try {
     localStorage.removeItem(LAST_BACKUP_KEY);
     localStorage.removeItem(PILOT_CARD_KEY);
     localStorage.removeItem(A2HS_TIP_KEY);
-    const catalogOk = saveCatalog(seed);
-    const logsOk = saveLogs([]);
-    const peopleOk = savePeople([]);
+    // skipQuarantine: wiping those rows on purpose must not copy them into quarantine first.
+    const catalogOk = saveCatalog(seed, { skipQuarantine: true });
+    const logsOk = saveLogs([], { skipQuarantine: true });
+    const peopleOk = savePeople([], { skipQuarantine: true });
     const settingsOk = saveSettings(clearedSettings);
     if (!(catalogOk && logsOk && peopleOk && settingsOk)) {
       rollback();
-      return {
-        saved: false,
-        catalog: loadCatalog(),
-        logs: loadLogs(),
-        people: loadPeople(),
-        settings: loadSettings(),
-        lastBackupAt: loadLastBackupAt(),
-      };
+      return failedState();
     }
+    localStorage.removeItem(LOGS_QUARANTINE_KEY);
+    localStorage.removeItem(CATALOG_QUARANTINE_KEY);
+    localStorage.removeItem(PEOPLE_QUARANTINE_KEY);
     return {
       saved: true,
       catalog: seed,
@@ -884,14 +944,7 @@ export function wipeAllDeviceData(): {
   } catch (err) {
     console.error("jobber-pest-logger: wipeAllDeviceData failed", err);
     rollback();
-    return {
-      saved: false,
-      catalog: loadCatalog(),
-      logs: loadLogs(),
-      people: loadPeople(),
-      settings: loadSettings(),
-      lastBackupAt: loadLastBackupAt(),
-    };
+    return failedState();
   }
 }
 
