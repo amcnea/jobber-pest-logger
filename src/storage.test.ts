@@ -15,6 +15,7 @@ import {
   dismissPilotCard,
   displayServiceAddress,
   downloadBackup,
+  IncompleteBackupError,
   emptyPerson,
   emptySettings,
   emptyShopProduct,
@@ -50,6 +51,8 @@ import {
   upsertPerson,
   upsertProduct,
   wipeAllDeviceData,
+  quarantineCounts,
+  quarantineNoticeMessage,
   type DeviceBackup,
   type ShopSections,
 } from "./storage";
@@ -1265,7 +1268,49 @@ describe("buildBackup", () => {
       catalog: [shopProduct()],
       people: [person()],
       settings: SETTINGS,
+      quarantine: { logs: [], catalog: [], people: [] },
     });
+  });
+
+  it("includes current quarantine rows as raw arrays", () => {
+    const badLog = { id: "legacy-without-termite" };
+    const badProduct = { id: "bad-prod", kind: "nope" };
+    const badPerson = { id: "bad-person" };
+    put(LOGS_QUARANTINE_KEY, [badLog]);
+    put(CATALOG_QUARANTINE_KEY, [badProduct]);
+    put(PEOPLE_QUARANTINE_KEY, [badPerson]);
+    expect(buildBackup().quarantine).toEqual({
+      logs: [badLog],
+      catalog: [badProduct],
+      people: [badPerson],
+    });
+  });
+
+  it("aborts when an invalid main-key row was not retained in quarantine", () => {
+    const legacy = { id: "legacy-without-termite" };
+    const badProduct = { id: "bad-prod", kind: "nope" };
+    const badPerson = { id: "bad-person" };
+    put(LOGS_KEY, [makeLog("L1"), legacy]);
+    put(CATALOG_KEY, [shopProduct(), badProduct]);
+    put(PEOPLE_KEY, [person(), badPerson]);
+    storage.failSetKeys.add(LOGS_QUARANTINE_KEY);
+    storage.failSetKeys.add(CATALOG_QUARANTINE_KEY);
+    storage.failSetKeys.add(PEOPLE_QUARANTINE_KEY);
+    expect(() => buildBackup()).toThrow(IncompleteBackupError);
+    expect(() => buildBackup()).toThrow(/Incomplete backup/);
+    expect(stored(LOGS_KEY)).toEqual([makeLog("L1"), legacy]);
+    expect(loadLogsQuarantine()).toEqual([]);
+    expect(loadCatalogQuarantine()).toEqual([]);
+    expect(loadPeopleQuarantine()).toEqual([]);
+  });
+
+  it("includes an invalid main-key row after set-aside retains it", () => {
+    const legacy = { id: "legacy-without-termite" };
+    put(LOGS_KEY, [makeLog("L1"), legacy]);
+    const b = buildBackup();
+    expect(b.logs.map((l) => l.id)).toEqual(["L1"]);
+    expect(b.quarantine.logs).toEqual([legacy]);
+    expect(loadLogsQuarantine()).toEqual([legacy]);
   });
 
   it("on an empty device includes seeded examples and empty sections", () => {
@@ -1274,6 +1319,7 @@ describe("buildBackup", () => {
     expect(b.logs).toEqual([]);
     expect(b.people).toEqual([]);
     expect(b.settings).toEqual(emptySettings());
+    expect(b.quarantine).toEqual({ logs: [], catalog: [], people: [] });
   });
 });
 
@@ -1347,6 +1393,7 @@ describe("parseBackup", () => {
         catalog: [shopProduct()],
         people: [person()],
         settings: SETTINGS,
+        quarantine: { logs: [], catalog: [], people: [] },
       },
     });
   });
@@ -1370,7 +1417,7 @@ describe("parseBackup", () => {
     expect(res.backup.exportedAt).toBe("2026-09-25T12:00:00.000Z");
     expect(res.backup.meta).toBeUndefined();
     expect(Object.keys(res.backup).sort()).toEqual(
-      ["catalog", "exportedAt", "logs", "people", "settings", "version"].sort(),
+      ["catalog", "exportedAt", "logs", "people", "quarantine", "settings", "version"].sort(),
     );
   });
 
@@ -1449,6 +1496,54 @@ describe("parseBackup", () => {
     });
   });
 
+  it("accepts quarantine arrays without normalizing the raw rows", () => {
+    const rawLog = { id: "legacy-without-termite" };
+    const res = parseBackup(
+      validBackup({
+        quarantine: { logs: [rawLog], catalog: [{ id: "x" }], people: [42] },
+      }),
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.backup.quarantine).toEqual({
+      logs: [rawLog],
+      catalog: [{ id: "x" }],
+      people: [42],
+    });
+  });
+
+  it("treats an older backup without quarantine as empty arrays", () => {
+    const raw = validBackup();
+    expect("quarantine" in raw).toBe(false);
+    const res = parseBackup(raw);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.backup.quarantine).toEqual({ logs: [], catalog: [], people: [] });
+  });
+
+  it("rejects quarantine when present but not shaped as arrays", () => {
+    expect(parseBackup(validBackup({ quarantine: null }))).toEqual({
+      ok: false,
+      error: "Backup quarantine must be an object.",
+    });
+    expect(parseBackup(validBackup({ quarantine: [] }))).toEqual({
+      ok: false,
+      error: "Backup quarantine must be an object.",
+    });
+    expect(parseBackup(validBackup({ quarantine: { logs: {}, catalog: [], people: [] } }))).toEqual({
+      ok: false,
+      error: "Backup quarantine logs must be an array.",
+    });
+    expect(parseBackup(validBackup({ quarantine: { logs: [], catalog: null, people: [] } }))).toEqual({
+      ok: false,
+      error: "Backup quarantine catalog must be an array.",
+    });
+    expect(parseBackup(validBackup({ quarantine: { logs: [], catalog: [], people: "x" } }))).toEqual({
+      ok: false,
+      error: "Backup quarantine people must be an array.",
+    });
+  });
+
   it("does not write storage", () => {
     parseBackup(validBackup());
     expect(storage.map.size).toBe(0);
@@ -1464,6 +1559,7 @@ describe("applyBackup", () => {
       catalog: [shopProduct({ id: "new-prod" })],
       people: [person({ id: "new-p" })],
       settings: SETTINGS,
+      quarantine: { logs: [], catalog: [], people: [] },
       ...overrides,
     };
   }
@@ -1477,6 +1573,61 @@ describe("applyBackup", () => {
     expect(ids(loadCatalog())).toEqual(["new-prod"]);
     expect(ids(loadPeople())).toEqual(["new-p"]);
     expect(loadSettings()).toEqual(SETTINGS);
+  });
+
+  it("restores quarantine keys from the backup (and clears when empty)", () => {
+    const prior = { id: "already-quarantined-log" };
+    put(LOGS_QUARANTINE_KEY, [prior]);
+    put(CATALOG_QUARANTINE_KEY, [{ id: "old-cat" }]);
+    const incoming = {
+      logs: [{ id: "from-backup-log" }],
+      catalog: [{ id: "from-backup-cat" }],
+      people: [{ id: "from-backup-person" }],
+    };
+    expect(applyBackup(backup({ quarantine: incoming }))).toBe(true);
+    expect(loadLogsQuarantine()).toEqual(incoming.logs);
+    expect(loadCatalogQuarantine()).toEqual(incoming.catalog);
+    expect(loadPeopleQuarantine()).toEqual(incoming.people);
+
+    expect(applyBackup(backup())).toBe(true);
+    expect(loadLogsQuarantine()).toEqual([]);
+    expect(loadCatalogQuarantine()).toEqual([]);
+    expect(loadPeopleQuarantine()).toEqual([]);
+    expect(storage.getItem(LOGS_QUARANTINE_KEY)).toBeNull();
+  });
+
+  it("rolls back quarantine when a main-section write fails", () => {
+    const prior = { id: "already-quarantined-log" };
+    put(LOGS_QUARANTINE_KEY, [prior]);
+    saveLogs([makeLog("OLD")]);
+    const before = new Map(storage.map);
+    storage.failOnceKeys.add(SETTINGS_KEY);
+    expect(
+      applyBackup(
+        backup({
+          quarantine: { logs: [{ id: "new-q" }], catalog: [], people: [] },
+        }),
+      ),
+    ).toBe(false);
+    expect(storage.map).toEqual(before);
+    expect(loadLogsQuarantine()).toEqual([prior]);
+  });
+
+  it("rolls back main sections when a quarantine write fails", () => {
+    saveLogs([makeLog("OLD")]);
+    put(LOGS_QUARANTINE_KEY, [{ id: "prior-q" }]);
+    const before = new Map(storage.map);
+    storage.failOnceKeys.add(LOGS_QUARANTINE_KEY);
+    expect(
+      applyBackup(
+        backup({
+          quarantine: { logs: [{ id: "new-q" }], catalog: [], people: [] },
+        }),
+      ),
+    ).toBe(false);
+    expect(storage.map).toEqual(before);
+    expect(ids(loadLogs())).toEqual(["OLD"]);
+    expect(loadLogsQuarantine()).toEqual([{ id: "prior-q" }]);
   });
 
   it("does not touch the backup stamp, dismissed flags or session", () => {
@@ -1527,6 +1678,56 @@ describe("applyBackup", () => {
     saveLogs([makeLog("OLD")]);
     storage.failSet = true;
     expect(applyBackup(backup())).toBe(false);
+  });
+
+  it("restores the other snapshot keys when one rollback write keeps failing", () => {
+    saveLogs([makeLog("OLD")]);
+    saveCatalog([shopProduct({ id: "old-prod" })]);
+    savePeople([person({ id: "old-p" })]);
+    saveSettings(SETTINGS);
+    const prior = { id: "prior-q" };
+    put(LOGS_QUARANTINE_KEY, [prior]);
+    storage.failSetKeys.add(SETTINGS_KEY);
+    expect(
+      applyBackup(
+        backup({
+          quarantine: { logs: [{ id: "new-q" }], catalog: [], people: [] },
+        }),
+      ),
+    ).toBe(false);
+    expect(stored(LOGS_KEY)).toEqual([makeLog("OLD")]);
+    expect(stored(CATALOG_KEY)).toEqual([shopProduct({ id: "old-prod" })]);
+    expect(stored(PEOPLE_KEY)).toEqual([person({ id: "old-p" })]);
+    expect(loadLogsQuarantine()).toEqual([prior]);
+    expect(storage.getItem(SETTINGS_KEY)).toBeNull();
+    expect(loadCatalogQuarantine()).toEqual([]);
+    expect(loadPeopleQuarantine()).toEqual([]);
+  });
+
+  it("frees incoming values before rollback so a smaller prior log can be restored", () => {
+    saveLogs([makeLog("OLD")]);
+    saveCatalog([shopProduct({ id: "old-prod" })]);
+    put(LOGS_QUARANTINE_KEY, [{ id: "prior-q" }]);
+    const origSet = storage.setItem.bind(storage);
+    storage.setItem = (k: string, v: string) => {
+      if (k === LOGS_KEY && storage.map.get(CATALOG_KEY)?.includes("incoming-huge")) {
+        throw new Error("QuotaExceededError");
+      }
+      origSet(k, v);
+    };
+    storage.failOnceKeys.add(SETTINGS_KEY);
+    expect(
+      applyBackup(
+        backup({
+          catalog: [shopProduct({ id: "incoming-huge" })],
+          quarantine: { logs: [{ id: "new-q" }], catalog: [], people: [] },
+        }),
+      ),
+    ).toBe(false);
+    expect(stored(LOGS_KEY)).toEqual([makeLog("OLD")]);
+    expect(stored(CATALOG_KEY)).toEqual([shopProduct({ id: "old-prod" })]);
+    expect(loadLogsQuarantine()).toEqual([{ id: "prior-q" }]);
+    expect(loadSettings()).toEqual(emptySettings());
   });
 });
 
@@ -1602,6 +1803,8 @@ describe("downloadBackup", () => {
 
   it("uses provided sections instead of local storage", async () => {
     saveLogs([makeLog("LOCAL")]);
+    const deviceQ = { id: "device-quarantine-log" };
+    put(LOGS_QUARANTINE_KEY, [deviceQ]);
     const sections: ShopSections = {
       logs: [makeLog("SHARED")],
       catalog: [shopProduct({ id: "shared" })],
@@ -1614,6 +1817,7 @@ describe("downloadBackup", () => {
     expect(json.exportedAt).toBe(NOW.toISOString());
     expect((json.logs as ApplicationLog[]).map((l) => l.id)).toEqual(["SHARED"]);
     expect(json.catalog).toEqual([shopProduct({ id: "shared" })]);
+    expect(json.quarantine).toEqual({ logs: [deviceQ], catalog: [], people: [] });
     expect(json.meta).toBeUndefined();
   });
 
@@ -1637,6 +1841,57 @@ describe("downloadBackup", () => {
     expect(() => downloadBackup()).not.toThrow();
     expect(anchor.click).toHaveBeenCalled();
     expect(loadLastBackupAt()).toBeNull();
+  });
+
+  it("does not download when an invalid main-key row was not set aside", () => {
+    const legacy = { id: "legacy-without-termite" };
+    put(LOGS_KEY, [makeLog("L1"), legacy]);
+    storage.failSetKeys.add(LOGS_QUARANTINE_KEY);
+    expect(() => downloadBackup()).toThrow(IncompleteBackupError);
+    expect(blobs).toHaveLength(0);
+    expect(anchor.click).not.toHaveBeenCalled();
+    expect(loadLastBackupAt()).toBeNull();
+    expect(stored(LOGS_KEY)).toEqual([makeLog("L1"), legacy]);
+  });
+
+  it("does not download a shared-shop file that would omit an unretained device row", () => {
+    const legacy = { id: "legacy-without-termite" };
+    put(LOGS_KEY, [makeLog("LOCAL"), legacy]);
+    storage.failSetKeys.add(LOGS_QUARANTINE_KEY);
+    const sections: ShopSections = {
+      logs: [makeLog("SHARED")],
+      catalog: [shopProduct({ id: "shared" })],
+      people: [],
+      settings: SETTINGS,
+    };
+    expect(() => downloadBackup(sections)).toThrow(/Incomplete backup/);
+    expect(blobs).toHaveLength(0);
+    expect(anchor.click).not.toHaveBeenCalled();
+    expect(loadLastBackupAt()).toBeNull();
+  });
+});
+
+describe("quarantineNoticeMessage", () => {
+  it("returns null when quarantine is empty", () => {
+    expect(quarantineCounts()).toEqual({ logs: 0, catalog: 0, people: 0, total: 0 });
+    expect(quarantineNoticeMessage()).toBeNull();
+  });
+
+  it("describes set-aside rows, export exclusion, and backup JSON", () => {
+    put(LOGS_QUARANTINE_KEY, [{ id: "a" }, { id: "b" }]);
+    put(CATALOG_QUARANTINE_KEY, [{ id: "c" }]);
+    const msg = quarantineNoticeMessage();
+    expect(msg).toContain("3 saved records couldn't be read (2 logs, 1 catalog)");
+    expect(msg).toContain("set aside (not deleted)");
+    expect(msg).toContain("not included in the PDF or CSV use-record export");
+    expect(msg).toContain("Download a backup JSON");
+    expect(msg).toContain("premises copy");
+    expect(msg?.toLowerCase()).not.toContain("tda-approved");
+  });
+
+  it("uses singular wording for one row", () => {
+    put(PEOPLE_QUARANTINE_KEY, [{ id: "p1" }]);
+    expect(quarantineNoticeMessage()).toContain("1 saved record couldn't be read (1 people)");
   });
 });
 
