@@ -11,6 +11,7 @@ import {
   loadLogs,
   loadPeople,
   parseBackup,
+  quarantineNoticeMessage,
 } from "../storage";
 import type { ApplicationLog, Person, ShopProduct, ShopSettings } from "../types";
 import {
@@ -112,6 +113,7 @@ export function Settings({
   const officeOk = canAccessOffice();
   const lastBackupLabel = formatLastBackupLabel(lastBackupAt);
   const nag = backupNagMessage(lastBackupAt);
+  const quarantineNotice = quarantineNoticeMessage();
   const sharedPullHint = sharedExportPullHint();
 
   /** Sync local Settings state from session storage — does NOT bump App tick. */
@@ -296,7 +298,7 @@ export function Settings({
     }
 
     const confirmed = confirm(
-      "Restore this backup? It replaces all logs, catalog, people, and settings currently saved on this device.",
+      "Restore this backup? It replaces all logs, catalog, people, settings, and any set-aside rows currently saved on this device.",
     );
     if (!confirmed) return;
 
@@ -762,11 +764,16 @@ export function Settings({
 
       <h2>Backup &amp; restore</h2>
       <p className="hint">
-        Download one JSON file with logs, catalog, people, settings, and a version stamp. Restore
-        replaces everything on this device after you confirm. Invalid or garbage files are rejected.
-        Prefer this JSON backup (and Export CSV/PDF) for the shop&apos;s 2-year premises retention
-        path — cloud sync alone does not meet that duty.
+        Download one JSON file with logs, catalog, people, settings, set-aside rows, and a version
+        stamp. Restore replaces everything on this device after you confirm. Invalid or garbage
+        files are rejected. Prefer this JSON backup (and Export CSV/PDF) for the shop&apos;s 2-year
+        premises retention path — cloud sync alone does not meet that duty.
       </p>
+      {quarantineNotice && (
+        <p className="nag" role="status">
+          {quarantineNotice}
+        </p>
+      )}
       {sharedPullHint && (
         <p className="hint premises-keepalive" role="note">
           {sharedPullHint}

@@ -4,7 +4,7 @@ import type { ApplicationLog, AppliedProduct, Person, PersonnelRole, ShopProduct
 
 const LOGS_KEY = "jobber-pest-logger:logs:v1";
 const CATALOG_KEY = "jobber-pest-logger:catalog:v1";
-/** Raw log rows that failed normalizeLog. Not part of backup or the visible notice (later tip). */
+/** Raw log rows that failed normalizeLog. Included in backup JSON; surfaced by the Settings notice. */
 export const LOGS_QUARANTINE_KEY = "jobber-pest-logger:logs-quarantine:v1";
 /** Raw catalog rows that failed normalizeShopProduct. */
 export const CATALOG_QUARANTINE_KEY = "jobber-pest-logger:catalog-quarantine:v1";
@@ -744,6 +744,13 @@ export function saveSettings(settings: ShopSettings): boolean {
   }
 }
 
+/** Raw set-aside rows kept with a device backup (not normalized). */
+export interface BackupQuarantine {
+  logs: unknown[];
+  catalog: unknown[];
+  people: unknown[];
+}
+
 export interface DeviceBackup {
   version: string;
   exportedAt: string;
@@ -752,10 +759,126 @@ export interface DeviceBackup {
   people: Person[];
   settings: ShopSettings;
   /**
+   * Raw rows that failed normalization on this device. Always present on backups
+   * this app writes; older backups may omit it (parsed as empty arrays).
+   */
+  quarantine: BackupQuarantine;
+  /**
    * Optional export provenance (#7). Informational only: parseBackup ignores
    * unknown/extra keys and rebuilds the backup from known fields on restore.
    */
   meta?: Record<string, unknown>;
+}
+
+/** Current device quarantine payload for backups and the Settings notice. */
+export function loadBackupQuarantine(): BackupQuarantine {
+  return {
+    logs: loadLogsQuarantine(),
+    catalog: loadCatalogQuarantine(),
+    people: loadPeopleQuarantine(),
+  };
+}
+
+export type QuarantineCounts = {
+  logs: number;
+  catalog: number;
+  people: number;
+  total: number;
+};
+
+/** Counts of set-aside raw rows (logs / catalog / people). */
+export function quarantineCounts(q: BackupQuarantine = loadBackupQuarantine()): QuarantineCounts {
+  const logs = q.logs.length;
+  const catalog = q.catalog.length;
+  const people = q.people.length;
+  return { logs, catalog, people, total: logs + catalog + people };
+}
+
+/**
+ * Non-blocking Settings notice when quarantine has rows.
+ * Returns null when there is nothing set aside.
+ */
+export function quarantineNoticeMessage(
+  counts: QuarantineCounts = quarantineCounts(),
+): string | null {
+  if (counts.total === 0) return null;
+  const parts: string[] = [];
+  if (counts.logs > 0) {
+    parts.push(`${counts.logs} log${counts.logs === 1 ? "" : "s"}`);
+  }
+  if (counts.catalog > 0) {
+    parts.push(`${counts.catalog} catalog`);
+  }
+  if (counts.people > 0) {
+    parts.push(`${counts.people} people`);
+  }
+  const breakdown = parts.length > 0 ? ` (${parts.join(", ")})` : "";
+  const n = counts.total;
+  return (
+    `${n} saved record${n === 1 ? "" : "s"} couldn't be read${breakdown} and were set aside ` +
+    `(not deleted). They are not included in the PDF or CSV use-record export. ` +
+    `Download a backup JSON to keep those raw rows with the premises copy.`
+  );
+}
+
+function emptyQuarantine(): BackupQuarantine {
+  return { logs: [], catalog: [], people: [] };
+}
+
+/** Replace or clear one quarantine key. Empty array removes the key. */
+function writeQuarantineKey(key: string, rows: unknown[]): boolean {
+  try {
+    if (rows.length === 0) {
+      localStorage.removeItem(key);
+      return true;
+    }
+    localStorage.setItem(key, JSON.stringify(rows));
+    return true;
+  } catch (err) {
+    console.error("jobber-pest-logger: could not write quarantine key", key, err);
+    return false;
+  }
+}
+
+function writeBackupQuarantine(q: BackupQuarantine): boolean {
+  return (
+    writeQuarantineKey(LOGS_QUARANTINE_KEY, q.logs) &&
+    writeQuarantineKey(CATALOG_QUARANTINE_KEY, q.catalog) &&
+    writeQuarantineKey(PEOPLE_QUARANTINE_KEY, q.people)
+  );
+}
+
+/**
+ * Validate optional backup.quarantine. Missing ⇒ empty arrays (older backups).
+ * Present ⇒ must be an object whose logs/catalog/people are arrays (raw, not normalized).
+ */
+function parseBackupQuarantine(raw: Record<string, unknown>): 
+  | { ok: true; quarantine: BackupQuarantine }
+  | { ok: false; error: string } {
+  if (!("quarantine" in raw) || raw.quarantine === undefined) {
+    return { ok: true, quarantine: emptyQuarantine() };
+  }
+  if (!isRecord(raw.quarantine)) {
+    return { ok: false, error: "Backup quarantine must be an object." };
+  }
+  const q = raw.quarantine;
+  if (!Array.isArray(q.logs)) {
+    return { ok: false, error: "Backup quarantine logs must be an array." };
+  }
+  if (!Array.isArray(q.catalog)) {
+    return { ok: false, error: "Backup quarantine catalog must be an array." };
+  }
+  if (!Array.isArray(q.people)) {
+    return { ok: false, error: "Backup quarantine people must be an array." };
+  }
+  return {
+    ok: true,
+    quarantine: {
+      logs: q.logs as unknown[],
+      catalog: q.catalog as unknown[],
+      people: q.people as unknown[],
+    },
+  };
 }
 
 export function buildBackup(): DeviceBackup {
@@ -766,6 +889,7 @@ export function buildBackup(): DeviceBackup {
     catalog: loadCatalog(),
     people: loadPeople(),
     settings: loadSettings(),
+    quarantine: loadBackupQuarantine(),
   };
 }
 
@@ -995,6 +1119,8 @@ export function downloadBackup(
   sections?: ShopSections,
   meta?: { fileSuffix: string; provenance: Record<string, unknown> },
 ): void {
+  // Shared-shop pull overrides shop sections only; quarantine stays device-local set-aside.
+  const deviceQuarantine = loadBackupQuarantine();
   const built: DeviceBackup = sections
     ? {
         version: BACKUP_VERSION,
@@ -1003,6 +1129,7 @@ export function downloadBackup(
         catalog: sections.catalog,
         people: sections.people,
         settings: sections.settings,
+        quarantine: deviceQuarantine,
       }
     : buildBackup();
   const backup: DeviceBackup = meta ? { ...built, meta: meta.provenance } : built;
@@ -1131,6 +1258,11 @@ export function parseBackup(raw: unknown): RestoreResult {
 
   const { logs, catalog, people, settings } = sectionsResult.sections;
 
+  const quarantineResult = parseBackupQuarantine(raw);
+  if (!quarantineResult.ok) {
+    return { ok: false, error: quarantineResult.error };
+  }
+
   return {
     ok: true,
     backup: {
@@ -1140,11 +1272,12 @@ export function parseBackup(raw: unknown): RestoreResult {
       catalog,
       people,
       settings,
+      quarantine: quarantineResult.quarantine,
     },
   };
 }
 
-/** Replace all device localStorage keys with validated backup contents. */
+/** Replace all device localStorage keys with validated backup contents (including quarantine). */
 export function applyBackup(backup: DeviceBackup): boolean {
   if (backup.version.trim() !== BACKUP_VERSION) {
     console.error(
@@ -1152,7 +1285,16 @@ export function applyBackup(backup: DeviceBackup): boolean {
     );
     return false;
   }
-  const keys = [LOGS_KEY, CATALOG_KEY, PEOPLE_KEY, SETTINGS_KEY] as const;
+  const quarantine = backup.quarantine ?? emptyQuarantine();
+  const keys = [
+    LOGS_KEY,
+    CATALOG_KEY,
+    PEOPLE_KEY,
+    SETTINGS_KEY,
+    LOGS_QUARANTINE_KEY,
+    CATALOG_QUARANTINE_KEY,
+    PEOPLE_QUARANTINE_KEY,
+  ] as const;
   const snapshot: Record<string, string | null> = {};
   try {
     for (const key of keys) {
@@ -1163,22 +1305,32 @@ export function applyBackup(backup: DeviceBackup): boolean {
     return false;
   }
 
+  const rollback = () => {
+    try {
+      for (const key of keys) {
+        const prev = snapshot[key];
+        if (prev === null) localStorage.removeItem(key);
+        else localStorage.setItem(key, prev);
+      }
+    } catch (err) {
+      console.error("jobber-pest-logger: could not roll back failed backup restore", err);
+    }
+  };
+
   const logsOk = saveLogs(backup.logs);
   const catalogOk = saveCatalog(backup.catalog);
   const peopleOk = savePeople(backup.people);
   const settingsOk = saveSettings(backup.settings);
-  if (logsOk && catalogOk && peopleOk && settingsOk) return true;
-
-  try {
-    for (const key of keys) {
-      const prev = snapshot[key];
-      if (prev === null) localStorage.removeItem(key);
-      else localStorage.setItem(key, prev);
-    }
-  } catch (err) {
-    console.error("jobber-pest-logger: could not roll back failed backup restore", err);
+  if (!(logsOk && catalogOk && peopleOk && settingsOk)) {
+    rollback();
+    return false;
   }
-  return false;
+
+  if (!writeBackupQuarantine(quarantine)) {
+    rollback();
+    return false;
+  }
+  return true;
 }
 
 /** Soft first-run setup steps (not a hard gate on logging). */
