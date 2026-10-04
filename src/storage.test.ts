@@ -397,7 +397,7 @@ describe("upsertLog / deleteLog", () => {
     expect(stored(LOGS_QUARANTINE_KEY)).toEqual([legacy]);
   });
 
-  it("does not duplicate a quarantined log when the same raw id is loaded or saved again", () => {
+  it("keeps two same-id raw logs when content differs and still collapses identical rows", () => {
     const legacy = { id: "legacy-without-termite", note: "first" };
     const sameId = { id: "legacy-without-termite", note: "second" };
     put(LOGS_KEY, [makeLog("A"), legacy, sameId, 42, 42]);
@@ -405,8 +405,8 @@ describe("upsertLog / deleteLog", () => {
     loadLogs();
     upsertLog(makeLog("B"));
     upsertLog(makeLog("C"));
-    // Same string id keeps the first raw row. Rows with no id dedupe by JSON equality.
-    expect(loadLogsQuarantine()).toEqual([legacy, 42]);
+    // Full JSON, not id: different content both stay. Identical 42 collapses to one.
+    expect(loadLogsQuarantine()).toEqual([legacy, sameId, 42]);
     expect((stored(LOGS_KEY) as { id: string }[]).map((l) => l.id)).toEqual(["C", "B", "A"]);
   });
 
@@ -611,12 +611,13 @@ describe("loadCatalog / saveCatalog", () => {
     expect(loadCatalogQuarantine()).toEqual([]);
   });
 
-  it("does not duplicate a quarantined catalog row on a second load", () => {
+  it("keeps two same-id catalog rows when content differs and collapses identical ones", () => {
     const bad = { id: "bad", kind: "spray" };
-    put(CATALOG_KEY, [shopProduct(), bad, { ...bad, name: "again" }]);
+    const sameId = { ...bad, name: "again" };
+    put(CATALOG_KEY, [shopProduct(), bad, bad, sameId]);
     loadCatalog();
     loadCatalog();
-    expect(loadCatalogQuarantine()).toEqual([bad]);
+    expect(loadCatalogQuarantine()).toEqual([bad, sameId]);
   });
 
   it("does not quarantine when the catalog is missing, corrupt, or not an array", () => {
@@ -853,14 +854,15 @@ describe("loadPeople / savePeople", () => {
     expect(loadPeopleQuarantine()).toEqual([]);
   });
 
-  it("does not duplicate a quarantined person on a second load or save", () => {
+  it("keeps two same-id people when content differs and collapses identical ones", () => {
     const bad = { id: "x", name: 1 };
-    put(PEOPLE_KEY, [person(), bad, { id: "x", name: 2 }]);
+    const sameId = { id: "x", name: 2 };
+    put(PEOPLE_KEY, [person(), bad, bad, sameId]);
     loadPeople();
     upsertPerson(person({ id: "p2" }));
     loadPeople();
     upsertPerson(person({ id: "p3" }));
-    expect(loadPeopleQuarantine()).toEqual([bad]);
+    expect(loadPeopleQuarantine()).toEqual([bad, sameId]);
   });
 
   it("dedupes role tags and defaults a missing/null ceDueDate to ''", () => {

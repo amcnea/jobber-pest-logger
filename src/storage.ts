@@ -15,10 +15,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Stable JSON of a raw row. Key order does not matter; id is not a shortcut. */
+function stableStringify(value: unknown): string {
+  const stack = new WeakSet<object>();
+  const encode = (v: unknown): unknown => {
+    if (Array.isArray(v)) {
+      if (stack.has(v)) throw new TypeError("cycle");
+      stack.add(v);
+      const out = v.map(encode);
+      stack.delete(v);
+      return out;
+    }
+    if (isRecord(v)) {
+      if (stack.has(v)) throw new TypeError("cycle");
+      stack.add(v);
+      const out: Record<string, unknown> = {};
+      for (const key of Object.keys(v).sort()) out[key] = encode(v[key]);
+      stack.delete(v);
+      return out;
+    }
+    return v;
+  };
+  return JSON.stringify(encode(value));
+}
+
 function quarantineIdentity(value: unknown): string {
-  if (isRecord(value) && typeof value.id === "string") return `id:${value.id}`;
   try {
-    return `json:${JSON.stringify(value)}`;
+    return `json:${stableStringify(value)}`;
   } catch {
     return "json:unserializable";
   }
@@ -37,8 +60,9 @@ function readQuarantine(key: string): unknown[] {
 }
 
 /**
- * Append raw failed rows to a quarantine key. Dedupe by stable string id when present,
- * otherwise by JSON equality.
+ * Append raw failed rows to a quarantine key. Dedupe by full JSON of the raw row
+ * (stable key order), never by id. Identical rows collapse; same id with different
+ * content both stay.
  * Returns true when every failed row is in the quarantine store afterward (already
  * present counts, and that path does not rewrite). Returns false when setItem throws
  * or a needed row is not retained. Empty failed is success.
