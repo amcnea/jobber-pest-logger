@@ -111,6 +111,10 @@ describe("highlightSegments", () => {
     ]);
   });
 
+  it("highlights a trailing Greek sigma when the whole string lowercases to final sigma", () => {
+    expect(highlightSegments("ΟΣ", "ΟΣ")).toEqual([{ text: "ΟΣ", match: true }]);
+  });
+
   it("handles non-ASCII text whose lowercase keeps the same length", () => {
     const segs = highlightSegments("Peña Pest ÉCOLE", "école");
     expect(marks(segs)).toEqual(["ÉCOLE"]);
