@@ -1342,13 +1342,50 @@ export function parseBackup(raw: unknown): RestoreResult {
   };
 }
 
+export type ApplyBackupResult =
+  | { ok: true }
+  | { ok: false; unrestoredKeys: string[]; message: string };
+
+const RESTORE_STORAGE_LABELS: Record<string, string> = {
+  [LOGS_KEY]: "logs",
+  [CATALOG_KEY]: "catalog",
+  [PEOPLE_KEY]: "people",
+  [SETTINGS_KEY]: "settings",
+  [LOGS_QUARANTINE_KEY]: "set-aside logs",
+  [CATALOG_QUARANTINE_KEY]: "set-aside catalog",
+  [PEOPLE_QUARANTINE_KEY]: "set-aside people",
+};
+
+function restoreFailureMessage(unrestoredKeys: readonly string[]): string {
+  const keep = "Keep the backup file.";
+  if (unrestoredKeys.length === 0) {
+    return `Could not finish restoring this backup. Earlier rows on this device were left in place. ${keep}`;
+  }
+  const names = unrestoredKeys.map((id) => RESTORE_STORAGE_LABELS[id] ?? id);
+  return (
+    `Could not restore previous ${names.join(", ")}. ` +
+    `Those rows were left as they were instead of being cleared. ${keep}`
+  );
+}
+
+function applyBackupFailed(unrestoredKeys: string[], message?: string): ApplyBackupResult {
+  return {
+    ok: false,
+    unrestoredKeys,
+    message: message ?? restoreFailureMessage(unrestoredKeys),
+  };
+}
+
 /** Replace all device localStorage keys with validated backup contents (including quarantine). */
-export function applyBackup(backup: DeviceBackup): boolean {
+export function applyBackup(backup: DeviceBackup): ApplyBackupResult {
   if (backup.version.trim() !== BACKUP_VERSION) {
     console.error(
       `jobber-pest-logger: applyBackup rejected unsupported version "${backup.version.trim()}" (expected ${BACKUP_VERSION})`,
     );
-    return false;
+    return applyBackupFailed(
+      [],
+      "Unsupported backup version. Nothing on this device was changed. Keep the backup file.",
+    );
   }
   const quarantine = backup.quarantine ?? emptyQuarantine();
   const keys = [
@@ -1367,32 +1404,119 @@ export function applyBackup(backup: DeviceBackup): boolean {
     }
   } catch (err) {
     console.error("jobber-pest-logger: could not snapshot storage before backup restore", err);
-    return false;
+    return applyBackupFailed(
+      [],
+      "Could not read this device before restore, so nothing was replaced. Keep the backup file.",
+    );
   }
 
-  const rollback = () => {
-    // Free incoming values first so a smaller prior payload can fit under quota.
-    for (const key of keys) {
-      try {
-        localStorage.removeItem(key);
-      } catch (err) {
-        console.error(
-          "jobber-pest-logger: could not free incoming backup value before rollback",
-          key,
-          err,
-        );
-      }
+  const matchesPrior = (storageId: string): boolean => {
+    try {
+      return localStorage.getItem(storageId) === snapshot[storageId];
+    } catch (err) {
+      console.error("jobber-pest-logger: could not read storage during restore rollback", err);
+      return false;
     }
-    for (const key of keys) {
-      const prev = snapshot[key];
-      try {
-        if (prev === null) localStorage.removeItem(key);
-        else localStorage.setItem(key, prev);
-      } catch (err) {
-        // One key must not abandon the rest of the snapshot, including quarantine.
-        console.error("jobber-pest-logger: could not roll back failed backup restore", key, err);
-      }
+  };
+
+  const readIncoming = (storageId: string): string | null => {
+    try {
+      return localStorage.getItem(storageId);
+    } catch (err) {
+      console.error("jobber-pest-logger: could not read storage during restore rollback", err);
+      // Unknown current value. Do not delete it later.
+      return snapshot[storageId];
     }
+  };
+
+  /** Incoming string is strictly longer, or a missing snapshot still has a stored value. */
+  const incomingNeedsRoom = (incoming: string | null, prev: string | null): boolean => {
+    if (incoming === null) return false;
+    if (prev === null) return true;
+    return incoming.length > prev.length;
+  };
+
+  const putIncomingBack = (storageId: string, incoming: string | null) => {
+    if (incoming === null) return;
+    try {
+      if (localStorage.getItem(storageId) === incoming) return;
+      localStorage.setItem(storageId, incoming);
+    } catch (err) {
+      console.error("jobber-pest-logger: could not put the backup value back after a failed rollback", err);
+    }
+  };
+
+  /**
+   * Write the snapshot back without deleting a stored value first.
+   * Removing is allowed only when the snapshot itself is absent.
+   */
+  const writePriorInPlace = (storageId: string): boolean => {
+    const prev = snapshot[storageId];
+    try {
+      if (prev === null) localStorage.removeItem(storageId);
+      else localStorage.setItem(storageId, prev);
+    } catch (err) {
+      console.error("jobber-pest-logger: could not roll back failed backup restore", err);
+    }
+    return matchesPrior(storageId);
+  };
+
+  const rollback = (): string[] => {
+    const incoming: Record<string, string | null> = {};
+    for (const storageId of keys) incoming[storageId] = readIncoming(storageId);
+
+    const restored = new Set<string>();
+
+    // 1. Overwrite in place. A failed write leaves the current value untouched.
+    for (const storageId of keys) {
+      if (writePriorInPlace(storageId)) restored.add(storageId);
+    }
+
+    // 2. Free an incoming value only when it is larger than the snapshot, then
+    // write the snapshot immediately. If that still fails, put the incoming
+    // value back before moving on. Never leave the slot empty.
+    for (const storageId of keys) {
+      if (restored.has(storageId)) continue;
+      const prev = snapshot[storageId];
+      const current = incoming[storageId];
+      if (!incomingNeedsRoom(current, prev)) continue;
+      let removed = false;
+      try {
+        localStorage.removeItem(storageId);
+        removed = true;
+      } catch (err) {
+        console.error("jobber-pest-logger: could not free a larger backup value before rollback", err);
+      }
+      try {
+        if (prev === null) localStorage.removeItem(storageId);
+        else localStorage.setItem(storageId, prev);
+      } catch (err) {
+        console.error("jobber-pest-logger: could not roll back failed backup restore", err);
+      }
+      if (matchesPrior(storageId)) {
+        restored.add(storageId);
+        continue;
+      }
+      if (removed) putIncomingBack(storageId, current);
+    }
+
+    // 3. Retry in place. Other slots may now hold their smaller snapshots.
+    for (const storageId of keys) {
+      if (restored.has(storageId)) continue;
+      if (writePriorInPlace(storageId)) restored.add(storageId);
+    }
+
+    const unrestored: string[] = [];
+    for (const storageId of keys) {
+      if (restored.has(storageId) || matchesPrior(storageId)) continue;
+      try {
+        if (localStorage.getItem(storageId) === null) putIncomingBack(storageId, incoming[storageId]);
+      } catch (err) {
+        console.error("jobber-pest-logger: could not put the backup value back after a failed rollback", err);
+      }
+      if (!matchesPrior(storageId)) unrestored.push(storageId);
+    }
+    return unrestored;
   };
 
   const logsOk = saveLogs(backup.logs);
@@ -1400,15 +1524,13 @@ export function applyBackup(backup: DeviceBackup): boolean {
   const peopleOk = savePeople(backup.people);
   const settingsOk = saveSettings(backup.settings);
   if (!(logsOk && catalogOk && peopleOk && settingsOk)) {
-    rollback();
-    return false;
+    return applyBackupFailed(rollback());
   }
 
   if (!writeBackupQuarantine(quarantine)) {
-    rollback();
-    return false;
+    return applyBackupFailed(rollback());
   }
-  return true;
+  return { ok: true };
 }
 
 /** Soft first-run setup steps (not a hard gate on logging). */

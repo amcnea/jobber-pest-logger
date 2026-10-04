@@ -311,8 +311,8 @@ export function Settings({
     }
 
     const applied = applyBackup(result.backup);
-    if (!applied) {
-      setBackupError("Could not write restored data (storage full or blocked).");
+    if (!applied.ok) {
+      setBackupError(applied.message);
       return;
     }
 

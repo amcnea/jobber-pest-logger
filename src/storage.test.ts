@@ -1568,7 +1568,7 @@ describe("applyBackup", () => {
     saveLogs([makeLog("OLD")]);
     saveCatalog([shopProduct({ id: "old-prod" })]);
     savePeople([person({ id: "old-p" })]);
-    expect(applyBackup(backup())).toBe(true);
+    expect(applyBackup(backup()).ok).toBe(true);
     expect(ids(loadLogs())).toEqual(["NEW"]);
     expect(ids(loadCatalog())).toEqual(["new-prod"]);
     expect(ids(loadPeople())).toEqual(["new-p"]);
@@ -1584,12 +1584,12 @@ describe("applyBackup", () => {
       catalog: [{ id: "from-backup-cat" }],
       people: [{ id: "from-backup-person" }],
     };
-    expect(applyBackup(backup({ quarantine: incoming }))).toBe(true);
+    expect(applyBackup(backup({ quarantine: incoming })).ok).toBe(true);
     expect(loadLogsQuarantine()).toEqual(incoming.logs);
     expect(loadCatalogQuarantine()).toEqual(incoming.catalog);
     expect(loadPeopleQuarantine()).toEqual(incoming.people);
 
-    expect(applyBackup(backup())).toBe(true);
+    expect(applyBackup(backup()).ok).toBe(true);
     expect(loadLogsQuarantine()).toEqual([]);
     expect(loadCatalogQuarantine()).toEqual([]);
     expect(loadPeopleQuarantine()).toEqual([]);
@@ -1607,7 +1607,7 @@ describe("applyBackup", () => {
         backup({
           quarantine: { logs: [{ id: "new-q" }], catalog: [], people: [] },
         }),
-      ),
+      ).ok,
     ).toBe(false);
     expect(storage.map).toEqual(before);
     expect(loadLogsQuarantine()).toEqual([prior]);
@@ -1623,7 +1623,7 @@ describe("applyBackup", () => {
         backup({
           quarantine: { logs: [{ id: "new-q" }], catalog: [], people: [] },
         }),
-      ),
+      ).ok,
     ).toBe(false);
     expect(storage.map).toEqual(before);
     expect(ids(loadLogs())).toEqual(["OLD"]);
@@ -1644,7 +1644,7 @@ describe("applyBackup", () => {
     const parsed = parseBackup(JSON.parse(JSON.stringify(validBackup())));
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
-    expect(applyBackup(parsed.backup)).toBe(true);
+    expect(applyBackup(parsed.backup).ok).toBe(true);
     expect(loadLogs()).toEqual([makeLog("L1")]);
     expect(loadCatalog()).toEqual([shopProduct()]);
     expect(loadPeople()).toEqual([person()]);
@@ -1652,14 +1652,14 @@ describe("applyBackup", () => {
   });
 
   it("rejects an unsupported version without writing", () => {
-    expect(applyBackup(backup({ version: "0.9" }))).toBe(false);
+    expect(applyBackup(backup({ version: "0.9" })).ok).toBe(false);
     expect(storage.map.size).toBe(0);
-    expect(applyBackup(backup({ version: ` ${BACKUP_VERSION} ` }))).toBe(true);
+    expect(applyBackup(backup({ version: ` ${BACKUP_VERSION} ` })).ok).toBe(true);
   });
 
   it("returns false without writing when the snapshot read fails", () => {
     storage.failGet = true;
-    expect(applyBackup(backup())).toBe(false);
+    expect(applyBackup(backup()).ok).toBe(false);
     expect(storage.map.size).toBe(0);
   });
 
@@ -1669,7 +1669,7 @@ describe("applyBackup", () => {
       saveCatalog([shopProduct({ id: "old-prod" })]);
       const before = new Map(storage.map);
       storage.failOnceKeys.add(key);
-      expect(applyBackup(backup())).toBe(false);
+      expect(applyBackup(backup()).ok).toBe(false);
       expect(storage.map).toEqual(before);
     });
   }
@@ -1677,7 +1677,7 @@ describe("applyBackup", () => {
   it("returns false even when the rollback also fails", () => {
     saveLogs([makeLog("OLD")]);
     storage.failSet = true;
-    expect(applyBackup(backup())).toBe(false);
+    expect(applyBackup(backup()).ok).toBe(false);
   });
 
   it("restores the other snapshot keys when one rollback write keeps failing", () => {
@@ -1688,18 +1688,22 @@ describe("applyBackup", () => {
     const prior = { id: "prior-q" };
     put(LOGS_QUARANTINE_KEY, [prior]);
     storage.failSetKeys.add(SETTINGS_KEY);
-    expect(
-      applyBackup(
-        backup({
-          quarantine: { logs: [{ id: "new-q" }], catalog: [], people: [] },
-        }),
-      ),
-    ).toBe(false);
+    const result = applyBackup(
+      backup({
+        quarantine: { logs: [{ id: "new-q" }], catalog: [], people: [] },
+      }),
+    );
+    expect(result.ok).toBe(false);
     expect(stored(LOGS_KEY)).toEqual([makeLog("OLD")]);
     expect(stored(CATALOG_KEY)).toEqual([shopProduct({ id: "old-prod" })]);
     expect(stored(PEOPLE_KEY)).toEqual([person({ id: "old-p" })]);
     expect(loadLogsQuarantine()).toEqual([prior]);
-    expect(storage.getItem(SETTINGS_KEY)).toBeNull();
+    expect(stored(SETTINGS_KEY)).toEqual(SETTINGS);
+    if (!result.ok) {
+      expect(result.unrestoredKeys).not.toContain(SETTINGS_KEY);
+      expect(result.message).toContain("Keep the backup file.");
+      expect(result.message.toLowerCase()).not.toContain("storage full");
+    }
     expect(loadCatalogQuarantine()).toEqual([]);
     expect(loadPeopleQuarantine()).toEqual([]);
   });
@@ -1722,12 +1726,61 @@ describe("applyBackup", () => {
           catalog: [shopProduct({ id: "incoming-huge" })],
           quarantine: { logs: [{ id: "new-q" }], catalog: [], people: [] },
         }),
-      ),
+      ).ok,
     ).toBe(false);
     expect(stored(LOGS_KEY)).toEqual([makeLog("OLD")]);
     expect(stored(CATALOG_KEY)).toEqual([shopProduct({ id: "old-prod" })]);
     expect(loadLogsQuarantine()).toEqual([{ id: "prior-q" }]);
     expect(loadSettings()).toEqual(emptySettings());
+  });
+
+  it("puts a larger logs value back when the previous logs cannot be written", () => {
+    saveLogs([makeLog("OLD")]);
+    const priorRaw = storage.getItem(LOGS_KEY)!;
+    const incomingLog = makeLog("NEW", { poleLocation: "x".repeat(4000) });
+    const origSet = storage.setItem.bind(storage);
+    storage.setItem = (k: string, v: string) => {
+      if (k === LOGS_KEY && v === priorRaw) throw new Error("QuotaExceededError");
+      origSet(k, v);
+    };
+    storage.failOnceKeys.add(SETTINGS_KEY);
+    const result = applyBackup(backup({ logs: [incomingLog] }));
+    expect(result.ok).toBe(false);
+    expect(storage.getItem(LOGS_KEY)).not.toBeNull();
+    expect(stored(LOGS_KEY)).toEqual([incomingLog]);
+    if (!result.ok) {
+      expect(result.unrestoredKeys).toEqual([LOGS_KEY]);
+      expect(result.message).toContain("logs");
+      expect(result.message).toContain("Keep the backup file.");
+      expect(result.message.toLowerCase()).not.toContain("storage full");
+    }
+  });
+
+  it("puts a larger set-aside logs value back when the previous rows cannot be written", () => {
+    const prior = { id: "prior-q" };
+    put(LOGS_QUARANTINE_KEY, [prior]);
+    const priorRaw = storage.getItem(LOGS_QUARANTINE_KEY)!;
+    const huge = { id: "from-backup", note: "y".repeat(4000) };
+    const origSet = storage.setItem.bind(storage);
+    storage.setItem = (k: string, v: string) => {
+      if (k === LOGS_QUARANTINE_KEY && v === priorRaw) throw new Error("QuotaExceededError");
+      origSet(k, v);
+    };
+    storage.failOnceKeys.add(CATALOG_QUARANTINE_KEY);
+    const result = applyBackup(
+      backup({
+        quarantine: { logs: [huge], catalog: [{ id: "cat-q" }], people: [] },
+      }),
+    );
+    expect(result.ok).toBe(false);
+    expect(storage.getItem(LOGS_QUARANTINE_KEY)).not.toBeNull();
+    expect(loadLogsQuarantine()).toEqual([huge]);
+    if (!result.ok) {
+      expect(result.unrestoredKeys).toContain(LOGS_QUARANTINE_KEY);
+      expect(result.message).toContain("set-aside logs");
+      expect(result.message).toContain("Keep the backup file.");
+      expect(result.message.toLowerCase()).not.toContain("storage full");
+    }
   });
 });
 
