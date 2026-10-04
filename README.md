@@ -137,13 +137,79 @@ Not TDA-required and not marked required: weather, time of day (except termite p
 
 Public URL: https://amcnea.github.io/jobber-pest-logger/
 
-Deploy is via GitHub Actions on `main` (workflow `.github/workflows/pages.yml`). Push to `main` or run **workflow_dispatch** to rebuild and publish. Vite `base` is `/jobber-pest-logger/` for project Pages.
+That URL is **GitHub Pages** only (static Vite `dist`). See **Production deploy** below. There is no Firebase Hosting site in this repo.
+
+## Production deploy
+
+What this repo actually ships:
+
+| Piece | Where | How it goes out |
+| --- | --- | --- |
+| Static app | GitHub Pages | `.github/workflows/pages.yml` on push to `main`, or **workflow_dispatch** |
+| Firestore rules | Firebase (rules only) | Owner runs the Firebase CLI. Not CI. |
+| Cloud Functions | Firebase (`functions/`) | Owner runs the Firebase CLI. Not CI. |
+
+**Not in this repo:** Firebase Hosting, a second static host, or an Actions job that deploys Firebase. `.github/workflows/functions.yml` typechecks and tests `functions/` on pull requests. It does not deploy.
+
+### GitHub Pages (static host)
+
+- Workflow: `.github/workflows/pages.yml` (checkout, Node 22, `npm ci`, `npm run build`, upload `dist`, `actions/deploy-pages`).
+- Vite `base` in `vite.config.ts` is `/jobber-pest-logger/` so asset URLs match the project site.
+- Pages environment name in the workflow: `github-pages`.
+- A push to `main` publishes the static app. Firebase env vars are **not** set in that workflow, so the hosted demo stays **local-only** unless a build is given the `.env.example` names another way. Do not put secrets in the repo.
+
+### Firebase (rules + functions, not Hosting)
+
+`firebase.json` points at `firestore.rules` and `functions/` only. There is no `hosting` block. There is no `.firebaserc` in the repo; the owner targets their own Firebase project.
+
+From the repo root, after `npm --prefix functions ci` (the predeploy hook also builds functions):
+
+```sh
+firebase deploy --only functions
+firebase deploy --only firestore:rules
+```
+
+Deploy **functions** before relying on server-side PIN verify. Deploy **rules** from the in-repo `firestore.rules` file when membership enforcement should match what is committed. Do not invent extra rule changes in the same step.
+
+### cf3 / rules lockdown stays off
+
+**cf3 / the rules lockdown stays off until am deploys and flips the flag.**
+
+- Backlog item 3 (`docs/BACKLOG.md`) is the lockdown: deny direct client writes to `members` and `ownerUid` so only Cloud Functions own those fields. That change is **not** in `firestore.rules` today. Join-self and legacy PIN bootstrap remain allowed.
+- The client flag is `VITE_SHOP_PIN_FUNCTIONS` (see `.env.example`). Leave it **unset** (not `1`) until am has deployed `functions/` and flips it. With the flag off, the app keeps the client PIN path. CI and the Pages workflow do not set it.
+- Do not turn the lockdown on from this docs change, and do not treat a rules deploy as permission to deny `members` / `ownerUid` writes before am says so.
+
+Cloud sync is still not the § 7.144 two-year premises retention path. Export and JSON backup stay the retention copy.
 
 ## Run
 
 See package.json scripts. Install dependencies, then start the Vite "dev" script. Open the local URL it prints.
 
 Production: "build" then "preview". Requires Node ^20.19 or Node >=22.12 (Vite 7). Data stays in the browser; nothing is uploaded.
+
+## Local Docker
+
+Same Vite dev server as `npm run dev` (Node 22 image; engines are `^20.19.0 || >=22.12.0`). Not the Pages build and not a production host.
+
+**Local-only (default).** Firebase is unset. Compose does not pass `VITE_FIREBASE_*` or `VITE_SHOP_PIN_FUNCTIONS`. Do not fill a `.env` / `.env.local` in this directory if you want that default — Vite reads those files the same way it does for `npm run dev`.
+
+```sh
+docker compose up --build
+```
+
+Open http://localhost:5173/jobber-pest-logger/ (Vite `base` is `/jobber-pest-logger/` even in dev). The app directory is bind-mounted so edits reload. `node_modules` stays in a Compose volume from the image (`npm ci`), not the host tree.
+
+Stop with `docker compose down`. If dependencies change, recreate the modules volume: `docker compose down -v` and `docker compose up --build`.
+
+**Shared-shop mode (optional).** Use the same names as `.env.example` — do not invent new ones:
+
+- `VITE_FIREBASE_API_KEY`
+- `VITE_FIREBASE_AUTH_DOMAIN`
+- `VITE_FIREBASE_PROJECT_ID`
+- `VITE_FIREBASE_APP_ID`
+- `VITE_SHOP_PIN_FUNCTIONS` (leave empty unless am has deployed functions and flipped the flag)
+
+Copy `.env.example` to `.env.local` (gitignored), fill those names, and uncomment `env_file: .env.local` in `docker-compose.yml`. Restart Compose. If any required Firebase key is missing, the app stays local-only, same as a normal dev run. Do not commit real values. `VITE_SHOP_PIN_FUNCTIONS` stays off until am deploys and flips it (see **cf3 / rules lockdown** under Production deploy).
 
 ## Shared shop store + session PIN / role + Auth/membership (#3–#5)
 
