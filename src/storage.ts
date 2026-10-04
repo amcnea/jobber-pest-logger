@@ -1419,38 +1419,13 @@ export function applyBackup(backup: DeviceBackup): ApplyBackupResult {
     }
   };
 
-  const readIncoming = (storageId: string): string | null => {
-    try {
-      return localStorage.getItem(storageId);
-    } catch (err) {
-      console.error("jobber-pest-logger: could not read storage during restore rollback", err);
-      // Unknown current value. Do not delete it later.
-      return snapshot[storageId];
-    }
-  };
-
-  /** Incoming string is strictly longer, or a missing snapshot still has a stored value. */
-  const incomingNeedsRoom = (incoming: string | null, prev: string | null): boolean => {
-    if (incoming === null) return false;
-    if (prev === null) return true;
-    return incoming.length > prev.length;
-  };
-
-  const putIncomingBack = (storageId: string, incoming: string | null) => {
-    if (incoming === null) return;
-    try {
-      if (localStorage.getItem(storageId) === incoming) return;
-      localStorage.setItem(storageId, incoming);
-    } catch (err) {
-      console.error("jobber-pest-logger: could not put the backup value back after a failed rollback", err);
-    }
-  };
-
   /**
-   * Write the snapshot back without deleting a stored value first.
-   * Removing is allowed only when the snapshot itself is absent.
+   * Write the snapshot back in place. removeItem is allowed only when the
+   * snapshot itself had no value. A key that already holds rows is never
+   * deleted to make room, and a failed setItem leaves that key unchanged.
    */
   const writePriorInPlace = (storageId: string): boolean => {
+    if (matchesPrior(storageId)) return true;
     const prev = snapshot[storageId];
     try {
       if (prev === null) localStorage.removeItem(storageId);
@@ -1462,58 +1437,14 @@ export function applyBackup(backup: DeviceBackup): ApplyBackupResult {
   };
 
   const rollback = (): string[] => {
-    const incoming: Record<string, string | null> = {};
-    for (const storageId of keys) incoming[storageId] = readIncoming(storageId);
-
-    const restored = new Set<string>();
-
-    // 1. Overwrite in place. A failed write leaves the current value untouched.
-    for (const storageId of keys) {
-      if (writePriorInPlace(storageId)) restored.add(storageId);
+    // Second pass is still in-place. A prior write can succeed after a
+    // neighbor has been written back to a smaller snapshot. It does not
+    // remove a key, and it does not put an incoming backup value back.
+    for (let pass = 0; pass < 2; pass += 1) {
+      for (const storageId of keys) writePriorInPlace(storageId);
     }
-
-    // 2. Free an incoming value only when it is larger than the snapshot, then
-    // write the snapshot immediately. If that still fails, put the incoming
-    // value back before moving on. Never leave the slot empty.
-    for (const storageId of keys) {
-      if (restored.has(storageId)) continue;
-      const prev = snapshot[storageId];
-      const current = incoming[storageId];
-      if (!incomingNeedsRoom(current, prev)) continue;
-      let removed = false;
-      try {
-        localStorage.removeItem(storageId);
-        removed = true;
-      } catch (err) {
-        console.error("jobber-pest-logger: could not free a larger backup value before rollback", err);
-      }
-      try {
-        if (prev === null) localStorage.removeItem(storageId);
-        else localStorage.setItem(storageId, prev);
-      } catch (err) {
-        console.error("jobber-pest-logger: could not roll back failed backup restore", err);
-      }
-      if (matchesPrior(storageId)) {
-        restored.add(storageId);
-        continue;
-      }
-      if (removed) putIncomingBack(storageId, current);
-    }
-
-    // 3. Retry in place. Other slots may now hold their smaller snapshots.
-    for (const storageId of keys) {
-      if (restored.has(storageId)) continue;
-      if (writePriorInPlace(storageId)) restored.add(storageId);
-    }
-
     const unrestored: string[] = [];
     for (const storageId of keys) {
-      if (restored.has(storageId) || matchesPrior(storageId)) continue;
-      try {
-        if (localStorage.getItem(storageId) === null) putIncomingBack(storageId, incoming[storageId]);
-      } catch (err) {
-        console.error("jobber-pest-logger: could not put the backup value back after a failed rollback", err);
-      }
       if (!matchesPrior(storageId)) unrestored.push(storageId);
     }
     return unrestored;

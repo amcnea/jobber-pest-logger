@@ -1708,63 +1708,141 @@ describe("applyBackup", () => {
     expect(loadPeopleQuarantine()).toEqual([]);
   });
 
-  it("frees incoming values before rollback so a smaller prior log can be restored", () => {
+  it("restores a smaller prior log in place after a larger neighbor is written back", () => {
     saveLogs([makeLog("OLD")]);
     saveCatalog([shopProduct({ id: "old-prod" })]);
+    saveSettings(SETTINGS);
     put(LOGS_QUARANTINE_KEY, [{ id: "prior-q" }]);
+    const priorLogs = storage.getItem(LOGS_KEY)!;
+    const events: { op: "set" | "remove"; k: string; v?: string }[] = [];
     const origSet = storage.setItem.bind(storage);
+    const origRemove = storage.removeItem.bind(storage);
     storage.setItem = (k: string, v: string) => {
+      events.push({ op: "set", k, v });
       if (k === LOGS_KEY && storage.map.get(CATALOG_KEY)?.includes("incoming-huge")) {
         throw new Error("QuotaExceededError");
       }
       origSet(k, v);
     };
+    storage.removeItem = (k: string) => {
+      events.push({ op: "remove", k });
+      origRemove(k);
+    };
     storage.failOnceKeys.add(SETTINGS_KEY);
-    expect(
-      applyBackup(
-        backup({
-          catalog: [shopProduct({ id: "incoming-huge" })],
-          quarantine: { logs: [{ id: "new-q" }], catalog: [], people: [] },
-        }),
-      ).ok,
-    ).toBe(false);
+    const result = applyBackup(
+      backup({
+        catalog: [shopProduct({ id: "incoming-huge" })],
+        quarantine: { logs: [{ id: "new-q" }], catalog: [], people: [] },
+      }),
+    );
+    expect(result.ok).toBe(false);
     expect(stored(LOGS_KEY)).toEqual([makeLog("OLD")]);
     expect(stored(CATALOG_KEY)).toEqual([shopProduct({ id: "old-prod" })]);
     expect(loadLogsQuarantine()).toEqual([{ id: "prior-q" }]);
-    expect(loadSettings()).toEqual(emptySettings());
+    expect(stored(SETTINGS_KEY)).toEqual(SETTINGS);
+    const priorSet = events.findIndex((e) => e.op === "set" && e.k === LOGS_KEY && e.v === priorLogs);
+    expect(priorSet).toBeGreaterThanOrEqual(0);
+    expect(events.slice(0, priorSet).some((e) => e.op === "remove" && e.k === LOGS_KEY)).toBe(false);
+    for (const key of [LOGS_KEY, CATALOG_KEY, SETTINGS_KEY, LOGS_QUARANTINE_KEY]) {
+      expect(events.some((e) => e.op === "remove" && e.k === key)).toBe(false);
+    }
   });
 
-  it("puts a larger logs value back when the previous logs cannot be written", () => {
-    saveLogs([makeLog("OLD")]);
-    const priorRaw = storage.getItem(LOGS_KEY)!;
-    const incomingLog = makeLog("NEW", { poleLocation: "x".repeat(4000) });
+  it("restores a large logs prior in place without removeItem first", () => {
+    const priorLog = makeLog("OLD", { poleLocation: "p".repeat(4000) });
+    saveLogs([priorLog]);
+    saveCatalog([shopProduct({ id: "old-prod" })]);
+    saveSettings(SETTINGS);
+    put(LOGS_QUARANTINE_KEY, [{ id: "prior-q", note: "q".repeat(2000) }]);
+    const priorLogsRaw = storage.getItem(LOGS_KEY)!;
+    const priorQuarantineRaw = storage.getItem(LOGS_QUARANTINE_KEY)!;
+    const events: { op: "set" | "remove"; k: string; v?: string }[] = [];
     const origSet = storage.setItem.bind(storage);
+    const origRemove = storage.removeItem.bind(storage);
     storage.setItem = (k: string, v: string) => {
-      if (k === LOGS_KEY && v === priorRaw) throw new Error("QuotaExceededError");
+      events.push({ op: "set", k, v });
       origSet(k, v);
     };
-    storage.failOnceKeys.add(SETTINGS_KEY);
-    const result = applyBackup(backup({ logs: [incomingLog] }));
+    storage.removeItem = (k: string) => {
+      events.push({ op: "remove", k });
+      origRemove(k);
+    };
+    storage.failOnceKeys.add(CATALOG_QUARANTINE_KEY);
+    const result = applyBackup(
+      backup({
+        logs: [makeLog("NEW")],
+        quarantine: { logs: [{ id: "new-q" }], catalog: [{ id: "cat-q" }], people: [] },
+      }),
+    );
     expect(result.ok).toBe(false);
-    expect(storage.getItem(LOGS_KEY)).not.toBeNull();
-    expect(stored(LOGS_KEY)).toEqual([incomingLog]);
+    expect(storage.getItem(LOGS_KEY)).toBe(priorLogsRaw);
+    expect(storage.getItem(LOGS_QUARANTINE_KEY)).toBe(priorQuarantineRaw);
+    expect(stored(SETTINGS_KEY)).toEqual(SETTINGS);
+    for (const [key, priorRaw] of [
+      [LOGS_KEY, priorLogsRaw],
+      [LOGS_QUARANTINE_KEY, priorQuarantineRaw],
+    ] as const) {
+      const priorWrite = events.findIndex((e) => e.op === "set" && e.k === key && e.v === priorRaw);
+      expect(priorWrite).toBeGreaterThanOrEqual(0);
+      expect(events.slice(0, priorWrite).some((e) => e.op === "remove" && e.k === key)).toBe(false);
+      expect(events.some((e) => e.op === "remove" && e.k === key)).toBe(false);
+    }
+    expect(events.some((e) => e.op === "remove" && e.k === SETTINGS_KEY)).toBe(false);
     if (!result.ok) {
-      expect(result.unrestoredKeys).toEqual([LOGS_KEY]);
-      expect(result.message).toContain("logs");
+      expect(result.unrestoredKeys).not.toContain(LOGS_KEY);
+      expect(result.unrestoredKeys).not.toContain(LOGS_QUARANTINE_KEY);
       expect(result.message).toContain("Keep the backup file.");
       expect(result.message.toLowerCase()).not.toContain("storage full");
     }
   });
 
-  it("puts a larger set-aside logs value back when the previous rows cannot be written", () => {
+  it("leaves a large logs key as written when the prior cannot be stored", () => {
+    saveLogs([makeLog("OLD")]);
+    saveSettings(SETTINGS);
+    const priorRaw = storage.getItem(LOGS_KEY)!;
+    const incomingLog = makeLog("NEW", { poleLocation: "x".repeat(4000) });
+    const removed: string[] = [];
+    const origSet = storage.setItem.bind(storage);
+    const origRemove = storage.removeItem.bind(storage);
+    storage.setItem = (k: string, v: string) => {
+      if (k === LOGS_KEY && v === priorRaw) throw new Error("QuotaExceededError");
+      origSet(k, v);
+    };
+    storage.removeItem = (k: string) => {
+      removed.push(k);
+      origRemove(k);
+    };
+    storage.failOnceKeys.add(SETTINGS_KEY);
+    const result = applyBackup(backup({ logs: [incomingLog] }));
+    expect(result.ok).toBe(false);
+    expect(removed).not.toContain(LOGS_KEY);
+    expect(storage.getItem(LOGS_KEY)).not.toBeNull();
+    expect(stored(LOGS_KEY)).toEqual([incomingLog]);
+    expect(stored(SETTINGS_KEY)).toEqual(SETTINGS);
+    if (!result.ok) {
+      expect(result.unrestoredKeys).toEqual([LOGS_KEY]);
+      expect(result.message).toContain("logs");
+      expect(result.message).toContain("left as they were");
+      expect(result.message).toContain("Keep the backup file.");
+      expect(result.message.toLowerCase()).not.toContain("storage full");
+    }
+  });
+
+  it("leaves set-aside logs in place when the prior rows cannot be written", () => {
     const prior = { id: "prior-q" };
     put(LOGS_QUARANTINE_KEY, [prior]);
     const priorRaw = storage.getItem(LOGS_QUARANTINE_KEY)!;
     const huge = { id: "from-backup", note: "y".repeat(4000) };
+    const removed: string[] = [];
     const origSet = storage.setItem.bind(storage);
+    const origRemove = storage.removeItem.bind(storage);
     storage.setItem = (k: string, v: string) => {
       if (k === LOGS_QUARANTINE_KEY && v === priorRaw) throw new Error("QuotaExceededError");
       origSet(k, v);
+    };
+    storage.removeItem = (k: string) => {
+      removed.push(k);
+      origRemove(k);
     };
     storage.failOnceKeys.add(CATALOG_QUARANTINE_KEY);
     const result = applyBackup(
@@ -1773,11 +1851,13 @@ describe("applyBackup", () => {
       }),
     );
     expect(result.ok).toBe(false);
+    expect(removed).not.toContain(LOGS_QUARANTINE_KEY);
     expect(storage.getItem(LOGS_QUARANTINE_KEY)).not.toBeNull();
     expect(loadLogsQuarantine()).toEqual([huge]);
     if (!result.ok) {
       expect(result.unrestoredKeys).toContain(LOGS_QUARANTINE_KEY);
       expect(result.message).toContain("set-aside logs");
+      expect(result.message).toContain("left as they were");
       expect(result.message).toContain("Keep the backup file.");
       expect(result.message.toLowerCase()).not.toContain("storage full");
     }
