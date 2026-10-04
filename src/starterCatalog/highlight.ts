@@ -6,24 +6,26 @@ export interface HighlightSegment {
 
 /**
  * Build a lowercased form of `text` together with a map from each lowercased index back to the
- * original string. Some code points expand when lowercased (e.g. "İ" U+0130 → "i̇", 2 UTF-16
- * units), so indices into `text.toLowerCase()` cannot be used to slice `text` directly.
+ * original string. `lower` is one `text.toLowerCase()`, so it matches the query's lowercase,
+ * including Greek final sigma (a trailing Σ becomes ς, not σ). Some code points also expand
+ * (e.g. "İ" U+0130 → "i̇", 2 UTF-16 units), so indices into `lower` cannot slice `text` directly.
  *
  * `toOrig[i]` is the start index in `text` of the code point that produced `lower[i]`.
  * `toOrig[lower.length]` is `text.length`, so a half-open range `[a, b)` in lower space maps to
  * `[toOrig[a], toOrig[b])` in the original when `b` lands on a code-point boundary.
  */
 function lowerWithOrigMap(text: string): { lower: string; toOrig: number[] } {
-  let lower = "";
+  const lower = text.toLowerCase();
   const toOrig: number[] = [];
+  let prevLowerLen = 0;
   for (let i = 0; i < text.length; ) {
     const cp = text.codePointAt(i)!;
     const len = cp > 0xffff ? 2 : 1;
-    const lowerPiece = text.slice(i, i + len).toLowerCase();
-    for (let k = 0; k < lowerPiece.length; k++) {
-      toOrig.push(i);
-      lower += lowerPiece[k]!;
-    }
+    // Prefix length matches this code point's end in `lower`. Final sigma changes the character
+    // but not the length, so the boundary still lines up with the single whole-string lowercase.
+    const nextLowerLen = text.slice(0, i + len).toLowerCase().length;
+    for (let k = prevLowerLen; k < nextLowerLen; k++) toOrig.push(i);
+    prevLowerLen = nextLowerLen;
     i += len;
   }
   toOrig.push(text.length);
