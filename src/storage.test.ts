@@ -23,10 +23,16 @@ import {
   getFirstRunSteps,
   groupLogsByServiceAddress,
   loadA2hsTipDismissed,
+  CATALOG_QUARANTINE_KEY,
   loadCatalog,
+  loadCatalogQuarantine,
   loadLastBackupAt,
   loadLogs,
+  loadLogsQuarantine,
   loadPeople,
+  loadPeopleQuarantine,
+  LOGS_QUARANTINE_KEY,
+  PEOPLE_QUARANTINE_KEY,
   loadPilotCardDismissed,
   loadSettings,
   markLastBackupNow,
@@ -382,12 +388,49 @@ describe("upsertLog / deleteLog", () => {
     expect(ids(loadLogs())).toEqual(["A"]);
   });
 
-  it("a save after load permanently prunes rows that failed normalization", () => {
-    // Documents current behavior: loadLogs drops unreadable rows, and the next write
-    // persists only the readable ones. Tracked in #87 (pre-launch): quarantine instead.
-    put(LOGS_KEY, [makeLog("A"), { id: "legacy-without-termite" }]);
+  it("a save after load keeps the main key normalized and quarantines the raw failed row", () => {
+    const legacy = { id: "legacy-without-termite" };
+    put(LOGS_KEY, [makeLog("A"), legacy]);
     upsertLog(makeLog("B"));
     expect((stored(LOGS_KEY) as { id: string }[]).map((l) => l.id)).toEqual(["B", "A"]);
+    expect(loadLogsQuarantine()).toEqual([legacy]);
+    expect(stored(LOGS_QUARANTINE_KEY)).toEqual([legacy]);
+  });
+
+  it("keeps two same-id raw logs when content differs and still collapses identical rows", () => {
+    const legacy = { id: "legacy-without-termite", note: "first" };
+    const sameId = { id: "legacy-without-termite", note: "second" };
+    put(LOGS_KEY, [makeLog("A"), legacy, sameId, 42, 42]);
+    loadLogs();
+    loadLogs();
+    upsertLog(makeLog("B"));
+    upsertLog(makeLog("C"));
+    // Full JSON, not id: different content both stay. Identical 42 collapses to one.
+    expect(loadLogsQuarantine()).toEqual([legacy, sameId, 42]);
+    expect((stored(LOGS_KEY) as { id: string }[]).map((l) => l.id)).toEqual(["C", "B", "A"]);
+  });
+
+  it("does not rewrite the main log key when the quarantine write fails", () => {
+    const legacy = { id: "legacy-without-termite" };
+    put(LOGS_KEY, [makeLog("A"), legacy]);
+    storage.failSetKeys.add(LOGS_QUARANTINE_KEY);
+    expect(saveLogs([makeLog("B")])).toBe(false);
+    expect(stored(LOGS_KEY)).toEqual([makeLog("A"), legacy]);
+    const res = upsertLog(makeLog("B"));
+    expect(res.saved).toBe(false);
+    expect(stored(LOGS_KEY)).toEqual([makeLog("A"), legacy]);
+    expect(loadLogsQuarantine()).toEqual([]);
+  });
+
+  it("rewrites the main log key when the bad row is already quarantined", () => {
+    const legacy = { id: "legacy-without-termite" };
+    put(LOGS_KEY, [makeLog("A"), legacy]);
+    put(LOGS_QUARANTINE_KEY, [legacy]);
+    storage.failSetKeys.add(LOGS_QUARANTINE_KEY);
+    const res = upsertLog(makeLog("B"));
+    expect(res.saved).toBe(true);
+    expect((stored(LOGS_KEY) as { id: string }[]).map((l) => l.id)).toEqual(["B", "A"]);
+    expect(loadLogsQuarantine()).toEqual([legacy]);
   });
 
   it("duplicate stored ids are all replaced by upsert and all removed by delete", () => {
@@ -544,6 +587,50 @@ describe("loadCatalog / saveCatalog", () => {
     expect(ids(loadCatalog())).toEqual(["prod-1", "dev"]);
     put(CATALOG_KEY, [shopProduct(), { id: "bad", kind: "spray" }]);
     expect(ids(loadCatalog())).toEqual(["prod-1"]);
+  });
+
+  it("quarantines invalid catalog rows before a later save prunes the main key", () => {
+    const bad = { id: "bad", kind: "spray" };
+    put(CATALOG_KEY, [shopProduct(), bad]);
+    const res = upsertProduct(shopProduct({ id: "new" }));
+    expect(res.saved).toBe(true);
+    expect(ids(res.catalog)).toEqual(["new", "prod-1"]);
+    expect((stored(CATALOG_KEY) as { id: string }[]).map((p) => p.id)).toEqual(["new", "prod-1"]);
+    expect(loadCatalogQuarantine()).toEqual([bad]);
+  });
+
+  it("does not rewrite the catalog main key when the quarantine write fails", () => {
+    const bad = { id: "bad", kind: "spray" };
+    put(CATALOG_KEY, [shopProduct(), bad]);
+    storage.failSetKeys.add(CATALOG_QUARANTINE_KEY);
+    expect(saveCatalog([shopProduct({ id: "new" })])).toBe(false);
+    expect(stored(CATALOG_KEY)).toEqual([shopProduct(), bad]);
+    const res = upsertProduct(shopProduct({ id: "new" }));
+    expect(res.saved).toBe(false);
+    expect(stored(CATALOG_KEY)).toEqual([shopProduct(), bad]);
+    expect(loadCatalogQuarantine()).toEqual([]);
+  });
+
+  it("keeps two same-id catalog rows when content differs and collapses identical ones", () => {
+    const bad = { id: "bad", kind: "spray" };
+    const sameId = { ...bad, name: "again" };
+    put(CATALOG_KEY, [shopProduct(), bad, bad, sameId]);
+    loadCatalog();
+    loadCatalog();
+    expect(loadCatalogQuarantine()).toEqual([bad, sameId]);
+  });
+
+  it("does not quarantine when the catalog is missing, corrupt, or not an array", () => {
+    loadCatalog();
+    expect(storage.getItem(CATALOG_QUARANTINE_KEY)).toBeNull();
+    storage.clear();
+    storage.setItem(CATALOG_KEY, "{bad");
+    expect(loadCatalog()).toEqual(EXAMPLE_SEEDS);
+    expect(storage.getItem(CATALOG_QUARANTINE_KEY)).toBeNull();
+    storage.clear();
+    put(CATALOG_KEY, { id: "x" });
+    expect(loadCatalog()).toEqual(EXAMPLE_SEEDS);
+    expect(storage.getItem(CATALOG_QUARANTINE_KEY)).toBeNull();
   });
 
   it("normalizes legacy rows: missing isExample/archived, example markers, EPA drops", () => {
@@ -742,6 +829,40 @@ describe("loadPeople / savePeople", () => {
     expect(ids(loadPeople())).toEqual(["p1", "p2"]);
     put(PEOPLE_KEY, [person(), { ...person({ id: "bad" }), roleTags: ["boss"] }, { id: "x" }]);
     expect(ids(loadPeople())).toEqual(["p1"]);
+  });
+
+  it("quarantines invalid people before a later save prunes the main key", () => {
+    const bad = { id: "x" };
+    put(PEOPLE_KEY, [person(), bad]);
+    const res = upsertPerson(person({ id: "p2" }));
+    expect(res.saved).toBe(true);
+    expect(ids(res.people)).toEqual(["p2", "p1"]);
+    expect((stored(PEOPLE_KEY) as { id: string }[]).map((p) => p.id)).toEqual(["p2", "p1"]);
+    expect(loadPeopleQuarantine()).toEqual([bad]);
+    expect(stored(PEOPLE_QUARANTINE_KEY)).toEqual([bad]);
+  });
+
+  it("does not rewrite the people main key when the quarantine write fails", () => {
+    const bad = { id: "x" };
+    put(PEOPLE_KEY, [person(), bad]);
+    storage.failSetKeys.add(PEOPLE_QUARANTINE_KEY);
+    expect(savePeople([person({ id: "p2" })])).toBe(false);
+    expect(stored(PEOPLE_KEY)).toEqual([person(), bad]);
+    const res = upsertPerson(person({ id: "p2" }));
+    expect(res.saved).toBe(false);
+    expect(stored(PEOPLE_KEY)).toEqual([person(), bad]);
+    expect(loadPeopleQuarantine()).toEqual([]);
+  });
+
+  it("keeps two same-id people when content differs and collapses identical ones", () => {
+    const bad = { id: "x", name: 1 };
+    const sameId = { id: "x", name: 2 };
+    put(PEOPLE_KEY, [person(), bad, bad, sameId]);
+    loadPeople();
+    upsertPerson(person({ id: "p2" }));
+    loadPeople();
+    upsertPerson(person({ id: "p3" }));
+    expect(loadPeopleQuarantine()).toEqual([bad, sameId]);
   });
 
   it("dedupes role tags and defaults a missing/null ceDueDate to ''", () => {
