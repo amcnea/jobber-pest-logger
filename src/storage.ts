@@ -4,10 +4,78 @@ import type { ApplicationLog, AppliedProduct, Person, PersonnelRole, ShopProduct
 
 const LOGS_KEY = "jobber-pest-logger:logs:v1";
 const CATALOG_KEY = "jobber-pest-logger:catalog:v1";
+/** Raw log rows that failed normalizeLog. Not part of backup or the visible notice (later tip). */
+export const LOGS_QUARANTINE_KEY = "jobber-pest-logger:logs-quarantine:v1";
+/** Raw catalog rows that failed normalizeShopProduct. */
+export const CATALOG_QUARANTINE_KEY = "jobber-pest-logger:catalog-quarantine:v1";
+/** Raw person rows that failed normalizePerson. */
+export const PEOPLE_QUARANTINE_KEY = "jobber-pest-logger:people-quarantine:v1";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+function quarantineIdentity(value: unknown): string {
+  if (isRecord(value) && typeof value.id === "string") return `id:${value.id}`;
+  try {
+    return `json:${JSON.stringify(value)}`;
+  } catch {
+    return "json:unserializable";
+  }
+}
+
+/** Read a quarantine array. Corrupt or missing storage yields []. Never throws. */
+function readQuarantine(key: string): unknown[] {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Append raw failed rows to a quarantine key. Dedupe by stable string id when present,
+ * otherwise by JSON equality. Best-effort: a failed setItem must not block the main-key save.
+ */
+function appendQuarantine(key: string, failed: unknown[]): void {
+  if (failed.length === 0) return;
+  try {
+    const existing = readQuarantine(key);
+    const seen = new Set(existing.map(quarantineIdentity));
+    const next = existing.slice();
+    for (const row of failed) {
+      const identity = quarantineIdentity(row);
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      next.push(row);
+    }
+    if (next.length === existing.length) return;
+    localStorage.setItem(key, JSON.stringify(next));
+  } catch {
+    // Quarantine is best-effort. The caller still returns normalized rows and may save the main key.
+  }
+}
+
+function partitionNormalized<T>(
+  rows: unknown[],
+  normalize: (value: unknown) => T | null,
+  quarantineKey: string,
+): T[] {
+  const ok: T[] = [];
+  const failed: unknown[] = [];
+  for (const row of rows) {
+    const normalized = normalize(row);
+    if (normalized === null) failed.push(row);
+    else ok.push(normalized);
+  }
+  // Quarantine before returning so the next main-key save cannot drop these raw rows first.
+  appendQuarantine(quarantineKey, failed);
+  return ok;
+}
+
 
 function isProductShape(value: unknown): boolean {
   if (!isRecord(value)) return false;
@@ -140,10 +208,15 @@ export function loadLogs(): ApplicationLog[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.map(normalizeLog).filter((l): l is ApplicationLog => l !== null);
+    return partitionNormalized(parsed, normalizeLog, LOGS_QUARANTINE_KEY);
   } catch {
     return [];
   }
+}
+
+/** Raw log rows kept after normalizeLog rejected them. Read-only. */
+export function loadLogsQuarantine(): unknown[] {
+  return readQuarantine(LOGS_QUARANTINE_KEY);
 }
 
 export function saveLogs(logs: ApplicationLog[]): boolean {
@@ -297,12 +370,20 @@ export function loadCatalog(): ShopProduct[] {
       saveCatalog(seed);
       return seed;
     }
-    return parsed.map(normalizeShopProduct).filter((p): p is ShopProduct => p !== null);
+    // Array (including empty or partly invalid): do not re-seed. Quarantine failed rows
+    // before any later saveCatalog writes the main key. Missing/non-array/parse-fail paths
+    // above and below seed without quarantining — there was no raw array to keep.
+    return partitionNormalized(parsed, normalizeShopProduct, CATALOG_QUARANTINE_KEY);
   } catch {
     const seed = EXAMPLE_SEEDS.map((p) => ({ ...p }));
     saveCatalog(seed);
     return seed;
   }
+}
+
+/** Raw catalog rows kept after normalizeShopProduct rejected them. Read-only. */
+export function loadCatalogQuarantine(): unknown[] {
+  return readQuarantine(CATALOG_QUARANTINE_KEY);
 }
 
 export function upsertProduct(
@@ -448,10 +529,15 @@ export function loadPeople(): Person[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.map(normalizePerson).filter((p): p is Person => p !== null);
+    return partitionNormalized(parsed, normalizePerson, PEOPLE_QUARANTINE_KEY);
   } catch {
     return [];
   }
+}
+
+/** Raw person rows kept after normalizePerson rejected them. Read-only. */
+export function loadPeopleQuarantine(): unknown[] {
+  return readQuarantine(PEOPLE_QUARANTINE_KEY);
 }
 
 export function upsertPerson(person: Person): { people: Person[]; saved: boolean } {
