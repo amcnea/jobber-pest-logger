@@ -1630,6 +1630,36 @@ describe("applyBackup", () => {
     expect(loadLogsQuarantine()).toEqual([{ id: "prior-q" }]);
   });
 
+  it("still restores when a quota failure would have blocked the quarantine append", () => {
+    put(LOGS_KEY, [makeLog("OLD"), { id: "legacy-without-termite" }]);
+    put(CATALOG_KEY, [shopProduct({ id: "old-prod" }), { id: "bad-catalog" }]);
+    put(PEOPLE_KEY, [person({ id: "old-p" }), { id: "bad-person" }]);
+    const origSet = storage.setItem.bind(storage);
+    storage.setItem = (k: string, v: string) => {
+      if (
+        (k === LOGS_QUARANTINE_KEY && v.includes("legacy-without-termite")) ||
+        (k === CATALOG_QUARANTINE_KEY && v.includes("bad-catalog")) ||
+        (k === PEOPLE_QUARANTINE_KEY && v.includes("bad-person"))
+      ) {
+        throw new Error("QuotaExceededError");
+      }
+      origSet(k, v);
+    };
+    const incoming = {
+      logs: [{ id: "from-backup-log" }],
+      catalog: [{ id: "from-backup-cat" }],
+      people: [{ id: "from-backup-person" }],
+    };
+    const result = applyBackup(backup({ quarantine: incoming }));
+    expect(result.ok).toBe(true);
+    expect(ids(loadLogs())).toEqual(["NEW"]);
+    expect(ids(loadCatalog())).toEqual(["new-prod"]);
+    expect(ids(loadPeople())).toEqual(["new-p"]);
+    expect(loadLogsQuarantine()).toEqual(incoming.logs);
+    expect(loadCatalogQuarantine()).toEqual(incoming.catalog);
+    expect(loadPeopleQuarantine()).toEqual(incoming.people);
+  });
+
   it("does not touch the backup stamp, dismissed flags or session", () => {
     markLastBackupNow();
     dismissPilotCard();
@@ -2015,6 +2045,7 @@ describe("quarantineNoticeMessage", () => {
     put(CATALOG_QUARANTINE_KEY, [{ id: "c" }]);
     const msg = quarantineNoticeMessage();
     expect(msg).toContain("3 saved records couldn't be read (2 logs, 1 catalog)");
+    expect(msg).toContain("were set aside");
     expect(msg).toContain("set aside (not deleted)");
     expect(msg).toContain("not included in the PDF or CSV use-record export");
     expect(msg).toContain("Download a backup JSON");
@@ -2024,7 +2055,10 @@ describe("quarantineNoticeMessage", () => {
 
   it("uses singular wording for one row", () => {
     put(PEOPLE_QUARANTINE_KEY, [{ id: "p1" }]);
-    expect(quarantineNoticeMessage()).toContain("1 saved record couldn't be read (1 people)");
+    const msg = quarantineNoticeMessage();
+    expect(msg).toContain("1 saved record couldn't be read (1 person) and was set aside");
+    expect(msg).not.toContain("1 people");
+    expect(msg).not.toContain("were");
   });
 });
 
