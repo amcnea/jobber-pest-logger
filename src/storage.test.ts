@@ -410,14 +410,27 @@ describe("upsertLog / deleteLog", () => {
     expect((stored(LOGS_KEY) as { id: string }[]).map((l) => l.id)).toEqual(["C", "B", "A"]);
   });
 
-  it("still saves the main log key when the quarantine write fails", () => {
+  it("does not rewrite the main log key when the quarantine write fails", () => {
     const legacy = { id: "legacy-without-termite" };
     put(LOGS_KEY, [makeLog("A"), legacy]);
+    storage.failSetKeys.add(LOGS_QUARANTINE_KEY);
+    expect(saveLogs([makeLog("B")])).toBe(false);
+    expect(stored(LOGS_KEY)).toEqual([makeLog("A"), legacy]);
+    const res = upsertLog(makeLog("B"));
+    expect(res.saved).toBe(false);
+    expect(stored(LOGS_KEY)).toEqual([makeLog("A"), legacy]);
+    expect(loadLogsQuarantine()).toEqual([]);
+  });
+
+  it("rewrites the main log key when the bad row is already quarantined", () => {
+    const legacy = { id: "legacy-without-termite" };
+    put(LOGS_KEY, [makeLog("A"), legacy]);
+    put(LOGS_QUARANTINE_KEY, [legacy]);
     storage.failSetKeys.add(LOGS_QUARANTINE_KEY);
     const res = upsertLog(makeLog("B"));
     expect(res.saved).toBe(true);
     expect((stored(LOGS_KEY) as { id: string }[]).map((l) => l.id)).toEqual(["B", "A"]);
-    expect(loadLogsQuarantine()).toEqual([]);
+    expect(loadLogsQuarantine()).toEqual([legacy]);
   });
 
   it("duplicate stored ids are all replaced by upsert and all removed by delete", () => {
@@ -584,6 +597,18 @@ describe("loadCatalog / saveCatalog", () => {
     expect(ids(res.catalog)).toEqual(["new", "prod-1"]);
     expect((stored(CATALOG_KEY) as { id: string }[]).map((p) => p.id)).toEqual(["new", "prod-1"]);
     expect(loadCatalogQuarantine()).toEqual([bad]);
+  });
+
+  it("does not rewrite the catalog main key when the quarantine write fails", () => {
+    const bad = { id: "bad", kind: "spray" };
+    put(CATALOG_KEY, [shopProduct(), bad]);
+    storage.failSetKeys.add(CATALOG_QUARANTINE_KEY);
+    expect(saveCatalog([shopProduct({ id: "new" })])).toBe(false);
+    expect(stored(CATALOG_KEY)).toEqual([shopProduct(), bad]);
+    const res = upsertProduct(shopProduct({ id: "new" }));
+    expect(res.saved).toBe(false);
+    expect(stored(CATALOG_KEY)).toEqual([shopProduct(), bad]);
+    expect(loadCatalogQuarantine()).toEqual([]);
   });
 
   it("does not duplicate a quarantined catalog row on a second load", () => {
@@ -814,6 +839,18 @@ describe("loadPeople / savePeople", () => {
     expect((stored(PEOPLE_KEY) as { id: string }[]).map((p) => p.id)).toEqual(["p2", "p1"]);
     expect(loadPeopleQuarantine()).toEqual([bad]);
     expect(stored(PEOPLE_QUARANTINE_KEY)).toEqual([bad]);
+  });
+
+  it("does not rewrite the people main key when the quarantine write fails", () => {
+    const bad = { id: "x" };
+    put(PEOPLE_KEY, [person(), bad]);
+    storage.failSetKeys.add(PEOPLE_QUARANTINE_KEY);
+    expect(savePeople([person({ id: "p2" })])).toBe(false);
+    expect(stored(PEOPLE_KEY)).toEqual([person(), bad]);
+    const res = upsertPerson(person({ id: "p2" }));
+    expect(res.saved).toBe(false);
+    expect(stored(PEOPLE_KEY)).toEqual([person(), bad]);
+    expect(loadPeopleQuarantine()).toEqual([]);
   });
 
   it("does not duplicate a quarantined person on a second load or save", () => {
