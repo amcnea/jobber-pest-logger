@@ -840,6 +840,39 @@ describe("syncLogToRemote", async () => {
     });
   });
 
+  it("null enqueue with shared legacy entryId only clears the synced log", async () => {
+    // Two legacy rows (no entryId) with the same queuedAt coerce to the same
+    // legacy:… identity. Failed-enqueue cleanup must not drop the other log.
+    const sharedQueuedAt = "2026-01-15T12:00:00.000Z";
+    writeRaw([
+      { shopId: SHOP, queuedAt: sharedQueuedAt, log: makeLog("keep", { targetPestOrPurpose: "other" }) },
+      { shopId: SHOP, queuedAt: sharedQueuedAt, log: makeLog("drop", { targetPestOrPurpose: "stale" }) },
+    ]);
+    const before = outboxEntriesForShop(SHOP);
+    expect(before).toHaveLength(2);
+    expect(before.every((e) => e.entryId === `legacy:${sharedQueuedAt}`)).toBe(true);
+
+    let quotaTripped = false;
+    const origSet = storage.setItem.bind(storage);
+    storage.setItem = (k: string, v: string) => {
+      if (!quotaTripped && k === LOG_OUTBOX_KEY) {
+        quotaTripped = true;
+        throw new Error("QuotaExceededError");
+      }
+      origSet(k, v);
+    };
+    const { remote, putDocs } = fakeRemote();
+    expect(
+      await syncLogToRemote(remote, SHOP, makeLog("drop", { targetPestOrPurpose: "fresh" })),
+    ).toEqual({ ok: true });
+    expect(putDocs[0].logs[0].id).toBe("drop");
+    const left = outboxEntriesForShop(SHOP);
+    expect(left).toHaveLength(1);
+    expect(left[0].log.id).toBe("keep");
+    expect(left[0].log.targetPestOrPurpose).toBe("other");
+    expect(left[0].entryId).toBe(`legacy:${sharedQueuedAt}`);
+  });
+
   it("null enqueue clears the prior entry so a later flush cannot restore it", async () => {
     const priorId = await enqueueLogOutbox(SHOP, makeLog("a", { targetPestOrPurpose: "stale" }));
     expect(priorId).toEqual(expect.any(String));

@@ -218,12 +218,26 @@ export async function enqueueLogOutbox(
   return ok ? committedId : null;
 }
 
-/** Remove only exact entryId versions (preserve newer re-queues). */
-export async function removeOutboxVersions(shopId: string, entryIds: string[]): Promise<boolean> {
+/** Remove only exact entryId versions (preserve newer re-queues).
+ * When logId is set, also require e.log.id === logId so a shared legacy
+ * entryId (legacy:queuedAt) cannot drop another log's retry entry.
+ */
+export async function removeOutboxVersions(
+  shopId: string,
+  entryIds: string[],
+  logId?: string,
+): Promise<boolean> {
   const id = shopId.trim();
   const drop = new Set(entryIds.filter(Boolean));
   return updateOutbox((entries) =>
-    entries.filter((e) => !(e.shopId === id && drop.has(e.entryId))),
+    entries.filter(
+      (e) =>
+        !(
+          e.shopId === id &&
+          drop.has(e.entryId) &&
+          (logId === undefined || e.log.id === logId)
+        ),
+    ),
   );
 }
 
@@ -386,9 +400,11 @@ export async function syncLogToRemote(
     // Success: drop the id enqueue just committed. Null enqueue: drop only the id
     // captured before the call, so a stale older payload cannot flush over a fresher
     // remote log. A concurrent replacement has a different entryId and stays queued.
+    // Pass log.id on the null-enqueue path so a shared legacy:queuedAt id cannot
+    // wipe another log's retry entry.
     const idToClear = entryId ?? priorEntryId;
     if (!idToClear) return true;
-    return removeOutboxVersions(id, [idToClear]);
+    return removeOutboxVersions(id, [idToClear], entryId === null ? log.id : undefined);
   };
 
   const got = await remote.getShop();
