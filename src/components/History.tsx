@@ -41,6 +41,11 @@ export function History({
     [logs, dateFrom, dateTo],
   );
   const groups = useMemo(() => groupLogsByServiceAddress(filtered), [filtered]);
+  // Property actions use the true latest visit across all logs, not the date-filtered group (#92).
+  const fullByKey = useMemo(
+    () => new Map(groupLogsByServiceAddress(logs).map((g) => [g.key, g])),
+    [logs],
+  );
 
   function applyThisMonth() {
     const { from, to } = monthRangeLocal();
@@ -140,14 +145,14 @@ export function History({
               <button
                 type="button"
                 className="btn btn-secondary"
-                onClick={() => onLogAgainHere(group)}
+                onClick={() => onLogAgainHere(fullByKey.get(group.key) ?? group)}
               >
                 Log again here
               </button>
               <button
                 type="button"
                 className="btn btn-secondary"
-                onClick={() => onDuplicateLastStop(group)}
+                onClick={() => onDuplicateLastStop(fullByKey.get(group.key) ?? group)}
               >
                 Duplicate last stop
               </button>

@@ -469,7 +469,7 @@ describe("Export: shared shop", () => {
     await user.click(pdfBtn());
     expect(
       await screen.findByText(
-        "Export blocked after shared shop pull: example seeds still present on the export set; 2 incomplete § 7.144 record(s) in range. Clear gates, then try again.",
+        "Export blocked after shared shop pull: example rows are still saved on this device and must be removed before any export; 2 incomplete § 7.144 record(s) in range. Clear gates, then try again.",
       ),
     ).toHaveAttribute("role", "alert");
     expect(downloadPdf).not.toHaveBeenCalled();
