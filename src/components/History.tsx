@@ -1,8 +1,11 @@
 import { useMemo, useState } from "react";
 import { productEpaCaption } from "../catalog";
 import { filterLogsByDateUsed, monthRangeLocal } from "../dates";
+import { isLogReviewed, reviewFlagsForLog } from "../reviewQueue";
 import { groupLogsByServiceAddress, type PropertyBookEntry } from "../storage";
-import type { ApplicationLog } from "../types";
+import type { ApplicationLog, Person, ShopProduct } from "../types";
+import { useNow } from "../useNow";
+import { REVIEWED_LOCK_NOTE } from "./ReviewQueue";
 
 interface Props {
   logs: ApplicationLog[];
@@ -12,6 +15,100 @@ interface Props {
   onEdit: (log: ApplicationLog) => void;
   onLogAgainHere: (property: PropertyBookEntry) => void;
   onDuplicateLastStop: (property: PropertyBookEntry) => void;
+  /** Office: shop list for review flags. Mark reviewed shows only when catalog + onMarkReviewed are set. */
+  catalog?: ShopProduct[];
+  /** Roster for "Reviewed by". */
+  people?: Person[];
+  /** Office: lock a log with zero review flags. Returns an error message, or null on success. */
+  onMarkReviewed?: (logId: string, personId: string) => string | null;
+  /** Pins the clock (tests). */
+  now?: Date;
+}
+
+/** "2026-10-17T17:05:00-05:00" → "2026-10-17 17:05" (reviewer's local wall time). */
+function reviewedLabel(iso: string): string {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(iso);
+  return m ? `${m[1]} ${m[2]}` : iso;
+}
+
+function MarkReviewed({
+  log,
+  people,
+  hasFlags,
+  onMarkReviewed,
+}: {
+  log: ApplicationLog;
+  people: Person[];
+  hasFlags: boolean;
+  onMarkReviewed: (logId: string, personId: string) => string | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const [personId, setPersonId] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const named = people.filter((p) => p.name.trim());
+
+  if (hasFlags) {
+    return (
+      <p className="hint history-review-note">
+        Mark reviewed is available once this log is off the Review queue.
+      </p>
+    );
+  }
+  if (!open) {
+    return (
+      <button type="button" className="btn btn-secondary" onClick={() => setOpen(true)}>
+        Mark reviewed
+      </button>
+    );
+  }
+  return (
+    <div className="history-review-form">
+      {named.length === 0 ? (
+        <p className="hint">Add people first to mark a log reviewed.</p>
+      ) : (
+        <label className="field">
+          Reviewed by
+          <select value={personId} onChange={(e) => setPersonId(e.target.value)}>
+            <option value="">Choose…</option>
+            {named.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <div className="row">
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={!personId}
+          onClick={() => {
+            const err = onMarkReviewed(log.id, personId);
+            setError(err);
+            if (!err) setOpen(false);
+          }}
+        >
+          Mark reviewed
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost"
+          onClick={() => {
+            setOpen(false);
+            setError(null);
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  );
 }
 
 function productSummary(log: ApplicationLog): string {
@@ -28,7 +125,13 @@ export function History({
   onEdit,
   onLogAgainHere,
   onDuplicateLastStop,
+  catalog,
+  people = [],
+  onMarkReviewed,
+  now,
 }: Props) {
+  const clock = useNow(now);
+  const reviewEnabled = canEditDelete && catalog !== undefined && onMarkReviewed !== undefined;
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
@@ -164,6 +267,9 @@ export function History({
               .map((p) => productEpaCaption(p))
               .filter(Boolean)
               .join(" · ");
+            const reviewed = isLogReviewed(log);
+            const hasFlags =
+              reviewEnabled && !reviewed && reviewFlagsForLog(log, catalog ?? [], clock).length > 0;
             return (
               <article className="card history-log-card" key={log.id}>
                 <div className="card-head history-log-head">
@@ -172,7 +278,13 @@ export function History({
                       <strong>{log.dateUsed}</strong>
                       {log.sampleData && <span className="chip sample">example</span>}
                       {log.isTermite && <span className="chip">termite</span>}
+                      {reviewed && <span className="chip">Reviewed</span>}
                     </div>
+                    {reviewed && (
+                      <div className="log-meta history-log-line">
+                        Reviewed {reviewedLabel(log.reviewedAt ?? "")} by {log.reviewedBy}
+                      </div>
+                    )}
                     <div className="log-meta history-log-line">{productSummary(log)}</div>
                     {epaBits && <div className="log-meta history-log-line">{epaBits}</div>}
                     {log.jobberJobNumber && (
@@ -183,15 +295,26 @@ export function History({
                   </div>
                   {canEditDelete && (
                     <div className="card-actions history-log-actions">
-                      <button type="button" className="btn btn-secondary" onClick={() => onEdit(log)}>
-                        Edit
-                      </button>
+                      {!reviewed && (
+                        <button type="button" className="btn btn-secondary" onClick={() => onEdit(log)}>
+                          Edit
+                        </button>
+                      )}
                       <button type="button" className="btn btn-ghost" onClick={() => handleDelete(log)}>
                         Delete
                       </button>
                     </div>
                   )}
                 </div>
+                {canEditDelete && reviewed && <p className="hint">{REVIEWED_LOCK_NOTE}</p>}
+                {reviewEnabled && !reviewed && onMarkReviewed && (
+                  <MarkReviewed
+                    log={log}
+                    people={people}
+                    hasFlags={hasFlags}
+                    onMarkReviewed={onMarkReviewed}
+                  />
+                )}
               </article>
             );
           })}

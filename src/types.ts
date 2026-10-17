@@ -96,6 +96,42 @@ export interface ApplicationLog {
   shopTpclLetter: string;
   isTermite: boolean;
   termite: TermiteExtras;
+  /**
+   * Correction-history model (not TDA fields). Optional on the type so older
+   * literals still compile; normalizeLog always fills revision (0) and history ([]).
+   * Revision starts at 0 for the original record; each applied correction adds 1.
+   */
+  revision?: number;
+  /** One entry per applied correction, oldest first. */
+  history?: CorrectionEntry[];
+  /** When office marked this log reviewed (ISO with local offset). Reviewed logs are locked. */
+  reviewedAt?: string;
+  /** Roster person name chosen when marking reviewed. Present iff reviewedAt is. */
+  reviewedBy?: string;
+}
+
+/** One changed field in a correction. Paths are stable keys, e.g. `products[<lineId>].rtuAmount`. */
+export interface FieldChange {
+  field: string;
+  old: string | number | boolean | null;
+  new: string | number | boolean | null;
+}
+
+/** Log as it stood before a correction, minus its own history array (kept once, on the log). */
+export type LogSnapshot = Omit<ApplicationLog, "history">;
+
+export interface CorrectionEntry {
+  /** Revision this correction produced (priorSnapshot.revision + 1). */
+  revision: number;
+  /** Deep copy of the log before the change; frozen, never mutated. */
+  priorSnapshot: Readonly<LogSnapshot>;
+  /** ISO with local offset, e.g. 2026-10-17T17:05:00-05:00. */
+  changedAt: string;
+  /** Roster person name. */
+  changedBy: string;
+  /** Non-blank after trim. */
+  reason: string;
+  changes: FieldChange[];
 }
 
 export interface ShopSettings {
