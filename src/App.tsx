@@ -5,6 +5,7 @@ import { A2hsTip } from "./components/A2hsTip";
 import { ShopPilotCard } from "./components/ShopPilotCard";
 import { History } from "./components/History";
 import { NewLogForm } from "./components/NewLogForm";
+import { ReviewQueue } from "./components/ReviewQueue";
 import { People } from "./components/People";
 import { Products } from "./components/Products";
 import { Settings } from "./components/Settings";
@@ -586,6 +587,13 @@ export default function App() {
           <>
             <button
               type="button"
+              className={screen === "review" ? "active" : ""}
+              onClick={() => go("review")}
+            >
+              Review queue
+            </button>
+            <button
+              type="button"
               className={screen === "products" ? "active" : ""}
               onClick={() => go("products")}
             >
@@ -635,6 +643,14 @@ export default function App() {
             onEdit={handleEdit}
             onLogAgainHere={handleLogAgainHere}
             onDuplicateLastStop={handleDuplicateLastStop}
+          />
+        )}
+        {allowOfficeSurfaces && screen === "review" && (
+          <ReviewQueue
+            logs={logs}
+            catalog={catalog}
+            canReview={allowOfficeSurfaces}
+            onEdit={handleEdit}
           />
         )}
         {allowOfficeSurfaces && screen === "products" && (
