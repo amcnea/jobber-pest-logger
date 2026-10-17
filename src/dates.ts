@@ -7,6 +7,21 @@ export function localDateYmd(d = new Date()): string {
   return `${y}-${m}-${day}`;
 }
 
+/**
+ * ISO 8601 timestamp in device-local time with its UTC offset, never "Z".
+ * e.g. 2026-10-17T17:05:00-05:00 (Chicago CDT), 2026-10-18T03:35:00+05:30 (Kolkata).
+ */
+export function localIsoWithOffset(d = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const offsetMin = -d.getTimezoneOffset();
+  const sign = offsetMin >= 0 ? "+" : "-";
+  const abs = Math.abs(offsetMin);
+  return (
+    `${localDateYmd(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` +
+    `${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`
+  );
+}
+
 /** Parse YYYY-MM-DD as a local calendar day (noon local avoids DST edge cases). */
 export function parseLocalYmd(ymd: string): Date | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd.trim());

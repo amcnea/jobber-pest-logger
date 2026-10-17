@@ -14,6 +14,7 @@ import {
   draftLogAgainHere,
 } from "./formDefaults";
 import { collectPeopleWarnings } from "./peopleWarnings";
+import { isLogReviewed } from "./reviewQueue";
 import {
   deleteLog,
   deletePerson,
@@ -24,7 +25,10 @@ import {
   loadLogs,
   loadPeople,
   loadSettings,
+  markLogReviewed,
   removeExampleProductsFromCatalog,
+  restoreHistoryMessage,
+  restoredKeptReport,
   clearExampleDemoData,
   wipeAllDeviceData,
   saveSettings,
@@ -50,6 +54,8 @@ import {
 } from "./shop";
 import { ShopSessionGate, ShopSessionTimeoutWatcher } from "./components/ShopSessionGate";
 import "./App.css";
+
+const REVIEWED_LOCKED_MSG = "This log is reviewed. Reviewed logs can't be edited in place; original values kept.";
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>("new");
@@ -221,28 +227,16 @@ export default function App() {
       openNewLog(null);
       return;
     }
+    // Reviewed logs are locked: no in-place edit (corrections use change history).
+    if (isLogReviewed(log)) {
+      setStorageError(REVIEWED_LOCKED_MSG);
+      return;
+    }
     openNewLog(log);
   }
 
-  function handleSave(log: ApplicationLog): boolean {
-    if (shopLocked) {
-      setStorageError("Unlock the shared shop with a PIN before saving.");
-      return false;
-    }
-    // Tech may create new logs; editing an existing id is office-only.
-    if (!allowOfficeSurfaces && logs.some((l) => l.id === log.id)) {
-      setStorageError("Tech sessions can create new logs but not edit saved ones. Ask office.");
-      return false;
-    }
-    const result = upsertLog(log);
-    setLogs(result.logs);
-    if (!result.saved) {
-      setStorageError("Could not save on this device (storage full or blocked).");
-      return false;
-    }
-    setStorageError(null);
-    setDraftSeed(null);
-    // Shared mode: push to Firestore; on network blip keep full log in outbox (#6).
+  /** Shared mode: push a locally saved log to Firestore; on network blip keep it in the outbox (#6). */
+  function syncSavedLog(log: ApplicationLog) {
     const info = resolveShopStore();
     if (info.mode === "shared" && info.shopId && info.store instanceof RemoteShopStore) {
       const remote = info.store;
@@ -268,6 +262,45 @@ export default function App() {
         refreshOutboxBanner();
       })();
     }
+  }
+
+  /** Office: lock a log with zero review flags. Returns an error message or null. */
+  function handleMarkReviewed(logId: string, personId: string): string | null {
+    if (shopLocked || needsShopUnlock(loadShopSession())) {
+      return "Unlock the shared shop with a PIN before changing logs.";
+    }
+    if (!allowOfficeSurfaces) return "Only office can mark logs reviewed.";
+    const result = markLogReviewed(logId, { reviewedBy: personId, people, catalog });
+    setLogs(result.logs);
+    if (!result.ok) return result.error;
+    setStorageError(null);
+    syncSavedLog(result.log);
+    return null;
+  }
+
+  function handleSave(log: ApplicationLog): boolean {
+    if (shopLocked) {
+      setStorageError("Unlock the shared shop with a PIN before saving.");
+      return false;
+    }
+    // Tech may create new logs; editing an existing id is office-only.
+    if (!allowOfficeSurfaces && logs.some((l) => l.id === log.id)) {
+      setStorageError("Tech sessions can create new logs but not edit saved ones. Ask office.");
+      return false;
+    }
+    const result = upsertLog(log);
+    setLogs(result.logs);
+    if (result.locked) {
+      setStorageError(REVIEWED_LOCKED_MSG);
+      return false;
+    }
+    if (!result.saved) {
+      setStorageError("Could not save on this device (storage full or blocked).");
+      return false;
+    }
+    setStorageError(null);
+    setDraftSeed(null);
+    syncSavedLog(log);
     go("history");
     return true;
   }
@@ -411,11 +444,16 @@ export default function App() {
     },
     flash?: string,
   ) {
-    setLogs(data.logs);
+    // Restore keeps device logs that carry newer / different change history
+    // (storage.mergeRestoredLogs), so read the merged set back instead of data.logs.
+    const storedLogs = loadLogs();
+    setLogs(storedLogs);
     setCatalog(data.catalog);
     setPeople(data.people);
     setSettings(data.settings);
-    setSettingsFlash(flash ? { slot: "backup", text: flash } : null);
+    const historyNote = flash ? restoreHistoryMessage(restoredKeptReport(data.logs, storedLogs)) : null;
+    const text = flash && historyNote ? `${flash} ${historyNote}` : flash;
+    setSettingsFlash(text ? { slot: "backup", text } : null);
     setSettingsFormKey((k) => k + 1);
     setStorageError(null);
   }
@@ -643,6 +681,9 @@ export default function App() {
             onEdit={handleEdit}
             onLogAgainHere={handleLogAgainHere}
             onDuplicateLastStop={handleDuplicateLastStop}
+            catalog={allowOfficeSurfaces ? catalog : undefined}
+            people={people}
+            onMarkReviewed={allowOfficeSurfaces ? handleMarkReviewed : undefined}
           />
         )}
         {allowOfficeSurfaces && screen === "review" && (

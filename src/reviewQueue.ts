@@ -30,6 +30,11 @@ export interface ReviewQueueEntry {
   flags: ReviewFlag[];
 }
 
+/** Reviewed logs are locked: no in-place edit. */
+export function isLogReviewed(log: Pick<ApplicationLog, "reviewedAt" | "reviewedBy">): boolean {
+  return Boolean(log.reviewedAt?.trim() && log.reviewedBy?.trim());
+}
+
 export function needsALookText(field: string): string {
   return `Needs a look: ${field}`;
 }
