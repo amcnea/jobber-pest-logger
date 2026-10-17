@@ -156,7 +156,11 @@ export function Export({
       if (example.blocked || issues.length > 0) {
         const parts: string[] = [];
         if (example.blocked) {
-          parts.push("example rows are still saved on this device and must be removed before any export");
+          parts.push(
+            pulled.kind === "shared"
+              ? "example rows are still in the shared shop records and must be removed before any export"
+              : "example rows are still saved on this device and must be removed before any export",
+          );
         }
         if (issues.length > 0) {
           parts.push(`${issues.length} incomplete § 7.144 record(s) in range`);
@@ -231,7 +235,7 @@ export function Export({
     <div>
       <h2>Office export</h2>
       <p className="hint">
-        One audit-ready Texas TDA CSV whose columns match 4 TAC § 7.144(a), plus termite extras from
+        One Texas TDA CSV with fields drawn from 4 TAC § 7.144(a), plus termite extras from
         § 7.144(b) when the stop is termite work, and a simple printable PDF. Real shop products print
         their EPA numbers. Example catalog seeds are blocked from real export until removed — they
         must never ship as audit records. Weather, time of day (except termite pretreat), and CE are

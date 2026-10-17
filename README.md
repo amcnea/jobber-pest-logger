@@ -1,6 +1,6 @@
 # Jobber Pest Logger
 
-Texas-only **mobile-web compliance sidecar** for pest shops that already use Jobber. After a stop, a tech logs a pesticide application from the shop's own product list. The office exports one audit-ready Texas TDA CSV and a simple PDF.
+Texas-only **mobile-web sidecar** that helps pest shops that already use Jobber keep pesticide use records. After a stop, a tech logs a pesticide application from the shop's own product list. The office exports one Texas TDA CSV (fields drawn from 4 TAC § 7.144(a)) and a simple PDF.
 
 This is **not** a field-service app. It does not do scheduling, invoicing, routing, payments, inventory, login, Jobber OAuth/API, Stripe, weather APIs, SMS reminders, or multi-state logic.
 
