@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   EXAMPLE_EPA_LABEL,
   catalogHasExampleProducts,
@@ -76,6 +76,14 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   const [starterShopStatus, setStarterShopStatus] = useState<StarterShopStatusFilter>("all");
   const [starterSort, setStarterSort] = useState<StarterSortOrder>("list");
   const starterSearchRef = useRef<HTMLInputElement>(null);
+  const starterRowIdPrefix = useId();
+  /** Polite screen-reader message for starter Add / label-confirm outcomes. */
+  const [starterAnnouncement, setStarterAnnouncement] = useState("");
+  /** Heading of the open label-confirm panel; receives focus when the panel opens. */
+  const labelConfirmHeadingRef = useRef<HTMLHeadingElement>(null);
+  /** Control that opened label confirm; focus returns here (or to starter search) on close. */
+  const labelConfirmReturnFocusRef = useRef<HTMLElement | null>(null);
+  const prevLabelConfirmIdRef = useRef<string | null>(null);
   const [labelConfirmId, setLabelConfirmId] = useState<string | null>(null);
   const [labelConfirmed, setLabelConfirmed] = useState(false);
   const [pendingLabelIds, setPendingLabelIds] = useState<string[]>(() => {
@@ -279,6 +287,11 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   }
 
   function beginLabelConfirm(productId: string) {
+    if (labelConfirmId === null) {
+      const active = document.activeElement;
+      labelConfirmReturnFocusRef.current =
+        active instanceof HTMLElement && active !== document.body ? active : null;
+    }
     setLabelConfirmId(productId);
     setLabelConfirmed(false);
     setAdding(false);
@@ -305,11 +318,15 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
     // Persist guard before catalog row so reload cannot unarchive without confirm.
     if (!addPendingLabelConfirm(pending.id)) {
       setLabelConfirmStoreUnavailable(true);
+      setStarterAnnouncement(
+        `Could not add ${starter.name}: label-confirm storage is unavailable on this device.`,
+      );
       return;
     }
     const saved = onUpsert(pending);
     if (!saved) {
       if (!clearPendingLabelConfirm(pending.id)) setLabelConfirmStoreUnavailable(true);
+      setStarterAnnouncement(`Could not add ${starter.name} to the shop list.`);
       return;
     }
     const nextPending = pendingLabelIdsRef.current.includes(pending.id)
@@ -319,6 +336,9 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
     setPendingLabelIds(nextPending);
     reconcilePendingLabelState();
     beginLabelConfirm(pending.id);
+    setStarterAnnouncement(
+      `${starter.name} added to the shop list as archived. Confirm the label to activate it.`,
+    );
     // Show pending rows even when the Active filter is on.
     setListFilter("all");
   }
@@ -344,7 +364,32 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
       return; // keep confirm open
     }
     cancelLabelConfirm();
+    setStarterAnnouncement(`${product.name} is now active on the shop list.`);
   }
+
+  // Keyboard / screen-reader focus: move into the label-confirm panel when it opens
+  // (the control that opened it becomes disabled), and restore focus when it closes.
+  useEffect(() => {
+    const prev = prevLabelConfirmIdRef.current;
+    prevLabelConfirmIdRef.current = labelConfirmId;
+    if (labelConfirmId !== null && labelConfirmId !== prev) {
+      labelConfirmHeadingRef.current?.focus();
+      return;
+    }
+    if (labelConfirmId === null && prev !== null) {
+      const target = labelConfirmReturnFocusRef.current;
+      labelConfirmReturnFocusRef.current = null;
+      if (
+        target &&
+        target.isConnected &&
+        !(target instanceof HTMLButtonElement && target.disabled)
+      ) {
+        target.focus();
+      } else {
+        starterSearchRef.current?.focus();
+      }
+    }
+  }, [labelConfirmId]);
 
 
   // Clear pending store ids only after a delete we requested and the row is actually gone.
@@ -517,6 +562,10 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
         from any saved logs that still reference them.
       </p>
 
+      <p className="visually-hidden" role="status" aria-live="polite">
+        {starterAnnouncement}
+      </p>
+
       {labelConfirmStoreUnavailable && (
         <div className="nag" role="alert">
           <p>
@@ -632,6 +681,8 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                 setStarter25bOnly(false);
                 setStarterShopStatus("all");
                 setStarterSort("list");
+                // This button unmounts after reset; keep keyboard focus in the picker.
+                starterSearchRef.current?.focus();
               }}
               disabled={labelConfirmId !== null}
             >
@@ -686,10 +737,11 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                 const alreadyActive = state === "active";
                 const alreadyPending = state === "pending";
                 const alreadyArchived = state === "archived";
+                const nameId = `${starterRowIdPrefix}-starter-${starter.id}`;
                 return (
                   <div className="card-head" key={starter.id} style={{ marginBottom: "0.65rem" }}>
                     <div>
-                      <strong>{renderHighlighted(starter.name, starterQuery)}</strong>
+                      <strong id={nameId}>{renderHighlighted(starter.name, starterQuery)}</strong>
                       <div>
                         <span className="chip">{starter.kind}</span>{" "}
                         <span className="chip">
@@ -708,6 +760,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                           type="button"
                           className="btn btn-secondary"
                           disabled={labelConfirmId !== null}
+                          aria-describedby={nameId}
                           onClick={() => addStarterToCatalog(starter)}
                         >
                           {/* Archived matches also route through label confirm in addStarterToCatalog. */}
@@ -818,7 +871,9 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
             form
           ) : labelConfirmId === product.id ? (
             <div>
-              <h3>Confirm label before activate</h3>
+              <h3 ref={labelConfirmHeadingRef} tabIndex={-1}>
+                Confirm label before activate
+              </h3>
               <p className="hint">
                 Check the physical product label. Name and EPA # on your shop list must match the
                 label before this row becomes available on New log.
@@ -847,7 +902,16 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                 >
                   Confirm label &amp; activate
                 </button>
-                <button type="button" className="btn btn-secondary" onClick={cancelLabelConfirm}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    cancelLabelConfirm();
+                    setStarterAnnouncement(
+                      `${product.name} left archived. Label confirm is still pending.`,
+                    );
+                  }}
+                >
                   Leave archived
                 </button>
               </div>
