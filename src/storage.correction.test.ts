@@ -524,7 +524,7 @@ describe("restore — keep device copy vs take backup copy", () => {
     expect(after.dateUsed).toBe("2026-08-31");
   });
 
-  it("backup that extends the device history: device copy kept (backup history isn't a prefix of the device's)", () => {
+  it("backup that extends the device history (higher revision): backup copy taken", () => {
     seed(makeLog({ id: "L1" }));
     const rev1 = correct("L1", { serviceAddress: "101 Main St" }, "first");
     const rev2 = correct("L1", { dateUsed: "2026-08-31" }, "second");
@@ -532,10 +532,41 @@ describe("restore — keep device copy vs take backup copy", () => {
     seed(rev1);
     const res = restore([rev2]);
     const after = loadLogs()[0];
+    expect(after).toEqual(rev2);
+    expect(after.revision).toBe(2);
+    expect(after.history!.map((h) => h.reason)).toEqual(["first", "second"]);
+    expect(after.serviceAddress).toBe("101 Main St");
+    expect(after.dateUsed).toBe("2026-08-31");
+    expect(res.history).toEqual({ keptDevice: [], diverged: [], keptAbsent: [] });
+    // Banner does not count a taken extension.
+    expect(restoredKeptReport(backupWith([rev2]).logs, loadLogs()).keptDevice).toEqual([]);
+    expect(restoreHistoryMessage(res.history)).toBeNull();
+  });
+
+  it("extending backup that would unlock a reviewed device log: device copy kept", () => {
+    seed(makeLog({ id: "L1" }));
+    const rev1 = correct("L1", { serviceAddress: "101 Main St" }, "first");
+    const rev2 = correct("L1", { dateUsed: "2026-08-31" }, "second"); // unreviewed
+    seed(rev1);
+    markLogReviewed("L1", { reviewedBy: "p-ana", people: PEOPLE, catalog: CATALOG, now: NOW });
+    const res = restore([rev2]);
+    const after = loadLogs()[0];
+    expect(after.reviewedBy).toBe("Ana Office");
     expect(after.revision).toBe(1);
-    expect(after.history!.map((h) => h.reason)).toEqual(["first"]);
+    expect(after.dateUsed).toBe("2026-09-01");
     expect(res.history!.keptDevice).toEqual(["L1"]);
-    expect(res.history!.diverged).toEqual([]); // extension, not divergence
+  });
+
+  it("extending backup that is itself reviewed replaces a reviewed device log", () => {
+    seed(makeLog({ id: "L1" }));
+    const rev1 = correct("L1", { serviceAddress: "101 Main St" }, "first");
+    markLogReviewed("L1", { reviewedBy: "p-ana", people: PEOPLE, catalog: CATALOG, now: NOW });
+    const reviewedRev1 = loadLogs()[0];
+    const rev2 = correct("L1", { dateUsed: "2026-08-31" }, "second"); // keeps review stamp
+    seed(reviewedRev1);
+    restore([rev2]);
+    expect(loadLogs()[0]).toEqual(rev2);
+    expect(rev1.revision).toBe(1);
   });
 
   it("diverged histories (same revision, different entries): device kept, counted as diverged", () => {

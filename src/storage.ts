@@ -1690,16 +1690,21 @@ function carriesHistoryOrReview(log: ApplicationLog): boolean {
 
 /**
  * Lawgical records rule — a restore never drops correction history. For a log id on
- * both the device and in the backup, keep the device copy when:
- *   - its revision is higher than the backup's, OR
- *   - the backup's history isn't an exact earlier part (prefix) of the device's history;
- * otherwise take the backup copy. Additionally, a reviewed device log is kept when the
- * backup copy is unreviewed (a restore must not unlock a log).
+ * both the device and in the backup:
+ *   1. reviewed device copy vs unreviewed backup copy → keep device (never unlock);
+ *   2. device history is an exact prefix of the backup's AND the backup's revision is
+ *      higher (backup extends the device) → take backup;
+ *   3. device is ahead (higher revision, or the backup's history is a strict prefix of
+ *      the device's) or the histories have split apart → keep device;
+ *   4. otherwise (equal history and revision, or no history either side) → take backup.
  */
 export function shouldKeepDeviceLog(device: ApplicationLog, backup: ApplicationLog): boolean {
-  if (logRevision(device) > logRevision(backup)) return true;
-  if (!isHistoryPrefix(backup.history ?? [], device.history ?? [])) return true;
   if (isLogReviewed(device) && !isLogReviewed(backup)) return true;
+  const dh = device.history ?? [];
+  const bh = backup.history ?? [];
+  if (isHistoryPrefix(dh, bh) && logRevision(backup) > logRevision(device)) return false;
+  if (logRevision(device) > logRevision(backup)) return true;
+  if (!isHistoryPrefix(bh, dh)) return true;
   return false;
 }
 
