@@ -83,16 +83,68 @@ export function epaRegNoFormatOk(value: string): boolean {
   return EPA_FORMAT.test(value.trim());
 }
 
+/** A record dropped because its quoted field never closed before the end of the file. */
+export interface CsvUnclosedQuote {
+  /** 1-based line where the record started. */
+  rowLine: number;
+  /** 1-based line where the unterminated opening quote sits. */
+  quoteLine: number;
+}
+
+export interface CsvTokenizeResult {
+  records: { cells: string[]; line: number }[];
+  /** Records skipped because of an unclosed quote, in file order. */
+  unclosedQuotes: CsvUnclosedQuote[];
+}
+
+/**
+ * RFC-4180 tokenizer with recovery. An opening quote that never closes would
+ * otherwise swallow the rest of the file into one cell. Instead, the record
+ * holding it is dropped (and reported), and reading starts again on the line
+ * after the opening quote, so later rows still come through.
+ */
+export function tokenizeCsvWithRecovery(text: string): CsvTokenizeResult {
+  const records: { cells: string[]; line: number }[] = [];
+  const unclosedQuotes: CsvUnclosedQuote[] = [];
+  let start = 0;
+  let startLine = 1;
+  while (start < text.length) {
+    const r = tokenizeFrom(text, start, startLine, records);
+    if (!r) break;
+    unclosedQuotes.push({ rowLine: r.rowLine, quoteLine: r.quoteLine });
+    if (r.resumeAt < 0) break;
+    start = r.resumeAt;
+    startLine = r.quoteLine + 1;
+  }
+  return { records, unclosedQuotes };
+}
+
 /** RFC-4180 tokenizer. Returns records with the 1-based line each starts on. */
 export function tokenizeCsv(text: string): { cells: string[]; line: number }[] {
-  const out: { cells: string[]; line: number }[] = [];
-  let i = 0;
-  let line = 1;
+  return tokenizeCsvWithRecovery(text).records;
+}
+
+/**
+ * Tokenizes text[start..] into `out`. Returns null at a clean end of input, or
+ * details of an unclosed quote (the partial record is not added to `out`).
+ * `resumeAt` is the index just past the first line break after the opening
+ * quote, or -1 when there is none.
+ */
+function tokenizeFrom(
+  text: string,
+  start: number,
+  startLine: number,
+  out: { cells: string[]; line: number }[],
+): { rowLine: number; quoteLine: number; resumeAt: number } | null {
+  let i = start;
+  let line = startLine;
   let field = "";
   let row: string[] = [];
-  let rowLine = 1;
+  let rowLine = startLine;
   let inQuotes = false;
   let fieldStarted = false;
+  let quoteLine = startLine;
+  let resumeAt = -1;
   const n = text.length;
   const endRow = () => {
     row.push(field);
@@ -114,6 +166,9 @@ export function tokenizeCsv(text: string): { cells: string[]; line: number }[] {
         i++;
         continue;
       }
+      if (resumeAt < 0 && (c === "\n" || c === "\r")) {
+        resumeAt = i + (c === "\r" && text[i + 1] === "\n" ? 2 : 1);
+      }
       if (c === "\n") line++;
       if (c === "\r" && text[i + 1] === "\n") {
         field += "\n";
@@ -128,6 +183,8 @@ export function tokenizeCsv(text: string): { cells: string[]; line: number }[] {
     if (c === '"' && !fieldStarted) {
       inQuotes = true;
       fieldStarted = true;
+      quoteLine = line;
+      resumeAt = -1;
       i++;
       continue;
     }
@@ -149,8 +206,48 @@ export function tokenizeCsv(text: string): { cells: string[]; line: number }[] {
     fieldStarted = true;
     i++;
   }
+  if (inQuotes) return { rowLine, quoteLine, resumeAt: resumeAt < n ? resumeAt : -1 };
   if (fieldStarted || field !== "" || row.length > 0) endRow();
-  return out;
+  return null;
+}
+
+/**
+ * UTF-8 byte length without allocating an encoded copy. Matches
+ * `new TextEncoder().encode(text).length` (a lone surrogate counts as the
+ * 3-byte replacement character). Stops counting once `stopAbove` is passed.
+ */
+export function utf8ByteLength(text: string, stopAbove = Infinity): number {
+  let bytes = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c < 0x80) bytes += 1;
+    else if (c < 0x800) bytes += 2;
+    else if (c >= 0xd800 && c <= 0xdbff) {
+      const next = text.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        bytes += 4;
+        i++;
+      } else bytes += 3;
+    } else bytes += 3;
+    if (bytes > stopAbove) return bytes;
+  }
+  return bytes;
+}
+
+/** True when the text is over CSV_IMPORT_MAX_BYTES once encoded as UTF-8. */
+export function csvOverByteLimit(text: string): boolean {
+  // Each UTF-16 code unit is 1-3 UTF-8 bytes, so skip counting when the answer is clear.
+  if (text.length > CSV_IMPORT_MAX_BYTES) return true;
+  if (text.length * 3 <= CSV_IMPORT_MAX_BYTES) return false;
+  return utf8ByteLength(text, CSV_IMPORT_MAX_BYTES) > CSV_IMPORT_MAX_BYTES;
+}
+
+function unclosedQuoteMessage(u: CsvUnclosedQuote, more: boolean): string {
+  const where =
+    u.rowLine === u.quoteLine
+      ? `unclosed quote starting on line ${u.quoteLine}. That row was skipped`
+      : `unclosed quote starting on line ${u.quoteLine} (row starting on line ${u.rowLine}). That row was skipped`;
+  return `Needs a look: ${where}${more ? "; the lines after it were still read." : "."}`;
 }
 
 const YES = new Set(["y", "yes", "true", "1", "x", "25b", "25(b)"]);
@@ -158,14 +255,29 @@ const NO = new Set(["n", "no", "false", "0", ""]);
 
 export function parseCatalogCsv(input: string): CsvImportResult {
   const result: CsvImportResult = { rows: [], fileProblems: [], ignoredColumns: [], columnMap: {} };
-  if (input.length > CSV_IMPORT_MAX_BYTES) {
+  if (csvOverByteLimit(input)) {
     result.fileProblems.push(
       `Needs a look: file is too large (limit is about ${Math.round(CSV_IMPORT_MAX_BYTES / 1000)} KB).`,
     );
     return result;
   }
   const text = input.charCodeAt(0) === 0xfeff ? input.slice(1) : input;
-  const records = tokenizeCsv(text).filter((r) => r.cells.some((c) => c.trim() !== ""));
+  const tokenized = tokenizeCsvWithRecovery(text);
+  const records = tokenized.records.filter((r) => r.cells.some((c) => c.trim() !== ""));
+  const unclosed = tokenized.unclosedQuotes;
+  // An unclosed quote before (or in) the header row means we can't trust which
+  // line is the header, so read nothing rather than guess.
+  if (unclosed.length && (records.length === 0 || unclosed[0].rowLine < records[0].line)) {
+    const u = unclosed[0];
+    result.fileProblems.push(
+      `Needs a look: unclosed quote starting on line ${u.quoteLine}, before the product rows. Nothing was read; close the quote and try again.`,
+    );
+    return result;
+  }
+  for (const u of unclosed) {
+    const more = records.some((r) => r.line > u.quoteLine);
+    result.fileProblems.push(unclosedQuoteMessage(u, more));
+  }
   if (records.length === 0) {
     result.fileProblems.push("Needs a look: the file is empty.");
     return result;
