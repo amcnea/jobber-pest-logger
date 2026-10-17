@@ -334,14 +334,16 @@ describe("History: property actions", () => {
     }
   });
 
-  it("with a date filter active, the property entry is built from in-range logs only", async () => {
-    // Documents current behavior (see BUGS-batch2.md "observation"): the group handed to
-    // Duplicate last stop is the filtered one, so its lastLog is the latest *in range*.
-    const { user, onDuplicateLastStop } = setup();
+  it("with a date filter active, property actions still use the true latest visit (#92)", async () => {
+    const { user, onDuplicateLastStop, onLogAgainHere } = setup();
     setDate(toInput(), "2026-08-31");
-    await user.click(within(group("100 Main St")).getByRole("button", { name: "Duplicate last stop" }));
-    expect(onDuplicateLastStop.mock.calls[0][0].lastLog.id).toBe("main-aug");
-    expect(onDuplicateLastStop.mock.calls[0][0].customerBillingName).toBe("Old Owner");
+    const g = group("100 Main St");
+    await user.click(within(g).getByRole("button", { name: "Duplicate last stop" }));
+    await user.click(within(g).getByRole("button", { name: "Log again here" }));
+    for (const fn of [onDuplicateLastStop, onLogAgainHere]) {
+      expect(fn.mock.calls[0][0].lastLog.id).toBe("main-sep20");
+      expect(fn.mock.calls[0][0].customerBillingName).toBe("New Owner");
+    }
   });
 });
 

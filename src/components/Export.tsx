@@ -156,7 +156,7 @@ export function Export({
       if (example.blocked || issues.length > 0) {
         const parts: string[] = [];
         if (example.blocked) {
-          parts.push("example seeds still present on the export set");
+          parts.push("example rows are still saved on this device and must be removed before any export");
         }
         if (issues.length > 0) {
           parts.push(`${issues.length} incomplete § 7.144 record(s) in range`);
