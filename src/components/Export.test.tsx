@@ -116,7 +116,7 @@ afterEach(() => {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const csvBtn = () => screen.getByRole("button", { name: /Download Texas TDA CSV|Preparing…/ });
+const csvBtn = () => screen.getByRole("button", { name: /Download Texas use-record CSV|Preparing…/ });
 const pdfBtn = () => screen.getAllByRole("button", { name: /Download PDF|Preparing…/ }).at(-1)!;
 const fromInput = () => screen.getByLabelText("From") as HTMLInputElement;
 const toInput = () => screen.getByLabelText("To") as HTMLInputElement;
@@ -395,7 +395,7 @@ describe("Export: CSV / PDF download (local)", () => {
     expect(screen.getByRole("button", { name: "This month" })).toBeDisabled();
     await act(async () => release());
     expect(downloadCsv).toHaveBeenCalledTimes(1);
-    expect(csvBtn()).toHaveTextContent("Download Texas TDA CSV");
+    expect(csvBtn()).toHaveTextContent("Download Texas use-record CSV");
     expect(fromInput()).toBeEnabled();
   });
 

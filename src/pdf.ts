@@ -114,7 +114,7 @@ function drawPageHeader(doc: jsPDF, shopName: string | undefined): number {
   doc.setFont("helvetica", "bold");
   doc.setFontSize(13);
   doc.setTextColor(0);
-  doc.text("Texas TDA pesticide application log", MARGIN, y);
+  doc.text("Texas pesticide application log", MARGIN, y);
   y += 6;
   const name = shopName?.trim();
   if (name) {
@@ -177,7 +177,7 @@ export function downloadPdf(
     y += 2;
   }
   const schemaNote =
-    "Columns follow 4 TAC § 7.144(a) for Texas SPCS shops. Termite extras follow § 7.144(b) when the stop is termite work. Full disclaimer is on every page footer.";
+    "Fields drawn from 4 TAC § 7.144(a) for Texas SPCS shops. Termite extras drawn from § 7.144(b) when the stop is termite work. Full disclaimer is on every page footer.";
   ensureSpace(wrappedHeight(doc, schemaNote, MAX_WIDTH) + 2);
   y = wrap(doc, schemaNote, MARGIN, y, MAX_WIDTH);
   y += 2;

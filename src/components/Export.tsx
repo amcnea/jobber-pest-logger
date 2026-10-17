@@ -214,7 +214,7 @@ export function Export({
     } catch (err) {
       console.error("jobber-pest-logger: PDF export failed", err);
       setPdfError(
-        "Could not load the PDF exporter. Download the Texas TDA CSV, or try again. Print is a summary, not the audit export.",
+        "Could not load the PDF exporter. Download the Texas use-record CSV, or try again. Print is a summary, not the PDF/CSV use-record export.",
       );
     }
   }
@@ -235,10 +235,10 @@ export function Export({
     <div>
       <h2>Office export</h2>
       <p className="hint">
-        One Texas TDA CSV with fields drawn from 4 TAC § 7.144(a), plus termite extras from
+        One Texas use-record CSV with fields drawn from 4 TAC § 7.144(a), plus termite extras from
         § 7.144(b) when the stop is termite work, and a simple printable PDF. Real shop products print
         their EPA numbers. Example catalog seeds are blocked from real export until removed — they
-        must never ship as audit records. Weather, time of day (except termite pretreat), and CE are
+        must never ship as use records. Weather, time of day (except termite pretreat), and CE are
         not TDA-required and are omitted. Texas only.
       </p>
       <p className="hint">Records are kept 2 years. This app does not enforce retention.</p>
@@ -448,7 +448,7 @@ export function Export({
               void handleCsv();
             }}
           >
-            {pullBusy ? "Preparing…" : "Download Texas TDA CSV"}
+            {pullBusy ? "Preparing…" : "Download Texas use-record CSV"}
           </button>
           <button
             type="button"
