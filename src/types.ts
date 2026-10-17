@@ -104,4 +104,11 @@ export interface ShopSettings {
   shopTpclLetter: string;
 }
 
-export type Screen = "new" | "history" | "products" | "people" | "settings" | "export";
+export type Screen =
+  | "new"
+  | "history"
+  | "review"
+  | "products"
+  | "people"
+  | "settings"
+  | "export";
