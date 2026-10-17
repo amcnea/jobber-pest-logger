@@ -95,6 +95,12 @@ export interface CsvTokenizeResult {
   records: { cells: string[]; line: number }[];
   /** Records skipped because of an unclosed quote, in file order. */
   unclosedQuotes: CsvUnclosedQuote[];
+  /**
+   * Start lines of records that had text right after a closing quote (other
+   * than spaces/tabs) before the next comma or line end, e.g. `"Bait"x`. That
+   * usually means a quote was forgotten or doubled somewhere above.
+   */
+  textAfterClosingQuote: number[];
 }
 
 /**
@@ -106,17 +112,20 @@ export interface CsvTokenizeResult {
 export function tokenizeCsvWithRecovery(text: string): CsvTokenizeResult {
   const records: { cells: string[]; line: number }[] = [];
   const unclosedQuotes: CsvUnclosedQuote[] = [];
+  const stray = new Set<number>();
   let start = 0;
   let startLine = 1;
   while (start < text.length) {
-    const r = tokenizeFrom(text, start, startLine, records);
+    const r = tokenizeFrom(text, start, startLine, records, stray);
     if (!r) break;
     unclosedQuotes.push({ rowLine: r.rowLine, quoteLine: r.quoteLine });
     if (r.resumeAt < 0) break;
     start = r.resumeAt;
     startLine = r.quoteLine + 1;
   }
-  return { records, unclosedQuotes };
+  const kept = new Set(records.map((r) => r.line));
+  const textAfterClosingQuote = [...stray].filter((line) => kept.has(line)).sort((a, b) => a - b);
+  return { records, unclosedQuotes, textAfterClosingQuote };
 }
 
 /** RFC-4180 tokenizer. Returns records with the 1-based line each starts on. */
@@ -135,6 +144,7 @@ function tokenizeFrom(
   start: number,
   startLine: number,
   out: { cells: string[]; line: number }[],
+  stray: Set<number>,
 ): { rowLine: number; quoteLine: number; resumeAt: number } | null {
   let i = start;
   let line = startLine;
@@ -145,6 +155,7 @@ function tokenizeFrom(
   let fieldStarted = false;
   let quoteLine = startLine;
   let resumeAt = -1;
+  let afterClose = false;
   const n = text.length;
   const endRow = () => {
     row.push(field);
@@ -163,6 +174,7 @@ function tokenizeFrom(
           continue;
         }
         inQuotes = false;
+        afterClose = true;
         i++;
         continue;
       }
@@ -188,7 +200,12 @@ function tokenizeFrom(
       i++;
       continue;
     }
+    if (afterClose && c !== "," && c !== "\r" && c !== "\n" && c !== " " && c !== "\t") {
+      stray.add(rowLine);
+      afterClose = false;
+    }
     if (c === ",") {
+      afterClose = false;
       row.push(field);
       field = "";
       fieldStarted = false;
@@ -196,6 +213,7 @@ function tokenizeFrom(
       continue;
     }
     if (c === "\r" || c === "\n") {
+      afterClose = false;
       endRow();
       i += c === "\r" && text[i + 1] === "\n" ? 2 : 1;
       line++;
@@ -282,7 +300,14 @@ export function parseCatalogCsv(input: string): CsvImportResult {
     result.fileProblems.push("Needs a look: the file is empty.");
     return result;
   }
+  const strayLines = new Set(tokenized.textAfterClosingQuote);
   const [header, ...body] = records;
+  if (strayLines.has(header.line)) {
+    result.fileProblems.push(
+      `Needs a look: the header row on line ${header.line} has text after a closing quote; check for a missing or extra quote. Nothing was read.`,
+    );
+    return result;
+  }
   const seen = new Set<CsvImportField>();
   header.cells.forEach((raw, idx) => {
     const field = matchCsvHeader(raw);
@@ -315,6 +340,14 @@ export function parseCatalogCsv(input: string): CsvImportResult {
   const colFor = (f: CsvImportField) =>
     Object.entries(result.columnMap).find(([, v]) => v === f)?.[0];
   for (const rec of rowsIn) {
+    if (strayLines.has(rec.line)) {
+      // Cells here can't be trusted (often a forgotten quote above pulled
+      // several lines into one cell), so never offer this row as a product.
+      result.fileProblems.push(
+        `Needs a look: row starting on line ${rec.line} has text after a closing quote; check for a missing or extra quote. That row was skipped.`,
+      );
+      continue;
+    }
     const get = (f: CsvImportField): string | undefined => {
       const idx = colFor(f);
       return idx === undefined ? undefined : (rec.cells[Number(idx)] ?? "").trim();
@@ -322,6 +355,11 @@ export function parseCatalogCsv(input: string): CsvImportResult {
     const problems: CsvRowProblem[] = [];
     const flag = (field: CsvImportField | null, message: string) =>
       problems.push({ line: rec.line, field, message });
+
+    const mapped = Object.values(result.columnMap).map((f) => get(f) ?? "");
+    if (mapped.some((v) => v.includes("\n") || v.includes("\r"))) {
+      flag(null, `Needs a look: row starting on line ${rec.line} has a line break inside a cell; check for a missing or extra quote.`);
+    }
 
     const name = get("name") ?? "";
     if (!name) flag("name", "Needs a look: product name is blank.");
