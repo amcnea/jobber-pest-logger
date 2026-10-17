@@ -233,7 +233,7 @@ describe("flushLogOutbox — queued entries", () => {
 describe("wording", () => {
   it("conflict text is plain and avoids loaded terms", () => {
     expect(REMOTE_COPY_KEPT_ERROR).toBe(
-      "Sync conflict: the shop has a newer or reviewed copy of this log, so this device's copy was not uploaded. It stays saved here.",
+      "Sync conflict: the shop's copy of this log has changes or a review this device's copy doesn't, so this device's copy was not uploaded. It stays saved here.",
     );
     expect(REMOTE_COPY_KEPT_ERROR).not.toMatch(BANNED);
   });

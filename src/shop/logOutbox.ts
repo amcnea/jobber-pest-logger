@@ -20,7 +20,7 @@ export const LOG_OUTBOX_KEY = "jobber-pest-logger:log-outbox:v1";
  * device's copy is not. The remote copy is kept; this device's copy stays queued.
  */
 export const REMOTE_COPY_KEPT_ERROR =
-  "Sync conflict: the shop has a newer or reviewed copy of this log, so this device's copy was not uploaded. It stays saved here.";
+  "Sync conflict: the shop's copy of this log has changes or a review this device's copy doesn't, so this device's copy was not uploaded. It stays saved here.";
 
 export interface LogOutboxEntry {
   shopId: string;
