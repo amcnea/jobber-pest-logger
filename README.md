@@ -1,6 +1,6 @@
 # Jobber Pest Logger
 
-Texas-only **mobile-web compliance sidecar** for pest shops that already use Jobber. After a stop, a tech logs a pesticide application from the shop's own product list. The office exports one audit-ready Texas TDA CSV and a simple PDF.
+Texas-only **mobile-web sidecar** that helps pest shops that already use Jobber keep pesticide use records. After a stop, a tech logs a pesticide application from the shop's own product list. The office exports one Texas use-record CSV (fields drawn from 4 TAC § 7.144(a)) and a simple PDF.
 
 This is **not** a field-service app. It does not do scheduling, invoicing, routing, payments, inventory, login, Jobber OAuth/API, Stripe, weather APIs, SMS reminders, or multi-state logic.
 
@@ -15,7 +15,7 @@ v1 is a working UI on this device only (browser localStorage). Schema is locked.
 - Optional Jobber job number / address paste-on (not a TDA field)
 - Termite flag reveals real section 7.144(b) extras (diagram is a text note, not a drawing)
 - Property-level history grouped by service address
-- Office export: Texas TDA CSV and printable PDF. Real shop products print their EPA numbers. Example seeds are labeled "example / not a real EPA number"
+- Office export: Texas use-record CSV and printable PDF. Real shop products print their EPA numbers. Example seeds are labeled "example / not a real EPA number"
 
 Records are kept **2 years**. This app does not run a retention engine.
 
@@ -97,7 +97,7 @@ Installable **Add to Home Screen** shell for phone use at the shop desk. Still d
 
 1. Complete first-run setup and remove example catalog seeds so CSV and PDF unlock.
 2. Save one real application log, or clear example refs from History.
-3. On a phone viewport: Export, optional date range, tap Download Texas TDA CSV and Download PDF.
+3. On a phone viewport: Export, optional date range, tap Download Texas use-record CSV and Download PDF.
 4. Confirm the example-seed gate still blocks export when example products remain.
 
 Stays office-desk. Does not add Jobber API integration, Stripe, sync, multi-state, or new TDA-required fields.

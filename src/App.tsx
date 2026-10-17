@@ -422,7 +422,7 @@ export default function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <div className="eyebrow">Texas TDA · Jobber sidecar</div>
+        <div className="eyebrow">Texas · Jobber sidecar</div>
         <h1>Jobber Pest Logger</h1>
         <p className="store-status" role="status">
           {/* shopSessionTick forces re-read after Settings create/join/leave/sign-in */}

@@ -1,7 +1,7 @@
 {
   "name": "Jobber Pest Logger",
   "short_name": "Pest Logger",
-  "description": "Texas-only office-desk pesticide application logger for shops that use Jobber. Device-local TDA CSV/PDF export.",
+  "description": "Texas-only office-desk pesticide application logger for shops that use Jobber. Device-local Texas use-record CSV/PDF export.",
   "id": "./",
   "start_url": "./",
   "scope": "./",

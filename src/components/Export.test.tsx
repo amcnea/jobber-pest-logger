@@ -116,7 +116,7 @@ afterEach(() => {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const csvBtn = () => screen.getByRole("button", { name: /Download Texas TDA CSV|Preparing…/ });
+const csvBtn = () => screen.getByRole("button", { name: /Download Texas use-record CSV|Preparing…/ });
 const pdfBtn = () => screen.getAllByRole("button", { name: /Download PDF|Preparing…/ }).at(-1)!;
 const fromInput = () => screen.getByLabelText("From") as HTMLInputElement;
 const toInput = () => screen.getByLabelText("To") as HTMLInputElement;
@@ -395,7 +395,7 @@ describe("Export: CSV / PDF download (local)", () => {
     expect(screen.getByRole("button", { name: "This month" })).toBeDisabled();
     await act(async () => release());
     expect(downloadCsv).toHaveBeenCalledTimes(1);
-    expect(csvBtn()).toHaveTextContent("Download Texas TDA CSV");
+    expect(csvBtn()).toHaveTextContent("Download Texas use-record CSV");
     expect(fromInput()).toBeEnabled();
   });
 
@@ -469,7 +469,7 @@ describe("Export: shared shop", () => {
     await user.click(pdfBtn());
     expect(
       await screen.findByText(
-        "Export blocked after shared shop pull: example rows are still saved on this device and must be removed before any export; 2 incomplete § 7.144 record(s) in range. Clear gates, then try again.",
+        "Export blocked after shared shop pull: example rows are still in the shared shop records and must be removed before any export; 2 incomplete § 7.144 record(s) in range. Clear gates, then try again.",
       ),
     ).toHaveAttribute("role", "alert");
     expect(downloadPdf).not.toHaveBeenCalled();
@@ -508,6 +508,28 @@ describe("Export: shared shop", () => {
     expect(alerts()).toContain(
       "Export blocked after preparing export: 1 incomplete § 7.144 record(s) in range. Clear gates, then try again.",
     );
+  });
+
+  it("#147: a shared pull with example rows says they are in the shared shop records", async () => {
+    sharedPullOf({ catalog: [EXAMPLE_PRODUCT] });
+    const { user } = setup();
+    await user.click(csvBtn());
+    expect(alerts()).toContain(
+      "Export blocked after shared shop pull: example rows are still in the shared shop records and must be removed before any export. Clear gates, then try again.",
+    );
+    expect(alerts().join(" ")).not.toContain("saved on this device");
+    expect(downloadCsv).not.toHaveBeenCalled();
+  });
+
+  it("#147: a local-fallback pull with example rows keeps the on-device wording", async () => {
+    sharedPullOf({ catalog: [EXAMPLE_PRODUCT] }, "shared-fallback-local");
+    const { user } = setup();
+    await user.click(pdfBtn());
+    expect(alerts()).toContain(
+      "Export blocked after preparing export: example rows are still saved on this device and must be removed before any export. Clear gates, then try again.",
+    );
+    expect(alerts().join(" ")).not.toContain("shared shop records");
+    expect(downloadPdf).not.toHaveBeenCalled();
   });
 
   it("an inverted range still blocks in shared mode (no pull attempted)", () => {
