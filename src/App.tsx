@@ -27,6 +27,8 @@ import {
   loadSettings,
   markLogReviewed,
   removeExampleProductsFromCatalog,
+  restoreHistoryMessage,
+  restoredKeptReport,
   clearExampleDemoData,
   wipeAllDeviceData,
   saveSettings,
@@ -442,11 +444,16 @@ export default function App() {
     },
     flash?: string,
   ) {
-    setLogs(data.logs);
+    // Restore keeps device logs that carry newer / different change history
+    // (storage.mergeRestoredLogs), so read the merged set back instead of data.logs.
+    const storedLogs = loadLogs();
+    setLogs(storedLogs);
     setCatalog(data.catalog);
     setPeople(data.people);
     setSettings(data.settings);
-    setSettingsFlash(flash ? { slot: "backup", text: flash } : null);
+    const historyNote = flash ? restoreHistoryMessage(restoredKeptReport(data.logs, storedLogs)) : null;
+    const text = flash && historyNote ? `${flash} ${historyNote}` : flash;
+    setSettingsFlash(text ? { slot: "backup", text } : null);
     setSettingsFormKey((k) => k + 1);
     setStorageError(null);
   }

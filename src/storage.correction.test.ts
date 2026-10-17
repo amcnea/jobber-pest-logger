@@ -12,6 +12,8 @@ import {
   normalizeLog,
   parseBackup,
   parseShopSections,
+  restoredKeptReport,
+  restoreHistoryMessage,
   saveLogs,
   upsertLog,
 } from "./storage";
@@ -451,5 +453,223 @@ describe("wording", () => {
     push(applyCorrection("L2", { ...loadLogs()[1], products: [{} as never] }, opts));
     expect(errors.length).toBeGreaterThanOrEqual(9);
     for (const e of errors) expect(e).not.toMatch(banned);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Restore never drops correction history (Lawgical records rule)
+// ---------------------------------------------------------------------------
+
+const LOGS_KEY = "jobber-pest-logger:logs:v1";
+const SETTINGS = { shopName: "Acme", shopTpclNumber: "1", shopTpclLetter: "" };
+
+function backupWith(logs: unknown[]) {
+  const parsed = parseBackup({
+    version: BACKUP_VERSION,
+    exportedAt: "2026-09-01T12:00:00.000Z",
+    logs: JSON.parse(JSON.stringify(logs)),
+    catalog: [],
+    people: [],
+    settings: SETTINGS,
+  });
+  if (!parsed.ok) throw new Error(parsed.error);
+  return parsed.backup;
+}
+
+function correct(id: string, patch: Partial<ApplicationLog>, reason: string, by = "p-ana") {
+  const current = loadLogs().find((l) => l.id === id)!;
+  const res = applyCorrection(id, { ...current, ...patch }, { changedBy: by, reason, people: PEOPLE, now: NOW });
+  if (!res.ok) throw new Error(res.error);
+  return res.log;
+}
+
+function restore(logs: unknown[]) {
+  const res = applyBackup(backupWith(logs));
+  if (!res.ok) throw new Error(res.message);
+  return res;
+}
+
+describe("restore — keep device copy vs take backup copy", () => {
+  it("older backup (no history) over a corrected log: device copy and its history survive", () => {
+    seed(makeLog({ id: "L1" }));
+    const olderBackupCopy = loadLogs()[0]; // revision 0, history []
+    correct("L1", { serviceAddress: "101 Main St" }, "Typo in house number");
+    const rawBefore = JSON.stringify(loadLogs()[0]);
+
+    const res = restore([olderBackupCopy]);
+    const after = loadLogs()[0];
+    expect(JSON.stringify(after)).toBe(rawBefore);
+    expect(after.serviceAddress).toBe("101 Main St");
+    expect(after.revision).toBe(1);
+    expect(after.history![0].reason).toBe("Typo in house number");
+    expect(res.history).toEqual({ keptDevice: ["L1"], diverged: [], keptAbsent: [] });
+  });
+
+  it("legacy-shaped backup row (fields missing entirely) is treated as revision 0 / no history", () => {
+    seed(makeLog({ id: "legacy" }));
+    correct("legacy", { targetPestOrPurpose: "Roaches" }, "Wrong pest");
+    restore([legacyRaw()]);
+    expect(loadLogs()[0].targetPestOrPurpose).toBe("Roaches");
+    expect(loadLogs()[0].history).toHaveLength(1);
+  });
+
+  it("backup with a shorter (prefix) history: device copy kept (higher revision)", () => {
+    seed(makeLog({ id: "L1" }));
+    const rev1 = correct("L1", { serviceAddress: "101 Main St" }, "first");
+    correct("L1", { dateUsed: "2026-08-31" }, "second");
+    restore([rev1]);
+    const after = loadLogs()[0];
+    expect(after.revision).toBe(2);
+    expect(after.history!.map((h) => h.reason)).toEqual(["first", "second"]);
+    expect(after.dateUsed).toBe("2026-08-31");
+  });
+
+  it("backup that extends the device history: device copy kept (backup history isn't a prefix of the device's)", () => {
+    seed(makeLog({ id: "L1" }));
+    const rev1 = correct("L1", { serviceAddress: "101 Main St" }, "first");
+    const rev2 = correct("L1", { dateUsed: "2026-08-31" }, "second");
+    // Device goes back to revision 1 (e.g. another device's file is newer).
+    seed(rev1);
+    const res = restore([rev2]);
+    const after = loadLogs()[0];
+    expect(after.revision).toBe(1);
+    expect(after.history!.map((h) => h.reason)).toEqual(["first"]);
+    expect(res.history!.keptDevice).toEqual(["L1"]);
+    expect(res.history!.diverged).toEqual([]); // extension, not divergence
+  });
+
+  it("diverged histories (same revision, different entries): device kept, counted as diverged", () => {
+    seed(makeLog({ id: "L1" }));
+    const base = loadLogs()[0];
+    const deviceRev1 = correct("L1", { serviceAddress: "101 Main St" }, "device fix");
+    seed(base);
+    const otherRev1 = correct("L1", { serviceAddress: "102 Main St" }, "other fix", "p-ben");
+    seed(deviceRev1);
+    const res = restore([otherRev1]);
+    const after = loadLogs()[0];
+    expect(after.serviceAddress).toBe("101 Main St");
+    expect(after.history!.map((h) => h.reason)).toEqual(["device fix"]);
+    expect(res.history).toEqual({ keptDevice: ["L1"], diverged: ["L1"], keptAbsent: [] });
+  });
+
+  it("same history and revision: backup copy taken (normal restore)", () => {
+    seed(makeLog({ id: "L1" }));
+    const rev1 = correct("L1", { serviceAddress: "101 Main St" }, "fix");
+    seed({ ...rev1, jobberJobNumber: "LOCAL-EDIT" });
+    const res = restore([{ ...rev1, jobberJobNumber: "FROM-BACKUP" }]);
+    expect(loadLogs()[0].jobberJobNumber).toBe("FROM-BACKUP");
+    expect(res.history!.keptDevice).toEqual([]);
+  });
+
+  it("logs with no history on either side restore from the backup as before", () => {
+    seed(makeLog({ id: "L1", targetPestOrPurpose: "Ants" }));
+    restore([makeLog({ id: "L1", targetPestOrPurpose: "Fleas" })]);
+    expect(loadLogs()[0].targetPestOrPurpose).toBe("Fleas");
+  });
+
+  it("reviewed device log vs unreviewed backup copy: device kept, stays locked", () => {
+    seed(makeLog({ id: "L1" }));
+    const unreviewed = loadLogs()[0];
+    markLogReviewed("L1", { reviewedBy: "p-ana", people: PEOPLE, catalog: CATALOG, now: NOW });
+    const res = restore([{ ...unreviewed, targetPestOrPurpose: "Fleas" }]);
+    const after = loadLogs()[0];
+    expect(after.reviewedAt).toBe("2026-10-17T17:05:00-05:00");
+    expect(after.reviewedBy).toBe("Ana Office");
+    expect(after.targetPestOrPurpose).toBe("Ants");
+    expect(res.history!.keptDevice).toEqual(["L1"]);
+  });
+});
+
+describe("restore — whole-set replace keeps history-bearing device logs", () => {
+  it("device logs absent from the backup are kept when corrected or reviewed; plain ones are replaced", () => {
+    seed(makeLog({ id: "corrected" }), makeLog({ id: "reviewed" }), makeLog({ id: "plain" }));
+    correct("corrected", { serviceAddress: "101 Main St" }, "fix");
+    markLogReviewed("reviewed", { reviewedBy: "p-ana", people: PEOPLE, catalog: CATALOG, now: NOW });
+    const res = restore([makeLog({ id: "fromBackup" })]);
+    expect(loadLogs().map((l) => l.id)).toEqual(["fromBackup", "corrected", "reviewed"]);
+    expect(loadLogs()[1].history).toHaveLength(1);
+    expect(loadLogs()[2].reviewedBy).toBe("Ana Office");
+    expect(res.history!.keptAbsent).toEqual(["corrected", "reviewed"]);
+  });
+
+  it("legacy backup into an empty store still works, with nothing kept", () => {
+    const res = restore([legacyRaw()]);
+    expect(loadLogs().map((l) => [l.id, l.revision, l.history])).toEqual([["legacy", 0, []]]);
+    expect(res.history).toEqual({ keptDevice: [], diverged: [], keptAbsent: [] });
+    expect(restoreHistoryMessage(res.history)).toBeNull();
+  });
+});
+
+describe("restore — rollback puts history back exactly", () => {
+  class FailSettingsStorage extends MemoryStorage {
+    failSettings = false;
+    setItem(k: string, v: string) {
+      if (this.failSettings && k === "jobber-pest-logger:settings:v1") throw new Error("QuotaExceededError");
+      super.setItem(k, v);
+    }
+  }
+
+  it("a mid-restore failure restores the logs key byte-for-byte (revision, history, review stamp)", () => {
+    const failing = new FailSettingsStorage();
+    vi.stubGlobal("localStorage", failing);
+    seed(makeLog({ id: "L1" }), makeLog({ id: "L2" }));
+    correct("L1", { serviceAddress: "101 Main St" }, "fix");
+    markLogReviewed("L2", { reviewedBy: "p-ben", people: PEOPLE, catalog: CATALOG, now: NOW });
+    const rawBefore = failing.getItem(LOGS_KEY);
+    const logsBefore = loadLogs();
+
+    failing.failSettings = true;
+    // The logs write succeeds (new id changes the bytes), then settings fails.
+    const res = applyBackup(backupWith([makeLog({ id: "L9" })]));
+    expect(res.ok).toBe(false);
+
+    expect(failing.getItem(LOGS_KEY)).toBe(rawBefore);
+    const after = loadLogs();
+    expect(after).toEqual(logsBefore);
+    expect(after[0].revision).toBe(1);
+    expect(JSON.stringify(after[0].history)).toBe(JSON.stringify(logsBefore[0].history));
+    expect(after[1]).toMatchObject({ reviewedAt: "2026-10-17T17:05:00-05:00", reviewedBy: "Ben Tech" });
+  });
+});
+
+describe("restore — summary wording", () => {
+  const banned =
+    /tamper-proof|immutable|audit-proof|legally valid|compliant|noncompliant|violation|invalid|certified|audit/i;
+
+  it("neutral one-liner, singular and plural", () => {
+    const one = restoreHistoryMessage({ keptDevice: ["a"], diverged: ["a"], keptAbsent: [] });
+    const many = restoreHistoryMessage({ keptDevice: ["a"], diverged: [], keptAbsent: ["b", "c"] });
+    expect(one).toBe("1 log kept its change history from this device.");
+    expect(many).toBe("3 logs kept their change history from this device.");
+    for (const m of [one, many]) expect(m).not.toMatch(banned);
+    expect(restoreHistoryMessage({ keptDevice: [], diverged: [], keptAbsent: [] })).toBeNull();
+  });
+
+  it("restoredKeptReport derives the same counts from the backup and stored result", () => {
+    seed(makeLog({ id: "L1" }), makeLog({ id: "L2" }));
+    const backupCopy = loadLogs()[0];
+    correct("L1", { serviceAddress: "101 Main St" }, "fix");
+    correct("L2", { serviceAddress: "9 Elm" }, "fix");
+    const backup = backupWith([backupCopy]);
+    expect(applyBackup(backup).ok).toBe(true);
+    expect(restoredKeptReport(backup.logs, loadLogs())).toEqual({
+      keptDevice: ["L1"],
+      diverged: [],
+      keptAbsent: ["L2"],
+    });
+  });
+});
+
+describe("priorSnapshot carries the review stamp", () => {
+  it("correcting a reviewed log snapshots reviewedAt and reviewedBy", () => {
+    seed(makeLog({ id: "L1" }));
+    markLogReviewed("L1", { reviewedBy: "p-ben", people: PEOPLE, catalog: CATALOG, now: NOW });
+    const log = correct("L1", { targetPestOrPurpose: "Roaches" }, "Wrong pest");
+    const snap = log.history![0].priorSnapshot;
+    expect(snap.reviewedAt).toBe("2026-10-17T17:05:00-05:00");
+    expect(snap.reviewedBy).toBe("Ben Tech");
+    // Survives a reload.
+    const reloaded = loadLogs()[0].history![0].priorSnapshot;
+    expect(reloaded).toMatchObject({ reviewedAt: "2026-10-17T17:05:00-05:00", reviewedBy: "Ben Tech" });
   });
 });

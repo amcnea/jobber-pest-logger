@@ -1651,8 +1651,119 @@ export function parseBackup(raw: unknown): RestoreResult {
 }
 
 export type ApplyBackupResult =
-  | { ok: true }
+  | { ok: true; history?: RestoreHistoryReport }
   | { ok: false; unrestoredKeys: string[]; message: string };
+
+/** What a restore did to protect change history on logs already on this device. */
+export interface RestoreHistoryReport {
+  /** Ids in both sets where the device copy was kept (any reason below). */
+  keptDevice: string[];
+  /** Subset of keptDevice: neither history is an earlier part of the other. */
+  diverged: string[];
+  /** Device logs absent from the backup kept because they carry history or a review stamp. */
+  keptAbsent: string[];
+}
+
+function sameCorrectionEntry(a: CorrectionEntry, b: CorrectionEntry): boolean {
+  return (
+    a.revision === b.revision &&
+    a.changedAt === b.changedAt &&
+    a.changedBy === b.changedBy &&
+    a.reason === b.reason &&
+    stableStringify(a.changes) === stableStringify(b.changes)
+  );
+}
+
+/** True when `earlier` is an exact earlier part (prefix, possibly equal) of `later`. */
+export function isHistoryPrefix(earlier: CorrectionEntry[], later: CorrectionEntry[]): boolean {
+  if (earlier.length > later.length) return false;
+  return earlier.every((entry, i) => sameCorrectionEntry(entry, later[i]));
+}
+
+function logRevision(log: ApplicationLog): number {
+  return log.revision ?? log.history?.length ?? 0;
+}
+
+function carriesHistoryOrReview(log: ApplicationLog): boolean {
+  return logRevision(log) > 0 || (log.history?.length ?? 0) > 0 || isLogReviewed(log);
+}
+
+/**
+ * Lawgical records rule — a restore never drops correction history. For a log id on
+ * both the device and in the backup, keep the device copy when:
+ *   - its revision is higher than the backup's, OR
+ *   - the backup's history isn't an exact earlier part (prefix) of the device's history;
+ * otherwise take the backup copy. Additionally, a reviewed device log is kept when the
+ * backup copy is unreviewed (a restore must not unlock a log).
+ */
+export function shouldKeepDeviceLog(device: ApplicationLog, backup: ApplicationLog): boolean {
+  if (logRevision(device) > logRevision(backup)) return true;
+  if (!isHistoryPrefix(backup.history ?? [], device.history ?? [])) return true;
+  if (isLogReviewed(device) && !isLogReviewed(backup)) return true;
+  return false;
+}
+
+/**
+ * Merge the backup's log set with the logs already on this device (whole-set replace
+ * otherwise). Pure: no storage access.
+ */
+export function mergeRestoredLogs(
+  device: ApplicationLog[],
+  backup: ApplicationLog[],
+): { logs: ApplicationLog[]; report: RestoreHistoryReport } {
+  const deviceById = new Map(device.map((l) => [l.id, l]));
+  const backupIds = new Set(backup.map((l) => l.id));
+  const report: RestoreHistoryReport = { keptDevice: [], diverged: [], keptAbsent: [] };
+  const logs = backup.map((incoming) => {
+    const local = deviceById.get(incoming.id);
+    if (!local || !shouldKeepDeviceLog(local, incoming)) return incoming;
+    report.keptDevice.push(local.id);
+    const lh = local.history ?? [];
+    const bh = incoming.history ?? [];
+    if (!isHistoryPrefix(bh, lh) && !isHistoryPrefix(lh, bh)) report.diverged.push(local.id);
+    return local;
+  });
+  for (const local of device) {
+    if (!backupIds.has(local.id) && carriesHistoryOrReview(local)) {
+      report.keptAbsent.push(local.id);
+      logs.push(local);
+    }
+  }
+  return { logs, report };
+}
+
+/** Neutral one-liner for the restore banner, or null when nothing was kept. */
+export function restoreHistoryMessage(report: RestoreHistoryReport | undefined): string | null {
+  if (!report) return null;
+  const n = report.keptDevice.length + report.keptAbsent.length;
+  if (n === 0) return null;
+  return `${n} log${n === 1 ? "" : "s"} kept ${n === 1 ? "its" : "their"} change history from this device.`;
+}
+
+/**
+ * After a restore, which stored logs differ from the backup's copy (device copy kept)
+ * or are absent from it (kept for history / review). For callers that only see the
+ * parsed backup and the stored result (App after Settings restore).
+ */
+export function restoredKeptReport(
+  backupLogs: ApplicationLog[],
+  storedLogs: ApplicationLog[],
+): RestoreHistoryReport {
+  const backupById = new Map(backupLogs.map((l) => [l.id, l]));
+  const report: RestoreHistoryReport = { keptDevice: [], diverged: [], keptAbsent: [] };
+  for (const stored of storedLogs) {
+    const incoming = backupById.get(stored.id);
+    if (!incoming) report.keptAbsent.push(stored.id);
+    else if (stableStringify(incoming) !== stableStringify(stored)) report.keptDevice.push(stored.id);
+  }
+  return report;
+}
+
+/** Normalized logs currently stored, without the quarantine side effect of loadLogs. */
+function readStoredLogsForRestore(): ApplicationLog[] {
+  const raw = readStoredArray(LOGS_KEY) ?? [];
+  return raw.map(normalizeLog).filter((l): l is ApplicationLog => l !== null);
+}
 
 const RESTORE_STORAGE_LABELS: Record<string, string> = {
   [LOGS_KEY]: "logs",
@@ -1758,9 +1869,14 @@ export function applyBackup(backup: DeviceBackup): ApplyBackupResult {
     return unrestored;
   };
 
+  // Never drop correction history: merge against the device's current logs
+  // (see shouldKeepDeviceLog / mergeRestoredLogs). Read after the snapshot so a
+  // failed restore rolls back to the exact prior bytes.
+  const merged = mergeRestoredLogs(readStoredLogsForRestore(), backup.logs);
+
   // skipQuarantine: writeBackupQuarantine replaces those keys next. Appending
   // the replaced invalid rows first can fail on quota and abort the restore.
-  const logsOk = saveLogs(backup.logs, { skipQuarantine: true });
+  const logsOk = saveLogs(merged.logs, { skipQuarantine: true });
   const catalogOk = saveCatalog(backup.catalog, { skipQuarantine: true });
   const peopleOk = savePeople(backup.people, { skipQuarantine: true });
   const settingsOk = saveSettings(backup.settings);
@@ -1771,7 +1887,7 @@ export function applyBackup(backup: DeviceBackup): ApplyBackupResult {
   if (!writeBackupQuarantine(quarantine)) {
     return applyBackupFailed(rollback());
   }
-  return { ok: true };
+  return { ok: true, history: merged.report };
 }
 
 /** Soft first-run setup steps (not a hard gate on logging). */
