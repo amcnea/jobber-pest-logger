@@ -47,6 +47,7 @@ import {
   needsShopUnlock,
   outboxEntriesForShop,
   RemoteShopStore,
+  REMOTE_COPY_KEPT_ERROR,
   resolveShopStore,
   sessionRole,
   shopStoreStatusHint,
@@ -251,7 +252,10 @@ export default function App() {
         }
         if (!sync.ok) {
           setOutboxMessage({
-            text: sync.queued
+            // Remote copy kept (ahead / split / reviewed): show the conflict, local log untouched.
+            text: sync.error === REMOTE_COPY_KEPT_ERROR
+              ? REMOTE_COPY_KEPT_ERROR
+              : sync.queued
               ? "Saved on this device. Cloud sync pending — will retry when online."
               : `Saved on this device, but could not queue cloud sync: ${sync.error}`,
             shopKey,

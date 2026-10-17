@@ -1704,8 +1704,34 @@ export function shouldKeepDeviceLog(device: ApplicationLog, backup: ApplicationL
   const bh = backup.history ?? [];
   if (isHistoryPrefix(dh, bh) && logRevision(backup) > logRevision(device)) return false;
   if (logRevision(device) > logRevision(backup)) return true;
-  if (!isHistoryPrefix(bh, dh)) return true;
+  // Backup history is a strict prefix of the device's (device ahead) or split apart.
+  if (bh.length < dh.length || !isHistoryPrefix(bh, dh)) return true;
   return false;
+}
+
+/**
+ * Same rule as shouldKeepDeviceLog, named for any "existing copy vs incoming copy"
+ * write (shared-shop sync: existing = remote log, incoming = this device's log).
+ */
+export function shouldKeepExistingLog(existing: ApplicationLog, incoming: ApplicationLog): boolean {
+  return shouldKeepDeviceLog(existing, incoming);
+}
+
+/**
+ * Put `incoming` into a log set by id (new ids go to the front). When the existing
+ * copy must be kept (shouldKeepExistingLog) the set is returned unchanged with
+ * `kept: true`. Pure.
+ */
+export function mergeLogIntoSet(
+  logs: ApplicationLog[],
+  incoming: ApplicationLog,
+): { logs: ApplicationLog[]; kept: boolean } {
+  const idx = logs.findIndex((l) => l.id === incoming.id);
+  if (idx === -1) return { logs: [incoming, ...logs], kept: false };
+  if (shouldKeepExistingLog(logs[idx], incoming)) return { logs, kept: true };
+  const next = [...logs];
+  next[idx] = incoming;
+  return { logs: next, kept: false };
 }
 
 /**

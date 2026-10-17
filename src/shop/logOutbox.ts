@@ -8,11 +8,19 @@
  */
 
 import type { ApplicationLog } from "../types";
-import { normalizeLog } from "../storage";
+import { mergeLogIntoSet, normalizeLog } from "../storage";
 import type { RemoteShopStore } from "./RemoteShopStore";
 import { isSessionAuthenticated, loadShopSession } from "./session";
 
 export const LOG_OUTBOX_KEY = "jobber-pest-logger:log-outbox:v1";
+
+/**
+ * Shown (as the entry's lastError / sync error) when the shop already has a copy of
+ * this log that is ahead, has a split change history, or is reviewed while this
+ * device's copy is not. The remote copy is kept; this device's copy stays queued.
+ */
+export const REMOTE_COPY_KEPT_ERROR =
+  "Sync conflict: the shop has a newer or reviewed copy of this log, so this device's copy was not uploaded. It stays saved here.";
 
 export interface LogOutboxEntry {
   shopId: string;
@@ -325,10 +333,30 @@ export async function flushLogOutbox(
     let logs = [...got.value.logs];
     // Outbox is newest-first; merge oldest-first so prepended new logs end up
     // newest-first on the remote (same order as upsertLog / syncLogToRemote).
+    // A remote copy that is ahead / split / reviewed is kept (mergeLogIntoSet);
+    // that entry stays queued with REMOTE_COPY_KEPT_ERROR instead of overwriting it.
+    const refused: LogOutboxEntry[] = [];
+    const merged: LogOutboxEntry[] = [];
     for (const entry of [...live].reverse()) {
-      const idx = logs.findIndex((l) => l.id === entry.log.id);
-      if (idx === -1) logs = [entry.log, ...logs];
-      else logs[idx] = entry.log;
+      const result = mergeLogIntoSet(logs, entry.log);
+      if (result.kept) refused.push(entry);
+      else merged.push(entry);
+      logs = result.logs;
+    }
+    if (refused.length > 0) {
+      await annotateOutboxErrors(
+        id,
+        refused.map((e) => e.log.id),
+        REMOTE_COPY_KEPT_ERROR,
+      );
+    }
+    if (merged.length === 0) {
+      return {
+        ok: false,
+        flushed: 0,
+        remaining: outboxEntriesForShop(id).length,
+        error: REMOTE_COPY_KEPT_ERROR,
+      };
     }
 
     // Session may expire or switch shops while getShop awaited — do not put or clear outbox.
@@ -346,7 +374,7 @@ export async function flushLogOutbox(
     if (!put.ok) {
       await annotateOutboxErrors(
         id,
-        live.map((e) => e.log.id),
+        merged.map((e) => e.log.id),
         put.error,
       );
       return {
@@ -360,18 +388,21 @@ export async function flushLogOutbox(
 
     const cleared = await removeOutboxVersions(
       id,
-      live.map((e) => e.entryId),
+      merged.map((e) => e.entryId),
     );
     const remaining = outboxEntriesForShop(id).length;
     if (!cleared) {
       return {
         ok: false,
-        flushed: live.length,
+        flushed: merged.length,
         remaining,
         error: "Synced to shop but could not update the local outbox.",
       };
     }
-    return { ok: true, flushed: live.length, remaining };
+    if (refused.length > 0) {
+      return { ok: false, flushed: merged.length, remaining, error: REMOTE_COPY_KEPT_ERROR };
+    }
+    return { ok: true, flushed: merged.length, remaining };
   };
 
   const first = await attempt();
@@ -420,10 +451,15 @@ export async function syncLogToRemote(
     return { ok: true };
   }
 
-  const logs = [...got.value.logs];
-  const idx = logs.findIndex((l) => l.id === log.id);
-  if (idx === -1) logs.unshift(log);
-  else logs[idx] = log;
+  // Remote copy ahead / split / reviewed: keep it, leave this version queued.
+  const refuse = async () => {
+    if (queued) await annotateOutboxErrors(id, [log.id], REMOTE_COPY_KEPT_ERROR);
+    return { ok: false as const, error: REMOTE_COPY_KEPT_ERROR, queued };
+  };
+
+  const first = mergeLogIntoSet(got.value.logs, log);
+  if (first.kept) return refuse();
+  const logs = first.logs;
 
   const put = await remote.putShop({ ...got.value, logs });
   if (!put.ok) {
@@ -438,10 +474,9 @@ export async function syncLogToRemote(
         if (queued && !isCurrent) {
           return { ok: true };
         }
-        const logs2 = [...again.value.logs];
-        const i2 = logs2.findIndex((l) => l.id === log.id);
-        if (i2 === -1) logs2.unshift(log);
-        else logs2[i2] = log;
+        const second = mergeLogIntoSet(again.value.logs, log);
+        if (second.kept) return refuse();
+        const logs2 = second.logs;
         const put2 = await remote.putShop({ ...again.value, logs: logs2 });
         if (put2.ok) {
           if (!(await clearThisVersion())) {
