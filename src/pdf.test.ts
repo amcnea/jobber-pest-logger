@@ -219,7 +219,7 @@ describe("downloadPdf document", () => {
 
   it("draws the report title and shop name in the page header", () => {
     const text = allText(render([makeLog()], "  Acme Pest Co  "));
-    expect(text[0]).toBe("Texas TDA pesticide application log");
+    expect(text[0]).toBe("Texas pesticide application log");
     expect(text[1]).toBe("Acme Pest Co");
   });
 
@@ -256,7 +256,7 @@ describe("downloadPdf document", () => {
       expect((footer.text as string[]).join("")).toBe(LAWGICAL_DISCLAIMER);
       expect(onPage.some((t) => t.text === `Page ${p} of ${doc.pages}`)).toBe(true);
       // Header repeats on every page.
-      expect(onPage.some((t) => t.text === "Texas TDA pesticide application log")).toBe(true);
+      expect(onPage.some((t) => t.text === "Texas pesticide application log")).toBe(true);
     }
   });
 
@@ -283,7 +283,7 @@ describe("downloadPdf document", () => {
 
   it("always prints the § 7.144 schema note", () => {
     expect(joinedCalls(render([]))).toContain(
-      "Columns follow 4 TAC § 7.144(a) for Texas SPCS shops. Termite extras follow § 7.144(b) when the stop is termite work. Full disclaimer is on every page footer.",
+      "Fields drawn from 4 TAC § 7.144(a) for Texas SPCS shops. Termite extras drawn from § 7.144(b) when the stop is termite work. Full disclaimer is on every page footer.",
     );
   });
 
