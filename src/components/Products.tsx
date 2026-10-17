@@ -78,7 +78,24 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   const starterSearchRef = useRef<HTMLInputElement>(null);
   const starterRowIdPrefix = useId();
   /** Polite screen-reader message for starter Add / label-confirm outcomes. */
-  const [starterAnnouncement, setStarterAnnouncement] = useState("");
+  const [starterAnnouncement, setStarterAnnouncementText] = useState("");
+  const starterAnnouncementTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // #152: clear the polite live region, then set the message on the next task so an
+  // identical repeat (e.g. the same failure twice) is still announced.
+  function setStarterAnnouncement(message: string) {
+    if (starterAnnouncementTimerRef.current !== null) clearTimeout(starterAnnouncementTimerRef.current);
+    setStarterAnnouncementText("");
+    starterAnnouncementTimerRef.current = setTimeout(() => {
+      starterAnnouncementTimerRef.current = null;
+      setStarterAnnouncementText(message);
+    }, 0);
+  }
+  useEffect(
+    () => () => {
+      if (starterAnnouncementTimerRef.current !== null) clearTimeout(starterAnnouncementTimerRef.current);
+    },
+    [],
+  );
   /** Heading of the open label-confirm panel; receives focus when the panel opens. */
   const labelConfirmHeadingRef = useRef<HTMLHeadingElement>(null);
   /** Control that opened label confirm; focus returns here (or to starter search) on close. */
