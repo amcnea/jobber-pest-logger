@@ -1,5 +1,5 @@
 import { EXAMPLE_SEEDS, inferIsExample, isExampleShopProduct, logHasExampleProducts } from "./catalog";
-import { localIsoWithOffset } from "./dates";
+import { localIsoWithOffset, parseLocalYmd } from "./dates";
 import { newId } from "./ids";
 import { isLogReviewed, reviewFlagsForLog } from "./reviewQueue";
 import type {
@@ -15,6 +15,14 @@ import type {
   ShopProduct,
   ShopSettings,
 } from "./types";
+import {
+  computeRetainUntil,
+  deleteBlockedReason,
+  effectiveRetainUntil,
+  isExampleOnlyLog,
+  isWithinRetention,
+  laterYmd,
+} from "./retention";
 
 const LOGS_KEY = "jobber-pest-logger:logs:v1";
 const CATALOG_KEY = "jobber-pest-logger:catalog:v1";
@@ -397,10 +405,18 @@ export function normalizeLog(value: unknown): ApplicationLog | null {
     if (records.some((r) => r === null)) return null;
     reuploads = records as ReuploadRecord[];
   }
+  let retainUntil: string | undefined;
+  if (value.retainUntil !== undefined && value.retainUntil !== null) {
+    // Internal 2-year hold: must be a real calendar date, else the row is quarantined.
+    if (typeof value.retainUntil !== "string" || !parseLocalYmd(value.retainUntil)) return null;
+    retainUntil = value.retainUntil.trim();
+  }
   const base = normalizeLogBase(value, history.length);
   if (!base) return null;
-  // `reuploads` stays absent on logs never re-uploaded, so their stored / exported shape is unchanged.
-  return reuploads.length > 0 ? { ...base, history, reuploads } : { ...base, history };
+  // `reuploads` / `retainUntil` stay absent when unused, so stored / exported shape is unchanged.
+  const log: ApplicationLog = reuploads.length > 0 ? { ...base, history, reuploads } : { ...base, history };
+  if (retainUntil) log.retainUntil = retainUntil;
+  return log;
 }
 
 export function loadLogs(): ApplicationLog[] {
@@ -427,8 +443,38 @@ export function loadLogsQuarantine(): unknown[] {
  */
 export function saveLogs(
   logs: ApplicationLog[],
-  options?: { skipQuarantine?: boolean },
+  options?: { skipQuarantine?: boolean; allowRetainedRemoval?: boolean },
 ): boolean {
+  return writeLogs(logs, options) !== null;
+}
+
+/**
+ * saveLogs core. Returns the logs as written (with retainUntil carried forward from the
+ * stored copy of each id; see stampRetainUntil), or null when nothing was written.
+ */
+function writeLogs(
+  logs: ApplicationLog[],
+  options?: { skipQuarantine?: boolean; allowRetainedRemoval?: boolean },
+): ApplicationLog[] | null {
+  const stored = readStoredLogs();
+  // 2-year guard (4 TAC § 7.144 record keeping): no save may drop a stored real log
+  // that is still held (isWithinRetention / retainUntil). Only wipeAllDeviceData opts out.
+  if (!options?.allowRetainedRemoval) {
+    const keep = new Set(logs.map((l) => l.id));
+    const now = new Date();
+    const dropped = stored.filter((l) => !keep.has(l.id) && isWithinRetention(l, now));
+    if (dropped.length > 0) {
+      console.error(
+        "jobber-pest-logger: could not save logs",
+        new Error(`refused: would remove ${dropped.length} log(s) less than 2 years old`),
+      );
+      return null;
+    }
+  }
+  // retainUntil only ever moves later: fold in the stored copy's hold for each id.
+  const storedById = new Map<string, ApplicationLog>();
+  for (const l of stored) storedById.set(l.id, l);
+  const stamped = logs.map((l) => stampRetainUntil(l, storedById.get(l.id)));
   if (
     !options?.skipQuarantine &&
     !quarantineRawFailuresBeforeWrite(LOGS_KEY, LOGS_QUARANTINE_KEY, normalizeLog)
@@ -437,15 +483,50 @@ export function saveLogs(
       "jobber-pest-logger: could not save logs",
       new Error("quarantine write failed; main key left unchanged"),
     );
-    return false;
+    return null;
   }
   try {
-    localStorage.setItem(LOGS_KEY, JSON.stringify(logs));
-    return true;
+    localStorage.setItem(LOGS_KEY, JSON.stringify(stamped));
+    return stamped;
   } catch (err) {
     console.error("jobber-pest-logger: could not save logs", err);
-    return false;
+    return null;
   }
+}
+
+/** Readable logs currently stored (no quarantine side effects). */
+function readStoredLogs(): ApplicationLog[] {
+  let parsed: unknown;
+  try {
+    const raw = localStorage.getItem(LOGS_KEY);
+    if (!raw) return [];
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed.map(normalizeLog).filter((l): l is ApplicationLog => l !== null);
+}
+
+/**
+ * Carry the 2-year hold forward when `next` replaces `prev` (same id): retainUntil =
+ * max(next.retainUntil, prev's hold, next's computed hold). The field is written only
+ * when it is needed — when the hold is later than what `next` alone computes, when
+ * either copy already had one, or when a real log becomes example-only — so logs that
+ * were never moved earlier keep their stored shape.
+ */
+export function stampRetainUntil(next: ApplicationLog, prev?: ApplicationLog): ApplicationLog {
+  const computed = computeRetainUntil(next);
+  let hold = laterYmd(next.retainUntil, computed);
+  if (prev) hold = laterYmd(hold, effectiveRetainUntil(prev));
+  if (!hold) return next;
+  const needed =
+    next.retainUntil !== undefined ||
+    prev?.retainUntil !== undefined ||
+    hold !== computed ||
+    (prev !== undefined && !isExampleOnlyLog(prev) && isExampleOnlyLog(next));
+  if (!needed || next.retainUntil === hold) return next;
+  return { ...next, retainUntil: hold };
 }
 
 /** Shown when upsertLog refuses a copy opened before newer history was saved. */
@@ -474,12 +555,23 @@ export function upsertLog(log: ApplicationLog): {
     return { logs, saved: false, stale: true };
   }
   const next = idx === -1 ? [log, ...logs] : logs.map((l) => (l.id === log.id ? log : l));
-  const saved = saveLogs(next);
-  return { logs: saved ? next : logs, saved };
+  // Written copy carries retainUntil forward (an edit can move dateUsed earlier).
+  const written = writeLogs(next);
+  return { logs: written ?? logs, saved: written !== null };
 }
 
-export function deleteLog(id: string): { logs: ApplicationLog[]; saved: boolean } {
+/**
+ * Delete one log. Refused (`blocked` = reason, nothing written) while the log is less
+ * than 2 years past its application date; example-only demo logs are not held.
+ */
+export function deleteLog(
+  id: string,
+  now: Date = new Date(),
+): { logs: ApplicationLog[]; saved: boolean; blocked?: string } {
   const current = loadLogs();
+  const target = current.find((l) => l.id === id);
+  const blocked = target ? deleteBlockedReason(target, now) : null;
+  if (blocked) return { logs: current, saved: false, blocked };
   const next = current.filter((l) => l.id !== id);
   const saved = saveLogs(next);
   return { logs: saved ? next : current, saved };
@@ -540,6 +632,7 @@ const DIFF_EXCLUDED = new Set([
   "reviewedAt",
   "reviewedBy",
   "reuploads",
+  "retainUntil",
 ]);
 
 type DiffValue = FieldChange["old"];
@@ -620,8 +713,24 @@ export function applyCorrection(
   const built = buildCorrection(current, nextLog, options);
   if (!built.ok) return { ok: false, error: built.error, logs };
   const next = logs.map((l) => (l.id === logId ? built.log : l));
-  if (!saveLogs(next)) return { ok: false, error: "Could not save on this device.", logs };
-  return { ok: true, log: built.log, logs: next };
+  const written = writeLogs(next);
+  if (!written) return { ok: false, error: "Could not save on this device.", logs };
+  return { ok: true, log: written.find((l) => l.id === logId) ?? built.log, logs: written };
+}
+
+/** retainUntil for a corrected log: carried from `current`, folded with the new values. */
+function stampHold(
+  currentRetainUntil: string | undefined,
+  next: LogSnapshot,
+  priorHistory: CorrectionEntry[],
+  entry: CorrectionEntry,
+  current: ApplicationLog,
+): { retainUntil?: string } {
+  const stamped = stampRetainUntil(
+    { ...next, history: [...priorHistory, entry], retainUntil: currentRetainUntil },
+    current,
+  );
+  return stamped.retainUntil ? { retainUntil: stamped.retainUntil } : {};
 }
 
 /**
@@ -644,7 +753,12 @@ export function buildCorrection(
   }
 
   // Re-upload records are not part of a snapshot; they stay on the log as they are.
-  const { history: priorHistory = [], reuploads: currentReuploads, ...currentBase } = current;
+  const {
+    history: priorHistory = [],
+    reuploads: currentReuploads,
+    retainUntil: currentRetainUntil,
+    ...currentBase
+  } = current;
   const priorRevision = current.revision ?? priorHistory.length;
   // Detach from the caller's object, then pin bookkeeping fields to the saved values.
   const candidate = {
@@ -677,6 +791,8 @@ export function buildCorrection(
       revision,
       history: [...priorHistory, entry],
       ...(currentReuploads && currentReuploads.length > 0 ? { reuploads: currentReuploads } : {}),
+      // The hold never gets shorter; saveLogs re-checks against the stored copy too.
+      ...stampHold(currentRetainUntil, normalizedNext, priorHistory, entry, current),
     },
   };
 }
@@ -689,8 +805,8 @@ export function saveResolvedLog(log: ApplicationLog): { logs: ApplicationLog[]; 
   const logs = loadLogs();
   const idx = logs.findIndex((l) => l.id === log.id);
   const next = idx === -1 ? [log, ...logs] : logs.map((l) => (l.id === log.id ? log : l));
-  const saved = saveLogs(next);
-  return { logs: saved ? next : logs, saved };
+  const written = writeLogs(next);
+  return { logs: written ?? logs, saved: written !== null };
 }
 
 // ---------------------------------------------------------------------------
@@ -986,6 +1102,12 @@ export function clearExampleDemoData(): {
   let strippedLogs = 0;
   const nextLogs: ApplicationLog[] = [];
   for (const log of currentLogs) {
+    // Reviewed logs and logs with change history are records: never removed or
+    // stripped here, even if they used example seeds.
+    if (isLogReviewed(log) || carriesHistoryOrReview(log)) {
+      nextLogs.push(log);
+      continue;
+    }
     const hadExamples = log.sampleData === true || logHasExampleProducts(log.products);
     const kept = log.products.filter(
       (p) =>
@@ -1574,7 +1696,9 @@ export function wipeAllDeviceData(): {
     localStorage.removeItem(A2HS_TIP_KEY);
     // skipQuarantine: wiping those rows on purpose must not copy them into quarantine first.
     const catalogOk = saveCatalog(seed, { skipQuarantine: true });
-    const logsOk = saveLogs([], { skipQuarantine: true });
+    // Wipe is a device reset: the only save allowed to drop logs under 2 years (the
+    // confirm warns with the count first).
+    const logsOk = saveLogs([], { skipQuarantine: true, allowRetainedRemoval: true });
     const peopleOk = savePeople([], { skipQuarantine: true });
     const settingsOk = saveSettings(clearedSettings);
     if (!(catalogOk && logsOk && peopleOk && settingsOk)) {
@@ -1834,6 +1958,8 @@ export interface RestoreHistoryReport {
   diverged: string[];
   /** Device logs absent from the backup kept because they carry history or a review stamp. */
   keptAbsent: string[];
+  /** Device logs absent from the backup kept because they are less than 2 years old (no history). */
+  keptRecent?: string[];
 }
 
 function sameCorrectionEntry(a: CorrectionEntry, b: CorrectionEntry): boolean {
@@ -1944,7 +2070,8 @@ export function mergeLogIntoSet(
   if (idx === -1) return { logs: [incoming, ...logs], kept: false };
   if (shouldKeepExistingLog(logs[idx], incoming)) return { logs, kept: true };
   const next = [...logs];
-  next[idx] = incoming;
+  // The 2-year hold never gets shorter: keep the later retainUntil of the two copies.
+  next[idx] = stampRetainUntil(incoming, logs[idx]);
   return { logs: next, kept: false };
 }
 
@@ -1961,16 +2088,24 @@ export function mergeRestoredLogs(
   const report: RestoreHistoryReport = { keptDevice: [], diverged: [], keptAbsent: [] };
   const logs = backup.map((incoming) => {
     const local = deviceById.get(incoming.id);
-    if (!local || !shouldKeepDeviceLog(local, incoming)) return incoming;
+    if (!local) return incoming;
+    // Whichever copy wins, the 2-year hold is the later of the two (never lowered).
+    if (!shouldKeepDeviceLog(local, incoming)) return stampRetainUntil(incoming, local);
     report.keptDevice.push(local.id);
     const lh = local.history ?? [];
     const bh = incoming.history ?? [];
     if (!isHistoryPrefix(bh, lh) && !isHistoryPrefix(lh, bh)) report.diverged.push(local.id);
-    return local;
+    return stampRetainUntil(local, incoming);
   });
+  const now = new Date();
   for (const local of device) {
-    if (!backupIds.has(local.id) && carriesHistoryOrReview(local)) {
+    if (backupIds.has(local.id)) continue;
+    if (carriesHistoryOrReview(local)) {
       report.keptAbsent.push(local.id);
+      logs.push(local);
+    } else if (isWithinRetention(local, now)) {
+      // 2-year guard: a restore never removes a real log less than 2 years old.
+      (report.keptRecent ??= []).push(local.id);
       logs.push(local);
     }
   }
@@ -1995,10 +2130,20 @@ export function restoreBannerText(
 ): string {
   const head = `Restored backup (v${backup.version}) from ${backup.exportedAt}.`;
   const n = report ? report.keptDevice.length + report.keptAbsent.length : 0;
-  if (n === 0) return `${head} Device data replaced.`;
-  return `${head} Device data replaced, except ${n} log${n === 1 ? " that" : "s that"} kept ${
-    n === 1 ? "its" : "their"
-  } change history from this device.`;
+  const main =
+    n === 0
+      ? `${head} Device data replaced.`
+      : `${head} Device data replaced, except ${n} log${n === 1 ? " that" : "s that"} kept ${
+          n === 1 ? "its" : "their"
+        } change history from this device.`;
+  return [main, restoreRecentSentence(report?.keptRecent?.length ?? 0)].filter(Boolean).join(" ");
+}
+
+/** 2-year guard: device logs the backup lacks that stayed because they are under 2 years old. */
+export function restoreRecentSentence(m: number): string {
+  if (m <= 0) return "";
+  if (m === 1) return "1 log that the backup doesn't have is less than 2 years old, so it stayed on this device.";
+  return `${m} logs that the backup doesn't have are less than 2 years old, so they stayed on this device.`;
 }
 
 /**
@@ -2015,9 +2160,21 @@ export function restoredKeptReport(
   for (const stored of storedLogs) {
     const incoming = backupById.get(stored.id);
     if (!incoming) report.keptAbsent.push(stored.id);
-    else if (stableStringify(incoming) !== stableStringify(stored)) report.keptDevice.push(stored.id);
+    else if (stableStringify(withoutHold(incoming)) !== stableStringify(withoutHold(stored))) {
+      report.keptDevice.push(stored.id);
+    }
   }
   return report;
+}
+
+/**
+ * The log without its internal retainUntil. Restore stamps the later hold onto
+ * whichever copy wins, so a hold-only difference must not count as "kept".
+ */
+function withoutHold(log: ApplicationLog): Omit<ApplicationLog, "retainUntil"> {
+  const { retainUntil: _hold, ...rest } = log;
+  void _hold;
+  return rest;
 }
 
 /** Normalized logs currently stored, without the quarantine side effect of loadLogs. */

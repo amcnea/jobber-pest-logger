@@ -114,6 +114,13 @@ export interface ApplicationLog {
    * Absent when the log was never re-uploaded.
    */
   reuploads?: ReuploadRecord[];
+  /**
+   * Internal 2-year hold (YYYY-MM-DD, device-local): delete is allowed on or after this
+   * date. Only ever moves later across saves, corrections, merges and restores. Not a
+   * TDA field and not exported in CSV/PDF. Absent on logs whose hold equals the value
+   * computed from the log itself (retention.computeRetainUntil).
+   */
+  retainUntil?: string;
 }
 
 /** Who sent this device's copy back to the shop after the shop no longer had the log, and why. */
@@ -134,7 +141,7 @@ export interface FieldChange {
 }
 
 /** Log as it stood before a correction, minus its own history array (kept once, on the log). */
-export type LogSnapshot = Omit<ApplicationLog, "history" | "reuploads">;
+export type LogSnapshot = Omit<ApplicationLog, "history" | "reuploads" | "retainUntil">;
 
 export interface CorrectionEntry {
   /** Revision this correction produced (priorSnapshot.revision + 1). */

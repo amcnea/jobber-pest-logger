@@ -21,6 +21,8 @@ const { History } = await import("./History");
 vi.setConfig({ testTimeout: 15_000 });
 
 const NOW = new Date("2026-09-26T15:00:00.000Z"); // Sat Sep 26 2026, 10:00 AM CDT
+/** More than 2 years after every fixture date: Delete is offered (2-year guard). */
+const LATER = new Date("2029-06-01T15:00:00.000Z");
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -358,6 +360,7 @@ describe("History: role-gated Edit / Delete", () => {
   });
 
   it("office sees Edit/Delete on every log card", () => {
+    vi.setSystemTime(LATER);
     setup();
     expect(screen.getAllByRole("button", { name: "Edit" })).toHaveLength(4);
     expect(screen.getAllByRole("button", { name: "Delete" })).toHaveLength(4);
@@ -371,6 +374,7 @@ describe("History: role-gated Edit / Delete", () => {
   });
 
   it("Delete asks for confirmation naming the date and address, then deletes by id", async () => {
+    vi.setSystemTime(LATER);
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     const { user, onDelete } = setup();
     await user.click(within(card("2026-09-20")).getByRole("button", { name: "Delete" }));
@@ -381,6 +385,7 @@ describe("History: role-gated Edit / Delete", () => {
   });
 
   it("cancelling the confirm does not delete", async () => {
+    vi.setSystemTime(LATER);
     vi.spyOn(window, "confirm").mockReturnValue(false);
     const { user, onDelete } = setup();
     await user.click(within(card("2026-09-01")).getByRole("button", { name: "Delete" }));
@@ -388,11 +393,40 @@ describe("History: role-gated Edit / Delete", () => {
   });
 
   it("confirm text falls back for a blank date / address", async () => {
+    vi.setSystemTime(LATER);
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     const { user } = setup({ logs: [log({ dateUsed: "", serviceAddress: " " })] });
     await user.click(screen.getByRole("button", { name: "Delete" }));
     expect(confirm).toHaveBeenCalledWith(
       "Delete this log at unknown address from this device? This cannot be undone.",
     );
+  });
+});
+
+describe("History: 2-year delete guard", () => {
+  it("logs under 2 years show the reason instead of Delete; Edit stays", () => {
+    setup(); // NOW = 2026-09-26; fixtures are from Aug/Sep 2026
+    // Only the example-only (demo) Oak log can be deleted.
+    expect(screen.getAllByRole("button", { name: "Delete" })).toHaveLength(1);
+    expect(within(card("2026-09-10")).getByRole("button", { name: "Delete" })).toBeInTheDocument();
+    expect(within(card("2026-09-01")).queryByRole("button", { name: "Delete" })).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Edit" })).toHaveLength(4);
+    expect(
+      within(card("2026-09-20")).getByText(
+        "Can't delete yet. Texas requires keeping this record for 2 years from the application date. You can delete it on or after 2028-09-20.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("Delete appears on the 2-year anniversary date (device-local)", () => {
+    vi.setSystemTime(new Date(2028, 8, 20, 0, 1)); // 2028-09-20 00:01 local
+    setup({ logs: [log({ id: "a", dateUsed: "2026-09-20" }), log({ id: "b", dateUsed: "2026-09-21" })] });
+    expect(within(card("2026-09-20")).getByRole("button", { name: "Delete" })).toBeInTheDocument();
+    expect(within(card("2026-09-21")).queryByRole("button", { name: "Delete" })).toBeNull();
+  });
+
+  it("tech sees no reason line (no delete action at all)", () => {
+    setup({ canEditDelete: false });
+    expect(screen.queryByText(/Can't delete yet/)).toBeNull();
   });
 });

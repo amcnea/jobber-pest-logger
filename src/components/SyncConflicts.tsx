@@ -1,11 +1,16 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   keepDeviceCopy,
   listSyncConflicts,
+  REUPLOAD_DONE_MSG,
   SET_ASIDE_CONFIRM,
   takeShopCopy,
 } from "../shop/conflicts";
 import type { LogOutboxEntry } from "../shop/logOutbox";
+
+/** "Keep this device's copy" hint (Lawgical, #175). */
+export const KEEP_DEVICE_HINT =
+  "Uploads this device's copy to the shop. If the shop still has this log, it's saved as a correction with change history.";
 import type { RemoteShopStore } from "../shop/RemoteShopStore";
 import type { ApplicationLog, Person } from "../types";
 
@@ -17,7 +22,11 @@ interface Props {
   refreshKey: number;
   /** `error` is set when the device copy was saved but a later step failed. */
   onResolved: (logs: ApplicationLog[], error?: string) => void;
+  /** Bumped by App after a later log save or correction succeeds; clears the re-upload note (#183). */
+  noteResetKey?: number;
 }
+
+type ReuploadNote = { text: string; logId: string };
 
 type Mode = { kind: "take" } | { kind: "keep" };
 
@@ -55,6 +64,7 @@ function ConflictRow({
   remote,
   people,
   onResolved,
+  onNote,
 }: {
   entry: LogOutboxEntry;
   shopId: string;
@@ -62,6 +72,7 @@ function ConflictRow({
   people: Person[];
   /** `error` is set when the device copy was saved but a later step failed. */
   onResolved: (logs: ApplicationLog[], error?: string) => void;
+  onNote: (note: ReuploadNote | null) => void;
 }) {
   const [mode, setMode] = useState<Mode | null>(null);
   const [personId, setPersonId] = useState("");
@@ -77,6 +88,8 @@ function ConflictRow({
       const res = await action();
       if (res.ok) {
         setMode(null);
+        // A later successful resolution replaces or clears an earlier re-upload note (#183).
+        onNote(res.reuploaded ? { text: REUPLOAD_DONE_MSG, logId: log.id } : null);
         onResolved(res.logs);
       } else {
         setError(res.error);
@@ -127,7 +140,7 @@ function ConflictRow({
       )}
       {mode?.kind === "keep" && (
         <div>
-          <p className="hint">Saved as a correction on top of the shop copy, with change history.</p>
+          <p className="hint">{KEEP_DEVICE_HINT}</p>
           <PersonSelect label="Changed by" people={people} value={personId} onChange={setPersonId} />
           <label className="field">
             Reason
@@ -140,7 +153,7 @@ function ConflictRow({
               disabled={!personId || !reason.trim() || busy}
               onClick={submitKeep}
             >
-              Save as a correction
+              Save this device's copy
             </button>
             <button type="button" className="btn btn-ghost" onClick={() => setMode(null)}>
               Cancel
@@ -158,17 +171,41 @@ function ConflictRow({
 }
 
 /** Office-only list of sync conflicts with the two resolutions. Renders nothing when there are none. */
-export function SyncConflicts({ shopId, remote, people, refreshKey, onResolved }: Props) {
+export function SyncConflicts({ shopId, remote, people, refreshKey, onResolved, noteResetKey = 0 }: Props) {
   const conflicts = useMemo(
     () => listSyncConflicts(shopId),
     // refreshKey re-reads the outbox after enqueue / flush.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [shopId, refreshKey],
   );
-  if (conflicts.length === 0) return null;
+  const [note, setNoteState] = useState<(ReuploadNote & { listed: string[] }) | null>(null);
+  // Remember which logs were listed when the note was shown.
+  const setNote = (next: ReuploadNote | null) =>
+    setNoteState(next ? { ...next, listed: conflicts.map((e) => e.log.id) } : null);
+  // #183: the note belongs to one log. Clear it when the list changes to a log that
+  // wasn't listed when it was shown…
+  useEffect(() => {
+    if (note && conflicts.some((e) => e.log.id !== note.logId && !note.listed.includes(e.log.id))) {
+      setNoteState(null);
+    }
+  }, [conflicts, note]);
+  // …or when App reports a later successful save / correction.
+  const lastResetKey = useRef(noteResetKey);
+  useEffect(() => {
+    if (lastResetKey.current !== noteResetKey) {
+      lastResetKey.current = noteResetKey;
+      setNoteState(null);
+    }
+  }, [noteResetKey]);
+  if (conflicts.length === 0 && !note) return null;
   return (
     <section className="card" aria-label="Sync conflicts">
       <h3>Sync conflicts</h3>
+      {note && (
+        <p className="hint" role="status">
+          {note.text}
+        </p>
+      )}
       <ul className="review-queue">
         {conflicts.map((entry) => (
           <ConflictRow
@@ -178,6 +215,7 @@ export function SyncConflicts({ shopId, remote, people, refreshKey, onResolved }
             remote={remote}
             people={people}
             onResolved={onResolved}
+            onNote={setNote}
           />
         ))}
       </ul>
