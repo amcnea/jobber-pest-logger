@@ -69,6 +69,8 @@ export default function App() {
   const [storageError, setStorageError] = useState<string | null>(null);
   /** Prefill for New log (from History). Remount via draftKey when set. */
   const [draftSeed, setDraftSeed] = useState<ApplicationLog | null>(null);
+  /** Bumped after a successful log save / correction (clears the sync re-upload note, #183). */
+  const [savedTick, setSavedTick] = useState(0);
   /** True when draftSeed is a reviewed log opened with "Correct this log". */
   const [correcting, setCorrecting] = useState(false);
   const [draftKey, setDraftKey] = useState(0);
@@ -258,6 +260,7 @@ export default function App() {
     setStorageError(null);
     setDraftSeed(null);
     setCorrecting(false);
+    setSavedTick((t) => t + 1);
     syncSavedLog(result.log);
     go("history");
     return null;
@@ -335,6 +338,7 @@ export default function App() {
     }
     setStorageError(null);
     setDraftSeed(null);
+    setSavedTick((t) => t + 1);
     syncSavedLog(log);
     go("history");
     return true;
@@ -652,6 +656,7 @@ export default function App() {
               remote={info.store}
               people={people}
               refreshKey={outboxTick}
+              noteResetKey={savedTick}
               onResolved={(next, error) => {
                 // Partial failure (#170): the device copy was saved; keep the error visible.
                 setLogs(next);

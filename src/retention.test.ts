@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   countWithinRetention,
   deletableFromYmd,
+  computeRetainUntil,
   deleteBlockedReason,
+  effectiveRetainUntil,
   isExampleOnlyLog,
   isWithinRetention,
   retentionEndYmd,
@@ -16,7 +18,12 @@ import {
   loadLogs,
   applyCorrection,
   parseBackup,
+  buildBackup,
+  mergeLogIntoSet,
+  mergeRestoredLogs,
+  normalizeLog,
   restoreBannerText,
+  upsertLog,
   restoreRecentSentence,
   saveLogs,
   wipeAllDeviceData,
@@ -55,7 +62,7 @@ describe("retentionEndYmd", () => {
 });
 
 describe("isWithinRetention: age boundary (device-local dates)", () => {
-  const log = makeLog({ dateUsed: "2026-09-20" });
+  const log = makeLog({ dateUsed: "2026-09-20", createdAt: "2026-09-20T12:00:00" });
 
   it("just under 2 years: kept", () => {
     expect(isWithinRetention(log, at(2028, 9, 19, 23, 59))).toBe(true);
@@ -70,7 +77,7 @@ describe("isWithinRetention: age boundary (device-local dates)", () => {
   });
 
   it("leap-day application is kept through Feb 28 and deletable on Mar 1", () => {
-    const leap = makeLog({ dateUsed: "2024-02-29" });
+    const leap = makeLog({ dateUsed: "2024-02-29", createdAt: "2024-02-29T12:00:00" });
     expect(isWithinRetention(leap, at(2026, 2, 28, 23, 59))).toBe(true);
     expect(isWithinRetention(leap, at(2026, 3, 1, 0, 0))).toBe(false);
   });
@@ -90,7 +97,9 @@ describe("isWithinRetention: age boundary (device-local dates)", () => {
       // 2028-09-19 12:30 UTC = 2028-09-20 00:30 NZST: deletable.
       expect(isWithinRetention(log, new Date("2028-09-19T12:30:00Z"))).toBe(false);
     } finally {
-      process.env.TZ = prev;
+      // Assigning undefined to process.env stores the string "undefined" (#184).
+      if (prev === undefined) delete process.env.TZ;
+      else process.env.TZ = prev;
     }
   });
 
@@ -115,10 +124,10 @@ describe("isWithinRetention: age boundary (device-local dates)", () => {
 
 describe("strings", () => {
   it("delete reason names the first deletable date", () => {
-    expect(deleteBlockedReason(makeLog({ dateUsed: "2026-09-20" }), at(2026, 10, 17))).toBe(
+    expect(deleteBlockedReason(makeLog({ dateUsed: "2026-09-20", createdAt: "2026-09-20T12:00:00" }), at(2026, 10, 17))).toBe(
       "Can't delete yet. Texas requires keeping this record for 2 years from the application date. You can delete it on or after 2028-09-20.",
     );
-    expect(deleteBlockedReason(makeLog({ dateUsed: "2020-09-20" }), at(2026, 10, 17))).toBeNull();
+    expect(deleteBlockedReason(makeLog({ dateUsed: "2020-09-20", createdAt: "2020-09-20T12:00:00" }), at(2026, 10, 17))).toBeNull();
   });
 
   it("wipe warning: singular, plural, none", () => {
@@ -133,17 +142,17 @@ describe("strings", () => {
 
   it("count skips old and example-only logs", () => {
     const logs = [
-      makeLog({ id: "a", dateUsed: "2026-09-20" }),
-      makeLog({ id: "b", dateUsed: "2020-01-01" }),
+      makeLog({ id: "a", dateUsed: "2026-09-20", createdAt: "2026-09-20T12:00:00" }),
+      makeLog({ id: "b", dateUsed: "2020-01-01", createdAt: "2020-01-01T12:00:00" }),
       makeLog({ id: "c", sampleData: true, products: [EXAMPLE] }),
-      makeLog({ id: "d", dateUsed: "2025-10-18" }),
+      makeLog({ id: "d", dateUsed: "2025-10-18", createdAt: "2025-10-18T12:00:00" }),
     ];
     expect(countWithinRetention(logs, at(2026, 10, 17))).toBe(2);
   });
 
   it("no banned words", () => {
     for (const s of [
-      deleteBlockedReason(makeLog({ dateUsed: "2026-09-20" }), at(2026, 10, 17))!,
+      deleteBlockedReason(makeLog({ dateUsed: "2026-09-20", createdAt: "2026-09-20T12:00:00" }), at(2026, 10, 17))!,
       deleteBlockedReason(makeLog({ dateUsed: "", createdAt: "x" }), at(2026, 10, 17))!,
       wipeRetentionWarning(1),
       wipeRetentionWarning(2),
@@ -174,8 +183,8 @@ afterEach(() => {
 
 describe("storage: no path deletes a log under 2 years", () => {
   it("deleteLog refuses with the reason and writes nothing", () => {
-    const recent = makeLog({ id: "R", dateUsed: "2026-09-20" });
-    const old = makeLog({ id: "O", dateUsed: "2020-01-01" });
+    const recent = makeLog({ id: "R", dateUsed: "2026-09-20", createdAt: "2026-09-20T12:00:00" });
+    const old = makeLog({ id: "O", dateUsed: "2020-01-01", createdAt: "2020-01-01T12:00:00" });
     expect(saveLogs([recent, old])).toBe(true);
     const res = deleteLog("R");
     expect(res.saved).toBe(false);
@@ -186,28 +195,28 @@ describe("storage: no path deletes a log under 2 years", () => {
   });
 
   it("deleteLog allows a log exactly 2 years old", () => {
-    expect(saveLogs([makeLog({ id: "E", dateUsed: "2024-10-17" })])).toBe(true);
+    expect(saveLogs([makeLog({ id: "E", dateUsed: "2024-10-17", createdAt: "2024-10-17T12:00:00" })])).toBe(true);
     expect(deleteLog("E").saved).toBe(true);
   });
 
   it("saveLogs refuses any write that drops a log under 2 years", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(saveLogs([makeLog({ id: "R", dateUsed: "2026-09-20" })])).toBe(true);
+    expect(saveLogs([makeLog({ id: "R", dateUsed: "2026-09-20", createdAt: "2026-09-20T12:00:00" })])).toBe(true);
     expect(saveLogs([])).toBe(false);
     expect(saveLogs([makeLog({ id: "OTHER" })])).toBe(false);
     expect(loadLogs().map((l) => l.id)).toEqual(["R"]);
     // Replacing it in place (same id) is fine.
-    expect(saveLogs([makeLog({ id: "R", dateUsed: "2026-09-20", jobberJobNumber: "J" })])).toBe(true);
+    expect(saveLogs([makeLog({ id: "R", dateUsed: "2026-09-20", createdAt: "2026-09-20T12:00:00", jobberJobNumber: "J" })])).toBe(true);
   });
 
   it("wipe (device reset) is the one path allowed to remove them", () => {
-    expect(saveLogs([makeLog({ id: "R", dateUsed: "2026-09-20" })])).toBe(true);
+    expect(saveLogs([makeLog({ id: "R", dateUsed: "2026-09-20", createdAt: "2026-09-20T12:00:00" })])).toBe(true);
     expect(wipeAllDeviceData().saved).toBe(true);
     expect(loadLogs()).toEqual([]);
   });
 
   it("restore keeps device logs under 2 years that the backup lacks, and says so", () => {
-    expect(saveLogs([makeLog({ id: "R", dateUsed: "2026-09-20" }), makeLog({ id: "O", dateUsed: "2020-01-01" })])).toBe(true);
+    expect(saveLogs([makeLog({ id: "R", dateUsed: "2026-09-20", createdAt: "2026-09-20T12:00:00" }), makeLog({ id: "O", dateUsed: "2020-01-01", createdAt: "2020-01-01T12:00:00" })])).toBe(true);
     const parsed = parseBackup({
       version: BACKUP_VERSION,
       exportedAt: "2026-09-01T12:00:00.000Z",
@@ -259,5 +268,100 @@ describe("clearExampleDemoData removes example seeds only", () => {
     // Reviewed / corrected logs are untouched (not stripped either).
     expect(after.find((l) => l.id === "revDemo")!.products).toEqual(reviewedDemo.products);
     expect(after.find((l) => l.id === "corDemo")!.products).toEqual(correctedDemo.products);
+  });
+});
+
+describe("retainUntil — the hold never gets shorter (#182)", () => {
+  // Now is 2026-10-17 22:00 local. Applied and created 2026-10-01 → held until 2028-10-01.
+  const fresh = () => makeLog({ id: "H", dateUsed: "2026-10-01", createdAt: "2026-10-01T12:00:00" });
+  const stored = () => loadLogs().find((l) => l.id === "H")!;
+
+  it("a log with no retainUntil uses the computed date", () => {
+    const log = fresh();
+    expect(log.retainUntil).toBeUndefined();
+    expect(computeRetainUntil(log)).toBe("2028-10-01");
+    expect(effectiveRetainUntil(log)).toBe("2028-10-01");
+    expect(saveLogs([log])).toBe(true);
+    // Not stored when it equals the computed date (saved shape unchanged).
+    expect(stored().retainUntil).toBeUndefined();
+    expect(deleteLog("H").blocked).toContain("2028-10-01");
+  });
+
+  it("an edit moving the date back 3 years saves, and the log is still held", () => {
+    expect(saveLogs([fresh()])).toBe(true);
+    // Even with createdAt moved back too (e.g. a copy from another device), nothing lowers the hold.
+    const edited = { ...stored(), dateUsed: "2023-10-01", createdAt: "2023-10-01T12:00:00" };
+    const res = upsertLog(edited);
+    expect(res.saved).toBe(true);
+    expect(stored().dateUsed).toBe("2023-10-01");
+    expect(stored().retainUntil).toBe("2028-10-01");
+    expect(isWithinRetention(stored(), at(2027, 1, 1))).toBe(true);
+    const del = deleteLog("H");
+    expect(del.saved).toBe(false);
+    // The message date is the stored hold.
+    expect(del.blocked).toContain("2028-10-01");
+    expect(del.blocked ?? "").not.toMatch(BANNED);
+    expect(loadLogs().map((l) => l.id)).toEqual(["H"]);
+  });
+
+  it("a correction moving the date back 3 years is still held", () => {
+    expect(saveLogs([fresh()])).toBe(true);
+    const res = applyCorrection("H", { ...stored(), dateUsed: "2023-10-01", createdAt: "2023-10-01T12:00:00" }, {
+      changedBy: "p-ana",
+      reason: "Wrong year",
+      people: PEOPLE,
+    });
+    expect(res.ok).toBe(true);
+    expect(stored().dateUsed).toBe("2023-10-01");
+    expect(effectiveRetainUntil(stored())).toBe("2028-10-01");
+    expect(deleteLog("H").blocked).toContain("2028-10-01");
+  });
+
+  it("a correction never lowers a stored retainUntil", () => {
+    expect(saveLogs([{ ...fresh(), retainUntil: "2029-03-01" }])).toBe(true);
+    const res = applyCorrection("H", { ...stored(), dateUsed: "2023-10-01", retainUntil: "2024-01-01" }, {
+      changedBy: "p-ana",
+      reason: "Wrong year",
+      people: PEOPLE,
+    });
+    expect(res.ok).toBe(true);
+    expect(stored().retainUntil).toBe("2029-03-01");
+    // The prior snapshot never carries the hold.
+    expect(stored().history?.[0].priorSnapshot).not.toHaveProperty("retainUntil");
+    expect(deleteLog("H").blocked).toContain("2029-03-01");
+  });
+
+  it("the saveLogs drop guard reads retainUntil", () => {
+    const log = { ...makeLog({ id: "H", dateUsed: "2020-01-01", createdAt: "2020-01-01T12:00:00" }), retainUntil: "2028-10-01" };
+    expect(saveLogs([log])).toBe(true);
+    expect(saveLogs([])).toBe(false);
+    expect(loadLogs().map((l) => l.id)).toEqual(["H"]);
+    vi.setSystemTime(at(2028, 10, 1, 0, 0));
+    expect(saveLogs([])).toBe(true);
+  });
+
+  it("sync merge keeps the later retainUntil", () => {
+    const local = { ...fresh(), retainUntil: "2029-01-01" };
+    const incoming = { ...fresh(), dateUsed: "2023-10-01", createdAt: "2023-10-01T12:00:00", revision: 5 };
+    const { logs } = mergeLogIntoSet([local], incoming);
+    expect(logs[0].retainUntil).toBe("2029-01-01");
+    // A later incoming hold wins too.
+    const later = mergeLogIntoSet([fresh()], { ...fresh(), retainUntil: "2030-05-05", revision: 5 });
+    expect(later.logs[0].retainUntil).toBe("2030-05-05");
+  });
+
+  it("restore keeps the later retainUntil whichever copy wins", () => {
+    const device = { ...fresh(), retainUntil: "2029-01-01" };
+    const backup = { ...fresh(), dateUsed: "2023-10-01", createdAt: "2023-10-01T12:00:00" };
+    expect(mergeRestoredLogs([device], [backup]).logs[0].retainUntil).toBe("2029-01-01");
+    expect(mergeRestoredLogs([backup], [device]).logs[0].retainUntil).toBe("2029-01-01");
+  });
+
+  it("backup JSON carries retainUntil; restore keeps it; a bad value is quarantined", () => {
+    const log = { ...makeLog({ id: "H", dateUsed: "2020-01-01", createdAt: "2020-01-01T12:00:00" }), retainUntil: "2028-10-01" };
+    expect(saveLogs([log])).toBe(true);
+    const backup = buildBackup();
+    expect(JSON.parse(JSON.stringify(backup)).logs[0].retainUntil).toBe("2028-10-01");
+    expect(normalizeLog({ ...log, retainUntil: "soon" })).toBeNull();
   });
 });

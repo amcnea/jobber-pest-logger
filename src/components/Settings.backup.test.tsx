@@ -477,7 +477,7 @@ describe("Settings wipe confirm and set-aside copies", () => {
 
   it("logs under 2 years: warning with the count, before the set-aside sentence", async () => {
     seedDevice(); // LOG_A / LOG_B, applied 2026-10-01 / 02 (NOW is 2026-10-17)
-    expect(storage.saveLogs([LOG_A, LOG_B, makeLog({ id: "old", dateUsed: "2020-01-01" })])).toBe(true);
+    expect(storage.saveLogs([LOG_A, LOG_B, makeLog({ id: "old", dateUsed: "2020-01-01", createdAt: "2020-01-01T18:00:00.000Z" })])).toBe(true);
     addAside(1);
     const text = await firstConfirmText();
     expect(text).toBe(

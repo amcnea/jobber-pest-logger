@@ -1,7 +1,9 @@
 /**
  * 2-year record keeping guard (4 TAC § 7.144 record keeping: application records are
- * kept for 2 years). A log may be deleted in the app only on or after the 2-year
- * anniversary of its application date, using device-local calendar dates.
+ * kept for 2 years). A log may be deleted in the app only on or after its
+ * `retainUntil`: the local calendar date 2 years after the latest of its current
+ * dateUsed, every earlier dateUsed (stored copies, change history) and createdAt.
+ * retainUntil only ever moves later, so editing the date back never shortens the hold.
  *
  * Leap day: an application on Feb 29 reaches 2 years on Mar 1 (the later of the two
  * choices), so a record is never deletable before 2 full years have passed.
@@ -44,21 +46,58 @@ export function isExampleOnlyLog(log: Pick<ApplicationLog, "sampleData" | "produ
   );
 }
 
-/** Date (YYYY-MM-DD) from which the log may be deleted, or null when it has no readable date. */
-export function deletableFromYmd(log: Pick<ApplicationLog, "dateUsed" | "createdAt">): string | null {
-  const applied = applicationDateYmd(log);
-  return applied ? retentionEndYmd(applied) : null;
+function isYmd(value: unknown): value is string {
+  return typeof value === "string" && parseLocalYmd(value) !== null;
+}
+
+/** Later of two YYYY-MM-DD values (either may be missing). */
+export function laterYmd(a: string | null | undefined, b: string | null | undefined): string | null {
+  const x = isYmd(a) ? a.trim() : null;
+  const y = isYmd(b) ? b.trim() : null;
+  if (!x) return y;
+  if (!y) return x;
+  return x >= y ? x : y;
 }
 
 /**
- * True while the log must be kept: a real (not example-only) log less than 2 years past
- * its application date. A log with no readable date is kept (fail closed).
+ * retainUntil computed from the log itself: 2 years after the latest of its dateUsed,
+ * every dateUsed in its change history (prior snapshots), and the local date of
+ * createdAt. Null when none of those is a readable date.
+ */
+export function computeRetainUntil(
+  log: Pick<ApplicationLog, "dateUsed" | "createdAt" | "history">,
+): string | null {
+  let latest: string | null = isYmd(log.dateUsed) ? log.dateUsed.trim() : null;
+  for (const entry of log.history ?? []) latest = laterYmd(latest, entry.priorSnapshot?.dateUsed);
+  const created = Date.parse(log.createdAt ?? "");
+  if (!Number.isNaN(created)) latest = laterYmd(latest, localDateYmd(new Date(created)));
+  return latest ? retentionEndYmd(latest) : null;
+}
+
+/**
+ * The date (YYYY-MM-DD) from which the log may be deleted: the later of the stored
+ * `retainUntil` (which only ever moves later) and the value computed from the log.
+ * Older logs without `retainUntil` use the computed value. Null when neither exists.
+ */
+export function effectiveRetainUntil(
+  log: Pick<ApplicationLog, "dateUsed" | "createdAt" | "history" | "retainUntil">,
+): string | null {
+  return laterYmd(log.retainUntil, computeRetainUntil(log));
+}
+
+/** @deprecated Use effectiveRetainUntil. */
+export const deletableFromYmd = effectiveRetainUntil;
+
+/**
+ * True while the log must be kept: today (device-local) is before its retainUntil.
+ * Example-only demo logs are not held unless a retainUntil was stamped on them (e.g. a
+ * real log later edited to example seeds). No readable date at all → kept (fail closed).
  */
 export function isWithinRetention(log: ApplicationLog, now: Date = new Date()): boolean {
-  if (isExampleOnlyLog(log)) return false;
-  const from = deletableFromYmd(log);
-  if (!from) return true;
-  return localDateYmd(now) < from;
+  if (isExampleOnlyLog(log) && !isYmd(log.retainUntil)) return false;
+  const until = effectiveRetainUntil(log);
+  if (!until) return true;
+  return localDateYmd(now) < until;
 }
 
 export function countWithinRetention(logs: ApplicationLog[], now: Date = new Date()): number {
@@ -68,7 +107,7 @@ export function countWithinRetention(logs: ApplicationLog[], now: Date = new Dat
 /** Short reason shown instead of Delete, or null when the log may be deleted. */
 export function deleteBlockedReason(log: ApplicationLog, now: Date = new Date()): string | null {
   if (!isWithinRetention(log, now)) return null;
-  const from = deletableFromYmd(log);
+  const from = effectiveRetainUntil(log);
   if (!from) {
     return "Can't delete. This log has no readable application date, and Texas requires keeping records for 2 years from that date.";
   }

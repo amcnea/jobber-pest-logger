@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   keepDeviceCopy,
   listSyncConflicts,
@@ -22,7 +22,11 @@ interface Props {
   refreshKey: number;
   /** `error` is set when the device copy was saved but a later step failed. */
   onResolved: (logs: ApplicationLog[], error?: string) => void;
+  /** Bumped by App after a later log save or correction succeeds; clears the re-upload note (#183). */
+  noteResetKey?: number;
 }
+
+type ReuploadNote = { text: string; logId: string };
 
 type Mode = { kind: "take" } | { kind: "keep" };
 
@@ -68,7 +72,7 @@ function ConflictRow({
   people: Person[];
   /** `error` is set when the device copy was saved but a later step failed. */
   onResolved: (logs: ApplicationLog[], error?: string) => void;
-  onNote: (text: string) => void;
+  onNote: (note: ReuploadNote | null) => void;
 }) {
   const [mode, setMode] = useState<Mode | null>(null);
   const [personId, setPersonId] = useState("");
@@ -84,7 +88,8 @@ function ConflictRow({
       const res = await action();
       if (res.ok) {
         setMode(null);
-        if (res.reuploaded) onNote(REUPLOAD_DONE_MSG);
+        // A later successful resolution replaces or clears an earlier re-upload note (#183).
+        onNote(res.reuploaded ? { text: REUPLOAD_DONE_MSG, logId: log.id } : null);
         onResolved(res.logs);
       } else {
         setError(res.error);
@@ -166,21 +171,39 @@ function ConflictRow({
 }
 
 /** Office-only list of sync conflicts with the two resolutions. Renders nothing when there are none. */
-export function SyncConflicts({ shopId, remote, people, refreshKey, onResolved }: Props) {
+export function SyncConflicts({ shopId, remote, people, refreshKey, onResolved, noteResetKey = 0 }: Props) {
   const conflicts = useMemo(
     () => listSyncConflicts(shopId),
     // refreshKey re-reads the outbox after enqueue / flush.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [shopId, refreshKey],
   );
-  const [note, setNote] = useState<string | null>(null);
+  const [note, setNoteState] = useState<(ReuploadNote & { listed: string[] }) | null>(null);
+  // Remember which logs were listed when the note was shown.
+  const setNote = (next: ReuploadNote | null) =>
+    setNoteState(next ? { ...next, listed: conflicts.map((e) => e.log.id) } : null);
+  // #183: the note belongs to one log. Clear it when the list changes to a log that
+  // wasn't listed when it was shown…
+  useEffect(() => {
+    if (note && conflicts.some((e) => e.log.id !== note.logId && !note.listed.includes(e.log.id))) {
+      setNoteState(null);
+    }
+  }, [conflicts, note]);
+  // …or when App reports a later successful save / correction.
+  const lastResetKey = useRef(noteResetKey);
+  useEffect(() => {
+    if (lastResetKey.current !== noteResetKey) {
+      lastResetKey.current = noteResetKey;
+      setNoteState(null);
+    }
+  }, [noteResetKey]);
   if (conflicts.length === 0 && !note) return null;
   return (
     <section className="card" aria-label="Sync conflicts">
       <h3>Sync conflicts</h3>
       {note && (
         <p className="hint" role="status">
-          {note}
+          {note.text}
         </p>
       )}
       <ul className="review-queue">

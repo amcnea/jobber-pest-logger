@@ -178,3 +178,59 @@ describe("SyncConflicts — shop no longer had the log (#175)", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 });
+
+describe("SyncConflicts — re-upload note is cleared (#183)", () => {
+  const other: LogOutboxEntry = {
+    ...entry,
+    entryId: "e2",
+    log: makeLog({ id: "L2", dateUsed: "2026-10-02", serviceAddress: "9 Elm St" }),
+  };
+
+  /** Re-upload L1 while L2 is also listed; returns helpers to re-render. */
+  async function reuploadL1(initial: LogOutboxEntry[] = [entry]) {
+    conflicts = initial;
+    keepDeviceCopy.mockImplementationOnce(async () => {
+      conflicts = conflicts.filter((e) => e.log.id !== "L1");
+      return { ok: true, logs: [entry.log], log: entry.log, reuploaded: true };
+    });
+    const onResolved = vi.fn();
+    const props = { shopId: "SHOP1", remote, people: PEOPLE, onResolved };
+    const utils = render(<SyncConflicts {...props} refreshKey={0} noteResetKey={0} />);
+    const row = screen.getByLabelText("Conflict L1");
+    await userEvent.click(within(row).getByRole("button", { name: "Keep this device's copy" }));
+    await userEvent.selectOptions(within(row).getByLabelText("Changed by"), "p-ana");
+    await userEvent.type(within(row).getByLabelText("Reason"), "Shop lost it");
+    await userEvent.click(within(row).getByRole("button", { name: "Save this device's copy" }));
+    const rerender = (refreshKey: number, noteResetKey = 0) =>
+      utils.rerender(<SyncConflicts {...props} refreshKey={refreshKey} noteResetKey={noteResetKey} />);
+    rerender(1);
+    return { ...utils, rerender };
+  }
+
+  it("a later successful correction on another conflict clears it", async () => {
+    await reuploadL1([entry, other]);
+    expect(screen.getByRole("status")).toBeInTheDocument();
+    const row = screen.getByLabelText("Conflict L2");
+    // L2 was already listed when the note appeared, so the note stays until L2 is resolved.
+    await userEvent.click(within(row).getByRole("button", { name: "Keep this device's copy" }));
+    await userEvent.selectOptions(within(row).getByLabelText("Changed by"), "p-ana");
+    await userEvent.type(within(row).getByLabelText("Reason"), "x");
+    await userEvent.click(within(row).getByRole("button", { name: "Save this device's copy" }));
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("stays while the list is empty; clears when the list changes to a different log", async () => {
+    const { rerender } = await reuploadL1();
+    expect(screen.getByRole("status")).toHaveTextContent(/Re-upload recorded\./);
+    conflicts = [other];
+    rerender(2);
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("clears when App reports a later successful save or correction", async () => {
+    const { rerender } = await reuploadL1();
+    expect(screen.getByRole("status")).toBeInTheDocument();
+    rerender(1, 1);
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+});

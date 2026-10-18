@@ -156,7 +156,7 @@ function exampleLine(overrides: Partial<AppliedProduct> = {}): AppliedProduct {
 }
 
 /** Applied more than 2 years ago: outside the 2-year delete guard. */
-const PAST = { dateUsed: "2020-01-01" } as const;
+const PAST = { dateUsed: "2020-01-01", createdAt: "2020-01-01T18:00:00.000Z" } as const;
 
 function makeLog(id: string, overrides: Partial<ApplicationLog> = {}): ApplicationLog {
   return {
