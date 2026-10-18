@@ -1,0 +1,724 @@
+{
+ "pages": 3,
+ "texts": [
+  {
+   "page": 1,
+   "text": "Texas pesticide application log",
+   "x": 14,
+   "y": 18
+  },
+  {
+   "page": 1,
+   "text": [
+    "Acme Pest"
+   ],
+   "x": 14,
+   "y": 24
+  },
+  {
+   "page": 1,
+   "text": [
+    "Source: This device"
+   ],
+   "x": 14,
+   "y": 35
+  },
+  {
+   "page": 1,
+   "text": [
+    "Date range (date used): All dates"
+   ],
+   "x": 14,
+   "y": 40
+  },
+  {
+   "page": 1,
+   "text": [
+    "Records: 5"
+   ],
+   "x": 14,
+   "y": 45
+  },
+  {
+   "page": 1,
+   "text": [
+    "Generated: 2026-10-17T19:00:00-05:00 (device-local time)"
+   ],
+   "x": 14,
+   "y": 50
+  },
+  {
+   "page": 1,
+   "text": [
+    "Fields drawn from 4 TAC § 7.144(a) for Texas SPCS shops. Termite extras drawn from § 7.144(b)",
+    " when the stop is termite work. Full disclaimer is on every page footer."
+   ],
+   "x": 14,
+   "y": 57
+  },
+  {
+   "page": 1,
+   "text": [
+    "Some products are example catalog seeds. Those rows are labeled \"example / not a real EPA num",
+    "ber\" and are not EPA registration numbers."
+   ],
+   "x": 14,
+   "y": 69
+  },
+  {
+   "page": 1,
+   "text": [
+    "Log 1 — 2026-09-01"
+   ],
+   "x": 14,
+   "y": 86
+  },
+  {
+   "page": 1,
+   "text": [
+    "Customer billing: Pat Customer — 1 Billing Rd"
+   ],
+   "x": 14,
+   "y": 94.5
+  },
+  {
+   "page": 1,
+   "text": [
+    "Service address: 100 Main St"
+   ],
+   "x": 14,
+   "y": 100.5
+  },
+  {
+   "page": 1,
+   "text": [
+    "Target pest / purpose: Ants"
+   ],
+   "x": 14,
+   "y": 106.5
+  },
+  {
+   "page": 1,
+   "text": [
+    "Date used: 2026-09-01"
+   ],
+   "x": 14,
+   "y": 112.5
+  },
+  {
+   "page": 1,
+   "text": [
+    "Shop TPCL: 12345B"
+   ],
+   "x": 14,
+   "y": 118.5
+  },
+  {
+   "page": 1,
+   "text": [
+    "Jobber link (not TDA-required): J-100 — 100 Main St, Austin"
+   ],
+   "x": 14,
+   "y": 124.5
+  },
+  {
+   "page": 1,
+   "text": [
+    "Applying: Alice Applicator TX-111"
+   ],
+   "x": 14,
+   "y": 130.5
+  },
+  {
+   "page": 1,
+   "text": [
+    "Supervising:"
+   ],
+   "x": 14,
+   "y": 136.5
+  },
+  {
+   "page": 1,
+   "text": [
+    "Receiving training:"
+   ],
+   "x": 14,
+   "y": 142.5
+  },
+  {
+   "page": 1,
+   "text": [
+    "RTU: Talstar P (EPA 279-3206) 1 gal"
+   ],
+   "x": 14,
+   "y": 148.5
+  },
+  {
+   "page": 1,
+   "text": [
+    "Log 2 — 2026-09-02"
+   ],
+   "x": 14,
+   "y": 163.5
+  },
+  {
+   "page": 1,
+   "text": [
+    "Customer billing: O'Brien, \"Pat\" — 1 Billing Rd"
+   ],
+   "x": 14,
+   "y": 172
+  },
+  {
+   "page": 1,
+   "text": [
+    "Service address: =HYPERLINK(\"x\")"
+   ],
+   "x": 14,
+   "y": 178
+  },
+  {
+   "page": 1,
+   "text": [
+    "Target pest / purpose: Ants"
+   ],
+   "x": 14,
+   "y": 184
+  },
+  {
+   "page": 1,
+   "text": [
+    "Date used: 2026-09-02"
+   ],
+   "x": 14,
+   "y": 190
+  },
+  {
+   "page": 1,
+   "text": [
+    "Shop TPCL: 12345B"
+   ],
+   "x": 14,
+   "y": 196
+  },
+  {
+   "page": 1,
+   "text": [
+    "Applying: Alice Applicator TX-111"
+   ],
+   "x": 14,
+   "y": 202
+  },
+  {
+   "page": 1,
+   "text": [
+    "Supervising:"
+   ],
+   "x": 14,
+   "y": 208
+  },
+  {
+   "page": 1,
+   "text": [
+    "Receiving training:"
+   ],
+   "x": 14,
+   "y": 214
+  },
+  {
+   "page": 1,
+   "text": [
+    "RTU: Bifen (EPA 279-3206) 16 fl oz"
+   ],
+   "x": 14,
+   "y": 220
+  },
+  {
+   "page": 2,
+   "text": "Texas pesticide application log",
+   "x": 14,
+   "y": 18
+  },
+  {
+   "page": 2,
+   "text": [
+    "Acme Pest"
+   ],
+   "x": 14,
+   "y": 24
+  },
+  {
+   "page": 2,
+   "text": [
+    "RTU: Cedar oil (25(b) / unregistered — no EPA #) 1 gal"
+   ],
+   "x": 14,
+   "y": 35
+  },
+  {
+   "page": 2,
+   "text": [
+    "Mixed: Concentrate (EPA 279-3206) rate 1 oz / gal, 0.06% AI, total 2 gal"
+   ],
+   "x": 14,
+   "y": 41
+  },
+  {
+   "page": 2,
+   "text": [
+    "Device: Monitor × 4"
+   ],
+   "x": 14,
+   "y": 47
+  },
+  {
+   "page": 2,
+   "text": [
+    "Log 3 — 2026-09-03  [includes example catalog items]"
+   ],
+   "x": 14,
+   "y": 62
+  },
+  {
+   "page": 2,
+   "text": [
+    "Customer billing: Pat Customer — 1 Billing Rd"
+   ],
+   "x": 14,
+   "y": 70.5
+  },
+  {
+   "page": 2,
+   "text": [
+    "Service address: 100 Main St"
+   ],
+   "x": 14,
+   "y": 76.5
+  },
+  {
+   "page": 2,
+   "text": [
+    "Target pest / purpose: Ants"
+   ],
+   "x": 14,
+   "y": 82.5
+  },
+  {
+   "page": 2,
+   "text": [
+    "Date used: 2026-09-03"
+   ],
+   "x": 14,
+   "y": 88.5
+  },
+  {
+   "page": 2,
+   "text": [
+    "Shop TPCL: 12345B"
+   ],
+   "x": 14,
+   "y": 94.5
+  },
+  {
+   "page": 2,
+   "text": [
+    "Applying: Alice Applicator TX-111"
+   ],
+   "x": 14,
+   "y": 100.5
+  },
+  {
+   "page": 2,
+   "text": [
+    "Supervising:"
+   ],
+   "x": 14,
+   "y": 106.5
+  },
+  {
+   "page": 2,
+   "text": [
+    "Receiving training:"
+   ],
+   "x": 14,
+   "y": 112.5
+  },
+  {
+   "page": 2,
+   "text": [
+    "RTU: Example RTU insecticide (example / not a real EPA number) 1 gal"
+   ],
+   "x": 14,
+   "y": 118.5
+  },
+  {
+   "page": 2,
+   "text": [
+    "Log 4 — 2026-09-04"
+   ],
+   "x": 14,
+   "y": 133.5
+  },
+  {
+   "page": 2,
+   "text": [
+    "Customer billing: Pat Customer — 1 Billing Rd"
+   ],
+   "x": 14,
+   "y": 142
+  },
+  {
+   "page": 2,
+   "text": [
+    "Service address: 100 Main St (pole: Pole 7)"
+   ],
+   "x": 14,
+   "y": 148
+  },
+  {
+   "page": 2,
+   "text": [
+    "Target pest / purpose: Ants"
+   ],
+   "x": 14,
+   "y": 154
+  },
+  {
+   "page": 2,
+   "text": [
+    "Date used: 2026-09-04"
+   ],
+   "x": 14,
+   "y": 160
+  },
+  {
+   "page": 2,
+   "text": [
+    "Shop TPCL: 12345B"
+   ],
+   "x": 14,
+   "y": 166
+  },
+  {
+   "page": 2,
+   "text": [
+    "Applying: Alice Applicator TX-111"
+   ],
+   "x": 14,
+   "y": 172
+  },
+  {
+   "page": 2,
+   "text": [
+    "Supervising:"
+   ],
+   "x": 14,
+   "y": 178
+  },
+  {
+   "page": 2,
+   "text": [
+    "Receiving training:"
+   ],
+   "x": 14,
+   "y": 184
+  },
+  {
+   "page": 2,
+   "text": [
+    "RTU: Talstar P (EPA 279-3206) 1 gal"
+   ],
+   "x": 14,
+   "y": 190
+  },
+  {
+   "page": 2,
+   "text": [
+    "Termite extras (§ 7.144(b)):"
+   ],
+   "x": 14,
+   "y": 196
+  },
+  {
+   "page": 2,
+   "text": [
+    "  Area treated: 1200 sq ft"
+   ],
+   "x": 14,
+   "y": 202
+  },
+  {
+   "page": 2,
+   "text": [
+    "  Physical-barrier measurement: 140 linear ft"
+   ],
+   "x": 14,
+   "y": 208
+  },
+  {
+   "page": 2,
+   "text": [
+    "  Diagram note (text, not a drawing): north wall",
+    "and slab"
+   ],
+   "x": 14,
+   "y": 214
+  },
+  {
+   "page": 3,
+   "text": "Texas pesticide application log",
+   "x": 14,
+   "y": 18
+  },
+  {
+   "page": 3,
+   "text": [
+    "Acme Pest"
+   ],
+   "x": 14,
+   "y": 24
+  },
+  {
+   "page": 3,
+   "text": [
+    "  Commercial pretreat: tanks 2, gal 100, 08:00–10:30"
+   ],
+   "x": 14,
+   "y": 35
+  },
+  {
+   "page": 3,
+   "text": [
+    "Log 5 — 2026-09-05"
+   ],
+   "x": 14,
+   "y": 50
+  },
+  {
+   "page": 3,
+   "text": [
+    "Customer billing: Pat Customer — 1 Billing Rd"
+   ],
+   "x": 14,
+   "y": 58.5
+  },
+  {
+   "page": 3,
+   "text": [
+    "Service address: 100 Main St"
+   ],
+   "x": 14,
+   "y": 64.5
+  },
+  {
+   "page": 3,
+   "text": [
+    "Target pest / purpose: Ants"
+   ],
+   "x": 14,
+   "y": 70.5
+  },
+  {
+   "page": 3,
+   "text": [
+    "Date used: 2026-09-05"
+   ],
+   "x": 14,
+   "y": 76.5
+  },
+  {
+   "page": 3,
+   "text": [
+    "Shop TPCL: 12345B"
+   ],
+   "x": 14,
+   "y": 82.5
+  },
+  {
+   "page": 3,
+   "text": [
+    "Applying: Alice Applicator TX-111"
+   ],
+   "x": 14,
+   "y": 88.5
+  },
+  {
+   "page": 3,
+   "text": [
+    "Supervising:"
+   ],
+   "x": 14,
+   "y": 94.5
+  },
+  {
+   "page": 3,
+   "text": [
+    "Receiving training:"
+   ],
+   "x": 14,
+   "y": 100.5
+  },
+  {
+   "page": 3,
+   "text": [
+    "RTU: Talstar P (EPA 279-3206) 1 gal"
+   ],
+   "x": 14,
+   "y": 106.5
+  },
+  {
+   "page": 3,
+   "text": [
+    "Termite extras (§ 7.144(b)):"
+   ],
+   "x": 14,
+   "y": 112.5
+  },
+  {
+   "page": 3,
+   "text": [
+    "  Bait — area treated N/A"
+   ],
+   "x": 14,
+   "y": 118.5
+  },
+  {
+   "page": 3,
+   "text": [
+    "  Diagram note (text, not a drawing): —"
+   ],
+   "x": 14,
+   "y": 124.5
+  },
+  {
+   "page": 1,
+   "text": [
+    "Source: this device's local copy · Range: All dates · 5 records · Generated 2026-10-17T19:00:",
+    "00-05:00",
+    "This export is a Texas Structural Pest Control Service (SPCS) pesticide/device use-record aid",
+    " based on 4 TAC § 7.144. The licensed shop and its responsible certified applicator are respo",
+    "nsible for the accuracy of each record and for keeping records for at least two years on the ",
+    "business premises (or employer premises for noncommercial applicators) and producing them to ",
+    "the Texas Department of Agriculture on request. This tool is not legal advice, is not affilia",
+    "ted with or approved by TDA, and is not an official TDA form."
+   ],
+   "x": 14,
+   "y": 234.79999999999998,
+   "opts": {
+    "lineHeightFactor": 1.15
+   }
+  },
+  {
+   "page": 1,
+   "text": "Page 1 of 3",
+   "x": 200,
+   "y": 273.4,
+   "opts": {
+    "align": "right"
+   }
+  },
+  {
+   "page": 2,
+   "text": [
+    "Source: this device's local copy · Range: All dates · 5 records · Generated 2026-10-17T19:00:",
+    "00-05:00",
+    "This export is a Texas Structural Pest Control Service (SPCS) pesticide/device use-record aid",
+    " based on 4 TAC § 7.144. The licensed shop and its responsible certified applicator are respo",
+    "nsible for the accuracy of each record and for keeping records for at least two years on the ",
+    "business premises (or employer premises for noncommercial applicators) and producing them to ",
+    "the Texas Department of Agriculture on request. This tool is not legal advice, is not affilia",
+    "ted with or approved by TDA, and is not an official TDA form."
+   ],
+   "x": 14,
+   "y": 234.79999999999998,
+   "opts": {
+    "lineHeightFactor": 1.15
+   }
+  },
+  {
+   "page": 2,
+   "text": "Page 2 of 3",
+   "x": 200,
+   "y": 273.4,
+   "opts": {
+    "align": "right"
+   }
+  },
+  {
+   "page": 3,
+   "text": [
+    "Source: this device's local copy · Range: All dates · 5 records · Generated 2026-10-17T19:00:",
+    "00-05:00",
+    "This export is a Texas Structural Pest Control Service (SPCS) pesticide/device use-record aid",
+    " based on 4 TAC § 7.144. The licensed shop and its responsible certified applicator are respo",
+    "nsible for the accuracy of each record and for keeping records for at least two years on the ",
+    "business premises (or employer premises for noncommercial applicators) and producing them to ",
+    "the Texas Department of Agriculture on request. This tool is not legal advice, is not affilia",
+    "ted with or approved by TDA, and is not an official TDA form."
+   ],
+   "x": 14,
+   "y": 234.79999999999998,
+   "opts": {
+    "lineHeightFactor": 1.15
+   }
+  },
+  {
+   "page": 3,
+   "text": "Page 3 of 3",
+   "x": 200,
+   "y": 273.4,
+   "opts": {
+    "align": "right"
+   }
+  }
+ ],
+ "lines": [
+  {
+   "page": 1,
+   "y": 30
+  },
+  {
+   "page": 1,
+   "y": 81
+  },
+  {
+   "page": 1,
+   "y": 158.5
+  },
+  {
+   "page": 2,
+   "y": 30
+  },
+  {
+   "page": 2,
+   "y": 57
+  },
+  {
+   "page": 2,
+   "y": 128.5
+  },
+  {
+   "page": 3,
+   "y": 30
+  },
+  {
+   "page": 3,
+   "y": 45
+  },
+  {
+   "page": 1,
+   "y": 232.29999999999998
+  },
+  {
+   "page": 2,
+   "y": 232.29999999999998
+  },
+  {
+   "page": 3,
+   "y": 232.29999999999998
+  }
+ ],
+ "saved": [
+  "texas-tda-application-logs-all-dates-local-generated-2026-10-17.pdf"
+ ]
+}
