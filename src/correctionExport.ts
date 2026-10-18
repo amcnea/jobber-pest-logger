@@ -128,30 +128,38 @@ function productHeading(lineId: string, after: Version, before: Version): { text
   return { text: "" };
 }
 
+/** Own-property lookup: inherited keys like "constructor" or "toString" are not labels (#188). */
+function own(map: Readonly<Record<string, string>>, key: string): string | undefined {
+  return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : undefined;
+}
+
 /**
  * Readable label for a stored change path. `after` / `before` are the log as it stood
  * after / before the change (for product names). Unknown paths come back as-is.
  */
 export function fieldLabel(path: string, after?: Version, before?: Version): string {
-  if (LOG_FIELD_LABELS[path]) return LOG_FIELD_LABELS[path];
+  const logLabel = own(LOG_FIELD_LABELS, path);
+  if (logLabel) return logLabel;
   const termite = /^termite\.(\w+)$/.exec(path);
-  if (termite && TERMITE_FIELD_LABELS[termite[1]]) return TERMITE_FIELD_LABELS[termite[1]];
+  const termiteLabel = termite ? own(TERMITE_FIELD_LABELS, termite[1]) : undefined;
+  if (termiteLabel) return termiteLabel;
   const person = /^personnel\[([a-z_]+)\]\.(\w+)$/.exec(path);
-  if (person && PERSONNEL_FIELD_LABELS[`${person[1]}.${person[2]}`]) {
-    return PERSONNEL_FIELD_LABELS[`${person[1]}.${person[2]}`];
-  }
+  const personLabel = person ? own(PERSONNEL_FIELD_LABELS, `${person[1]}.${person[2]}`) : undefined;
+  if (personLabel) return personLabel;
   const extraPerson = /^personnel\[([a-z_]+)#(\d+)\]\.(\w+)$/.exec(path);
-  if (extraPerson && PERSONNEL_ROLE_TITLES[extraPerson[1]] && PERSONNEL_FIELD_TITLES[extraPerson[3]]) {
-    return `${PERSONNEL_ROLE_TITLES[extraPerson[1]]} ${extraPerson[2]}: ${PERSONNEL_FIELD_TITLES[extraPerson[3]]}`;
+  if (extraPerson) {
+    const role = own(PERSONNEL_ROLE_TITLES, extraPerson[1]);
+    const field = own(PERSONNEL_FIELD_TITLES, extraPerson[3]);
+    if (role && field) return `${role} ${extraPerson[2]}: ${field}`;
   }
   const product = /^products\[(.+)\]\.(\w+)$/.exec(path);
-  if (product && (PRODUCT_FIELD_LABELS[product[2]] || PRODUCT_EXTRA_LABELS[product[2]])) {
+  const productColumn = product
+    ? (own(PRODUCT_FIELD_LABELS, product[2]) ?? own(PRODUCT_EXTRA_LABELS, product[2]))
+    : undefined;
+  if (product && productColumn) {
     const heading = productHeading(product[1], after, before);
     if (heading.text) {
-      const column =
-        product[2] === "name" && heading.line?.method === "device"
-          ? DEVICE_NAME_LABEL
-          : (PRODUCT_FIELD_LABELS[product[2]] ?? PRODUCT_EXTRA_LABELS[product[2]]);
+      const column = product[2] === "name" && heading.line?.method === "device" ? DEVICE_NAME_LABEL : productColumn;
       return `${heading.text}: ${column}`;
     }
   }

@@ -197,6 +197,14 @@ export function SyncConflicts({ shopId, remote, people, refreshKey, onResolved, 
       setNoteState(null);
     }
   }, [noteResetKey]);
+  // …or when the shop changes; the note was about the previous shop's log (#187).
+  const lastShopId = useRef(shopId);
+  useEffect(() => {
+    if (lastShopId.current !== shopId) {
+      lastShopId.current = shopId;
+      setNoteState(null);
+    }
+  }, [shopId]);
   if (conflicts.length === 0 && !note) return null;
   return (
     <section className="card" aria-label="Sync conflicts">
