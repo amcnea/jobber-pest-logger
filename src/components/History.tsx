@@ -7,6 +7,7 @@ import { isLogReviewed, reviewFlagsForLog } from "../reviewQueue";
 import { groupLogsByServiceAddress, type PropertyBookEntry } from "../storage";
 import type { ApplicationLog, Person, ShopProduct } from "../types";
 import { useNow } from "../useNow";
+import { loadReviewedCopyConflicts, reviewedCopiesNoteFor } from "../shop/reviewedCopies";
 import { REVIEWED_LOCK_NOTE } from "./ReviewQueue";
 
 interface Props {
@@ -149,6 +150,8 @@ export function History({
     [logs, dateFrom, dateTo],
   );
   const groups = useMemo(() => groupLogsByServiceAddress(filtered), [filtered]);
+  // #212: reviewed copies in the shop data that don't match (office only). Re-read when logs change.
+  const copyConflicts = useMemo(() => (canEditDelete ? loadReviewedCopyConflicts() : {}), [logs, canEditDelete]);
   // Property actions use the true latest visit across all logs, not the date-filtered group (#92).
   const fullByKey = useMemo(
     () => new Map(groupLogsByServiceAddress(logs).map((g) => [g.key, g])),
@@ -321,6 +324,9 @@ export function History({
                 </div>
                 {canEditDelete && deleteBlockedReason(log, clock) && (
                   <p className="hint">{deleteBlockedReason(log, clock)}</p>
+                )}
+                {canEditDelete && reviewedCopiesNoteFor(log.id, copyConflicts) && (
+                  <p className="hint history-copies-note">{reviewedCopiesNoteFor(log.id, copyConflicts)}</p>
                 )}
                 {canEditDelete && reviewed && <p className="hint">{REVIEWED_LOCK_NOTE}</p>}
                 {reviewEnabled && !reviewed && onMarkReviewed && (

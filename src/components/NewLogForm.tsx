@@ -8,6 +8,7 @@ import {
   withSaveFlags,
   type FieldErrors,
 } from "../formDefaults";
+import { reviewedCopiesNoteFor } from "../shop/reviewedCopies";
 import { peopleForRole } from "../storage";
 import type { ApplicationLog, AppliedProduct, Person, PersonnelRole, ShopProduct, ShopSettings } from "../types";
 
@@ -140,6 +141,9 @@ export function NewLogForm({
             ? "Updating a saved log in place (same id). Save returns you to History."
             : "Fill the stop, then save. Records stay on this device until you export or back up."}
         </p>
+        {correction && initialDraft && reviewedCopiesNoteFor(initialDraft.id) && (
+          <p className="hint">{reviewedCopiesNoteFor(initialDraft.id)}</p>
+        )}
       </section>
 
       <section className="section">
