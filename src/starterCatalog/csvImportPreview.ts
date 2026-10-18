@@ -7,7 +7,12 @@
  * name are left out of the import by default. EPA reg # checks are format-only.
  */
 import type { ShopProduct } from "../types";
-import { epaRegNoFormatOk, type CsvCandidate, type CsvImportResult } from "./csvImport";
+import {
+  CSV_FIELD_LABELS,
+  epaRegNoFormatOk,
+  type CsvCandidate,
+  type CsvImportResult,
+} from "./csvImport";
 
 /** Lowercase, drop all whitespace, and treat any dash-like character as "-". */
 export function normalizeImportEpa(epa: string | null | undefined): string {
@@ -54,6 +59,10 @@ export interface CsvPreviewRow {
 export interface CsvImportPreview {
   rows: CsvPreviewRow[];
   fileProblems: string[];
+  /** Mapped columns in header order: the file's header and the plain label it is read as. */
+  columns: { header: string; label: string }[];
+  /** How many columns are not used (each also has a "Needs a look" file note). */
+  unusedColumns: number;
 }
 
 function shopMatch(
@@ -132,7 +141,12 @@ export function buildCsvImportPreview(result: CsvImportResult, catalog: ShopProd
       includeByDefault: addable && duplicate === null,
     };
   });
-  return { rows, fileProblems: result.fileProblems };
+  return {
+    rows,
+    fileProblems: result.fileProblems,
+    columns: result.columns.map((c) => ({ header: c.header, label: CSV_FIELD_LABELS[c.field] })),
+    unusedColumns: result.ignoredColumns.length,
+  };
 }
 
 /** Shop row to save for an included preview row: always archived, never an example. */
