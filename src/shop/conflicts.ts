@@ -11,10 +11,15 @@
  *   shop+1, roster changedBy, required reason, per-field diff), then synced. A reviewed
  *   shop copy keeps its review stamp and gains a history entry; it is never silently
  *   replaced. If this device's copy carries history the shop lacks, it is also set aside.
+ *   If the shop no longer has the log, this device's copy is uploaded with a re-upload
+ *   record (who, when, why) — not a correction, so no revision bump.
+ * - A failure after the local save (upload queue / sync) still returns the saved logs with
+ *   the error, so App never keeps the pre-resolution copy (#170).
  */
 import {
   addSetAsideCopy,
   buildCorrection,
+  buildReupload,
   isHistoryPrefix,
   loadLogs,
   saveResolvedLog,
@@ -35,7 +40,8 @@ export const SET_ASIDE_CONFIRM =
 
 export type ConflictResult =
   | { ok: true; logs: ApplicationLog[]; log: ApplicationLog }
-  | { ok: false; error: string };
+  /** `logs` / `log` are set when the device copy was already saved before the failure. */
+  | { ok: false; error: string; logs?: ApplicationLog[]; log?: ApplicationLog };
 
 /** Outbox entries the shop refused because its copy was kept. */
 export function listSyncConflicts(shopId: string): LogOutboxEntry[] {
@@ -76,7 +82,14 @@ export async function takeShopCopy(
   const saved = saveResolvedLog(shop.log);
   if (!saved.saved) return { ok: false, error: "Could not save on this device." };
   const removed = await removeOutboxVersions(shopId.trim(), [entry.entryId], entry.log.id);
-  if (!removed) return { ok: false, error: "Saved the shop copy, but could not update the upload queue." };
+  if (!removed) {
+    return {
+      ok: false,
+      error: "Saved the shop copy, but could not update the upload queue.",
+      logs: saved.logs,
+      log: shop.log,
+    };
+  }
   return { ok: true, logs: saved.logs, log: shop.log };
 }
 
@@ -92,8 +105,16 @@ export async function keepDeviceCopy(
 
   let resolved: ApplicationLog;
   if (!shop.log) {
-    // Shop no longer has it: this device's copy is uploaded as-is (nothing to correct).
-    resolved = entry.log;
+    // Shop no longer has it: upload this device's copy with a re-upload record
+    // (roster person, reason, local time). Values, revision and history unchanged.
+    const built = buildReupload(entry.log, {
+      reuploadedBy: options.changedBy,
+      reason: options.reason,
+      people: options.people,
+      now: options.now,
+    });
+    if (!built.ok) return built;
+    resolved = built.log;
   } else {
     const built = buildCorrection(shop.log, entry.log, options);
     if (!built.ok) return built;
@@ -109,6 +130,6 @@ export async function keepDeviceCopy(
   const saved = saveResolvedLog(resolved);
   if (!saved.saved) return { ok: false, error: "Could not save on this device." };
   const sync = await syncLogToRemote(remote, shopId, resolved);
-  if (!sync.ok) return { ok: false, error: sync.error };
+  if (!sync.ok) return { ok: false, error: sync.error, logs: saved.logs, log: resolved };
   return { ok: true, logs: saved.logs, log: resolved };
 }

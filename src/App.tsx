@@ -27,6 +27,7 @@ import {
   loadPeople,
   loadSettings,
   markLogReviewed,
+  STALE_EDIT_MSG,
   applyCorrection,
   removeExampleProductsFromCatalog,
   clearExampleDemoData,
@@ -322,6 +323,10 @@ export default function App() {
     setLogs(result.logs);
     if (result.locked) {
       setStorageError(REVIEWED_LOCKED_MSG);
+      return false;
+    }
+    if (result.stale) {
+      setStorageError(STALE_EDIT_MSG);
       return false;
     }
     if (!result.saved) {
@@ -643,9 +648,10 @@ export default function App() {
               remote={info.store}
               people={people}
               refreshKey={outboxTick}
-              onResolved={(next) => {
+              onResolved={(next, error) => {
+                // Partial failure (#170): the device copy was saved; keep the error visible.
                 setLogs(next);
-                setOutboxMessage(null);
+                setOutboxMessage(error ? { text: error, shopKey: outboxShopKey(info) } : null);
                 refreshOutboxBanner();
               }}
             />

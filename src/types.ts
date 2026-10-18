@@ -108,6 +108,22 @@ export interface ApplicationLog {
   reviewedAt?: string;
   /** Roster person name chosen when marking reviewed. Present iff reviewedAt is. */
   reviewedBy?: string;
+  /**
+   * Re-upload records, oldest first (sync conflict "Keep this device's copy" when the
+   * shop no longer had the log). Not corrections: no revision bump, no field changes.
+   * Absent when the log was never re-uploaded.
+   */
+  reuploads?: ReuploadRecord[];
+}
+
+/** Who sent this device's copy back to the shop after the shop no longer had the log, and why. */
+export interface ReuploadRecord {
+  /** ISO with local offset, e.g. 2026-10-17T20:40:00-05:00. */
+  reuploadedAt: string;
+  /** Roster person name. */
+  reuploadedBy: string;
+  /** Non-blank after trim. */
+  reason: string;
 }
 
 /** One changed field in a correction. Paths are stable keys, e.g. `products[<lineId>].rtuAmount`. */
@@ -118,7 +134,7 @@ export interface FieldChange {
 }
 
 /** Log as it stood before a correction, minus its own history array (kept once, on the log). */
-export type LogSnapshot = Omit<ApplicationLog, "history">;
+export type LogSnapshot = Omit<ApplicationLog, "history" | "reuploads">;
 
 export interface CorrectionEntry {
   /** Revision this correction produced (priorSnapshot.revision + 1). */

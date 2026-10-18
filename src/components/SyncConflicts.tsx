@@ -15,7 +15,8 @@ interface Props {
   people: Person[];
   /** Bump to re-read the outbox (App outboxTick). */
   refreshKey: number;
-  onResolved: (logs: ApplicationLog[]) => void;
+  /** `error` is set when the device copy was saved but a later step failed. */
+  onResolved: (logs: ApplicationLog[], error?: string) => void;
 }
 
 type Mode = { kind: "take" } | { kind: "keep" };
@@ -59,7 +60,8 @@ function ConflictRow({
   shopId: string;
   remote: RemoteShopStore;
   people: Person[];
-  onResolved: (logs: ApplicationLog[]) => void;
+  /** `error` is set when the device copy was saved but a later step failed. */
+  onResolved: (logs: ApplicationLog[], error?: string) => void;
 }) {
   const [mode, setMode] = useState<Mode | null>(null);
   const [personId, setPersonId] = useState("");
@@ -78,6 +80,8 @@ function ConflictRow({
         onResolved(res.logs);
       } else {
         setError(res.error);
+        // Saved on this device before the failure: App must take the saved copy (#170).
+        if (res.logs) onResolved(res.logs, res.error);
       }
     } finally {
       setBusy(false);

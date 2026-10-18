@@ -175,3 +175,16 @@ describe("History — Correct this log (office)", () => {
     expect(within(card("2026-10-02")).getByText("Corrected (rev 2)")).toBeInTheDocument();
   });
 });
+
+describe("History — re-uploaded chip", () => {
+  it("shows Re-uploaded for a log with a re-upload record", () => {
+    renderHistory([
+      makeLog({
+        id: "RU",
+        dateUsed: "2026-10-04",
+        reuploads: [{ reuploadedAt: "2026-10-17T20:40:00-05:00", reuploadedBy: "Ana Office", reason: "Shop lost it" }],
+      }),
+    ]);
+    expect(within(card("2026-10-04")).getByText("Re-uploaded")).toBeInTheDocument();
+  });
+});

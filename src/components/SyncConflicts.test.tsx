@@ -117,3 +117,29 @@ describe("SyncConflicts", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("No fields changed.");
   });
 });
+
+describe("SyncConflicts — partial failure (#170)", () => {
+  it("passes the saved logs to App with the error, and shows the error", async () => {
+    const saved = [{ ...entry.log, revision: 3 }];
+    keepDeviceCopy.mockResolvedValue({ ok: false, error: "offline", logs: saved, log: saved[0] });
+    const { onResolved } = renderIt();
+    const row = screen.getByLabelText("Conflict L1");
+    await userEvent.click(within(row).getByRole("button", { name: "Keep this device's copy" }));
+    await userEvent.selectOptions(within(row).getByLabelText("Changed by"), "p-ana");
+    await userEvent.type(within(row).getByLabelText("Reason"), "Keep tech copy");
+    await userEvent.click(within(row).getByRole("button", { name: "Save as a correction" }));
+    expect(onResolved).toHaveBeenCalledWith(saved, "offline");
+    expect(within(row).getByRole("alert")).toHaveTextContent("offline");
+  });
+
+  it("a failure before any save does not touch App state", async () => {
+    keepDeviceCopy.mockResolvedValue({ ok: false, error: "Enter a reason for the change." });
+    const { onResolved } = renderIt();
+    const row = screen.getByLabelText("Conflict L1");
+    await userEvent.click(within(row).getByRole("button", { name: "Keep this device's copy" }));
+    await userEvent.selectOptions(within(row).getByLabelText("Changed by"), "p-ana");
+    await userEvent.type(within(row).getByLabelText("Reason"), "x");
+    await userEvent.click(within(row).getByRole("button", { name: "Save as a correction" }));
+    expect(onResolved).not.toHaveBeenCalled();
+  });
+});

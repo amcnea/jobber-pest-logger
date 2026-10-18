@@ -7,7 +7,7 @@ import {
   provenanceSummary,
   type ExportProvenance,
 } from "./exportProvenance";
-import { changeHistoryPdfLines, correctedLabel } from "./correctionExport";
+import { changeHistoryPdfLines, changeStatusLabel } from "./correctionExport";
 import type { ApplicationLog } from "./types";
 
 function person(log: ApplicationLog, role: ApplicationLog["personnel"][number]["role"]) {
@@ -212,8 +212,9 @@ export function downloadPdf(
       ? "  [includes example catalog items]"
       : "";
     const dateUsed = log.dateUsed.trim() || "(no date)";
-    // Empty for uncorrected logs, so their title is unchanged.
-    const correctedMark = correctedLabel(log) ? `  [${correctedLabel(log)}]` : "";
+    // Empty for logs never corrected or re-uploaded, so their title is unchanged.
+    const status = changeStatusLabel(log);
+    const correctedMark = status ? `  [${status}]` : "";
     const title = `Log ${i + 1} — ${dateUsed}${exampleMark}${correctedMark}`;
     ensureSpace(wrappedHeight(doc, title, MAX_WIDTH, 5.5) + 4);
     y = wrap(doc, title, MARGIN, y, MAX_WIDTH, 5.5);
