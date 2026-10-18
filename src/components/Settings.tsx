@@ -370,7 +370,7 @@ export function Settings({
         <strong>Premises keep-alive:</strong> Cloud sync is <strong>not</strong> the Texas § 7.144
         two-year on-premises retention path. Keep Export (CSV/PDF) and Settings → Download backup
         JSON visible on this device; the Lawgical disclaimer below still applies. This app blocks
-        deleting a log until 2 years after the latest date saved for it. It isn't your premises copy: keep
+        deleting a log until its hold date, at least 2 years after the latest date saved for it. It isn't your premises copy: keep
         the records at your business for 2 years by downloading the backup JSON and exports
         regularly. Wipe ALL data still removes everything on this device.
       </p>
@@ -907,7 +907,8 @@ export function Settings({
       <p className="hint">
         Soft demo reset clears example catalog seeds and any logs that only used them. Real products,
         people, settings, and backups stay. A full wipe needs an explicit confirm — it removes real
-        shop data on this device and re-seeds examples.
+        shop data on this device and re-seeds examples. Any log still under its 2-year hold stays
+        until its hold date.
       </p>
       <div className="card settings-backup-actions">
         <button

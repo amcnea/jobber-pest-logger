@@ -1,9 +1,10 @@
 /**
  * 2-year record keeping guard (4 TAC § 7.144 record keeping: application records are
- * kept for 2 years). A log may be deleted in the app only on or after its
- * `retainUntil`: the local calendar date 2 years after the latest of its current
- * dateUsed, every earlier dateUsed (stored copies, change history) and createdAt.
- * retainUntil only ever moves later, so editing the date back never shortens the hold.
+ * kept for 2 years). A log may be deleted in the app only on or after its hold date
+ * (`retainUntil`), which is at least 2 years after the latest of its current dateUsed,
+ * every earlier dateUsed (stored copies, change history) and createdAt. It can be later
+ * than that: retainUntil only ever moves later (saves, corrections, merges, restores),
+ * so editing the date back never shortens the hold.
  *
  * Leap day: an application on Feb 29 reaches 2 years on Mar 1 (the later of the two
  * choices), so a record is never deletable before 2 full years have passed.
@@ -111,7 +112,7 @@ export function deleteBlockedReason(log: ApplicationLog, now: Date = new Date())
   if (!from) {
     return "Can't delete. This log has no readable application date, and Texas requires keeping records for 2 years from that date.";
   }
-  return `Can't delete yet. Texas requires keeping this record for 2 years from the application date. This app holds it until ${from}, 2 years after the latest date saved for this log.`;
+  return `Can't delete yet. Texas requires keeping this record for 2 years from the application date. This app holds it until ${from}.`;
 }
 
 /** Wipe-confirm warning when real logs under 2 years old exist; "" when none. */

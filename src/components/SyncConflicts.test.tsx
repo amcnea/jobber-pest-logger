@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useLayoutEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LogOutboxEntry } from "../shop/logOutbox";
 import type { RemoteShopStore } from "../shop/RemoteShopStore";
@@ -187,6 +188,15 @@ describe("SyncConflicts — re-upload note is cleared (#183)", () => {
   };
 
   /** Re-upload L1 while L2 is also listed; returns helpers to re-render. */
+  /** Records the status text at every commit, before passive effects run (#196). */
+  const committed: (string | null)[] = [];
+  function StatusProbe() {
+    useLayoutEffect(() => {
+      committed.push(document.querySelector('[role="status"]')?.textContent ?? null);
+    });
+    return null;
+  }
+
   async function reuploadL1(initial: LogOutboxEntry[] = [entry]) {
     conflicts = initial;
     keepDeviceCopy.mockImplementationOnce(async () => {
@@ -195,7 +205,12 @@ describe("SyncConflicts — re-upload note is cleared (#183)", () => {
     });
     const onResolved = vi.fn();
     const props = { shopId: "SHOP1", remote, people: PEOPLE, onResolved };
-    const utils = render(<SyncConflicts {...props} refreshKey={0} noteResetKey={0} />);
+    const utils = render(
+      <>
+        <SyncConflicts {...props} refreshKey={0} noteResetKey={0} />
+        <StatusProbe />
+      </>,
+    );
     const row = screen.getByLabelText("Conflict L1");
     await userEvent.click(within(row).getByRole("button", { name: "Keep this device's copy" }));
     await userEvent.selectOptions(within(row).getByLabelText("Changed by"), "p-ana");
@@ -203,7 +218,10 @@ describe("SyncConflicts — re-upload note is cleared (#183)", () => {
     await userEvent.click(within(row).getByRole("button", { name: "Save this device's copy" }));
     const rerender = (refreshKey: number, noteResetKey = 0, shopId = "SHOP1") =>
       utils.rerender(
-        <SyncConflicts {...props} shopId={shopId} refreshKey={refreshKey} noteResetKey={noteResetKey} />,
+        <>
+          <SyncConflicts {...props} shopId={shopId} refreshKey={refreshKey} noteResetKey={noteResetKey} />
+          <StatusProbe />
+        </>,
       );
     rerender(1);
     return { ...utils, rerender };
@@ -237,6 +255,18 @@ describe("SyncConflicts — re-upload note is cleared (#183)", () => {
     expect(screen.queryByRole("status")).toBeNull();
     // Back to the first shop: the old note doesn't come back.
     rerender(1, 0, "SHOP1");
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("hides another shop's note even on the first render after a shop change (#196)", async () => {
+    const { rerender } = await reuploadL1();
+    expect(screen.getByRole("status")).toBeInTheDocument();
+    committed.length = 0;
+    conflicts = [];
+    rerender(1, 0, "SHOP2");
+    // The very first commit for SHOP2 already has no note.
+    expect(committed[0]).toBeNull();
+    expect(committed.every((t) => t === null)).toBe(true);
     expect(screen.queryByRole("status")).toBeNull();
   });
 

@@ -882,3 +882,14 @@ describe("NewLogForm: submit", () => {
     expect(screen.getAllByText("Product name required")).toHaveLength(1);
   });
 });
+
+describe("NewLogForm — record keeping hint (#195)", () => {
+  it("shows the Lawgical text", () => {
+    setup();
+    const hint = screen.getByText(/^Texas requires keeping this record at your business for 2 years\./);
+    expect(hint.textContent).toBe(
+      "Texas requires keeping this record at your business for 2 years. This app blocks deleting real logs for that long, but download the backup and exports for your premises copy.",
+    );
+    expect(hint.textContent ?? "").not.toMatch(/tamper-proof|immutable|audit-proof|legally valid|compliant|noncompliant|violation|invalid|certified/i);
+  });
+});

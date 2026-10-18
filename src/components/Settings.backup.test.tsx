@@ -506,9 +506,21 @@ describe("Settings — premises keep-alive note (#190)", () => {
     const note = container.querySelector(".premises-keepalive");
     const text = (note?.textContent ?? "").replace(/\s+/g, " ");
     expect(text).toContain(
-      "This app blocks deleting a log until 2 years after the latest date saved for it. It isn't your premises copy: keep the records at your business for 2 years by downloading the backup JSON and exports regularly. Wipe ALL data still removes everything on this device.",
+      "This app blocks deleting a log until its hold date, at least 2 years after the latest date saved for it. It isn't your premises copy: keep the records at your business for 2 years by downloading the backup JSON and exports regularly. Wipe ALL data still removes everything on this device.",
     );
     expect(text).not.toContain("retention engine");
+    expect(text).not.toMatch(/tamper-proof|immutable|audit-proof|legally valid|compliant|noncompliant|violation|invalid|certified/i);
+  });
+});
+
+describe("Settings — demo reset notice (#198)", () => {
+  it("ends with the hold sentence; the rest is unchanged", () => {
+    setup();
+    const heading = screen.getByRole("heading", { name: "Demo / reset" });
+    const text = (heading.nextElementSibling?.textContent ?? "").replace(/\s+/g, " ").trim();
+    expect(text).toBe(
+      "Soft demo reset clears example catalog seeds and any logs that only used them. Real products, people, settings, and backups stay. A full wipe needs an explicit confirm — it removes real shop data on this device and re-seeds examples. Any log still under its 2-year hold stays until its hold date.",
+    );
     expect(text).not.toMatch(/tamper-proof|immutable|audit-proof|legally valid|compliant|noncompliant|violation|invalid|certified/i);
   });
 });
