@@ -39,6 +39,7 @@ import {
 import {
   buildCsvImportPreview,
   csvCandidateToShopProduct,
+  findShopDuplicate,
   type CsvImportPreview,
 } from "../starterCatalog/csvImportPreview";
 import type { ShopProduct } from "../types";
@@ -515,7 +516,22 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
     const nextPending = [...pendingLabelIdsRef.current];
     let addedCount = 0;
     let failure: string | null = null;
+    /** Rows saved in this run, so later rows in the run are checked against them too. */
+    const addedProducts: ShopProduct[] = [];
+    /** #178: rows that became duplicates after the preview was built. */
+    const skipped = new Map<number, string>();
     for (const { row, index } of picked) {
+      // #178: the preview's flags can be stale (the shop list may have changed while it
+      // was open). Re-check rows the preview did not flag against the current shop list
+      // plus rows already added in this run. A row the office ticked despite a preview
+      // flag is left as their choice.
+      if (row.duplicate === null) {
+        const dup = findShopDuplicate(row.candidate, [...addedProducts, ...catalog]);
+        if (dup) {
+          skipped.set(index, dup);
+          continue;
+        }
+      }
       const product = csvCandidateToShopProduct(row.candidate, newId());
       // Persist the label-confirm guard before the catalog row (same order as starter add).
       if (!addPendingLabelConfirm(product.id)) {
@@ -529,6 +545,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
         break;
       }
       if (!nextPending.includes(product.id)) nextPending.push(product.id);
+      addedProducts.push(product);
       added[index] = true;
       addedCount += 1;
     }
@@ -539,12 +556,35 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
       // Show the new archived rows even when the Active filter is on.
       setListFilter("all");
     }
-    if (failure) {
+    const skippedNote =
+      skipped.size === 0
+        ? ""
+        : skipped.size === 1
+          ? " 1 row skipped as a possible duplicate."
+          : ` ${skipped.size} rows skipped as possible duplicates.`;
+    if (failure || skipped.size > 0) {
+      // Keep the preview open so the office can see what was added and why rows were skipped.
       setCsvAdded(added);
-      setCsvInclude((inc) => inc.map((v, i) => v && !added[i]));
-      setStarterAnnouncement(
-        addedCount > 0 ? `${failure} ${plural(addedCount, "row was", "rows were")} added before it.` : failure,
-      );
+      setCsvInclude((inc) => inc.map((v, i) => v && !added[i] && !skipped.has(i)));
+      if (skipped.size > 0) {
+        setCsvPreview((prev) =>
+          prev
+            ? {
+                ...prev,
+                rows: prev.rows.map((r, i) => (skipped.has(i) ? { ...r, duplicate: skipped.get(i)! } : r)),
+              }
+            : prev,
+        );
+      }
+      const head = failure
+        ? addedCount > 0
+          ? `${failure} ${plural(addedCount, "row was", "rows were")} added before it.`
+          : failure
+        : addedCount > 0
+          ? `Added ${addedCount} to the shop catalog as archived. Confirm each label before techs can pick it.`
+          : "Nothing was added.";
+      setStarterAnnouncement(`${head}${skippedNote}`);
+      csvPreviewHeadingRef.current?.focus();
       return;
     }
     const total = added.filter(Boolean).length;
