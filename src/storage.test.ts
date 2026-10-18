@@ -155,6 +155,9 @@ function exampleLine(overrides: Partial<AppliedProduct> = {}): AppliedProduct {
   });
 }
 
+/** Applied more than 2 years ago: outside the 2-year delete guard. */
+const PAST = { dateUsed: "2020-01-01", createdAt: "2020-01-01T18:00:00.000Z" } as const;
+
 function makeLog(id: string, overrides: Partial<ApplicationLog> = {}): ApplicationLog {
   return {
     id,
@@ -440,14 +443,14 @@ describe("upsertLog / deleteLog", () => {
   });
 
   it("duplicate stored ids are all replaced by upsert and all removed by delete", () => {
-    put(LOGS_KEY, [makeLog("A"), makeLog("A", { customerBillingName: "Dup" })]);
-    const res = upsertLog(makeLog("A", { customerBillingName: "Edited" }));
+    put(LOGS_KEY, [makeLog("A", PAST), makeLog("A", { ...PAST, customerBillingName: "Dup" })]);
+    const res = upsertLog(makeLog("A", { ...PAST, customerBillingName: "Edited" }));
     expect(res.logs.map((l) => l.customerBillingName)).toEqual(["Edited", "Edited"]);
     expect(deleteLog("A").logs).toEqual([]);
   });
 
   it("deleteLog removes by id and persists", () => {
-    saveLogs([makeLog("A"), makeLog("B"), makeLog("C")]);
+    saveLogs([makeLog("A"), makeLog("B", PAST), makeLog("C")]);
     const res = deleteLog("B");
     expect(res).toEqual({ logs: [makeLog("A"), makeLog("C")], saved: true });
     expect(ids(loadLogs())).toEqual(["A", "C"]);
@@ -1570,7 +1573,7 @@ describe("applyBackup", () => {
   }
 
   it("replaces all four sections", () => {
-    saveLogs([makeLog("OLD")]);
+    saveLogs([makeLog("OLD", PAST)]);
     saveCatalog([shopProduct({ id: "old-prod" })]);
     savePeople([person({ id: "old-p" })]);
     expect(applyBackup(backup()).ok).toBe(true);
@@ -1604,7 +1607,7 @@ describe("applyBackup", () => {
   it("rolls back quarantine when a main-section write fails", () => {
     const prior = { id: "already-quarantined-log" };
     put(LOGS_QUARANTINE_KEY, [prior]);
-    saveLogs([makeLog("OLD")]);
+    saveLogs([makeLog("OLD", PAST)]);
     const before = new Map(storage.map);
     storage.failOnceKeys.add(SETTINGS_KEY);
     expect(
@@ -1619,7 +1622,7 @@ describe("applyBackup", () => {
   });
 
   it("rolls back main sections when a quarantine write fails", () => {
-    saveLogs([makeLog("OLD")]);
+    saveLogs([makeLog("OLD", PAST)]);
     put(LOGS_QUARANTINE_KEY, [{ id: "prior-q" }]);
     const before = new Map(storage.map);
     storage.failOnceKeys.add(LOGS_QUARANTINE_KEY);
@@ -1636,7 +1639,7 @@ describe("applyBackup", () => {
   });
 
   it("still restores when a quota failure would have blocked the quarantine append", () => {
-    put(LOGS_KEY, [makeLog("OLD"), { id: "legacy-without-termite" }]);
+    put(LOGS_KEY, [makeLog("OLD", PAST), { id: "legacy-without-termite" }]);
     put(CATALOG_KEY, [shopProduct({ id: "old-prod" }), { id: "bad-catalog" }]);
     put(PEOPLE_KEY, [person({ id: "old-p" }), { id: "bad-person" }]);
     const origSet = storage.setItem.bind(storage);
@@ -1700,7 +1703,7 @@ describe("applyBackup", () => {
 
   for (const key of [LOGS_KEY, CATALOG_KEY, PEOPLE_KEY, SETTINGS_KEY]) {
     it(`rolls back all sections when writing ${key.split(":")[1]} fails`, () => {
-      saveLogs([makeLog("OLD")]);
+      saveLogs([makeLog("OLD", PAST)]);
       saveCatalog([shopProduct({ id: "old-prod" })]);
       const before = new Map(storage.map);
       storage.failOnceKeys.add(key);
@@ -1710,13 +1713,13 @@ describe("applyBackup", () => {
   }
 
   it("returns false even when the rollback also fails", () => {
-    saveLogs([makeLog("OLD")]);
+    saveLogs([makeLog("OLD", PAST)]);
     storage.failSet = true;
     expect(applyBackup(backup()).ok).toBe(false);
   });
 
   it("restores the other snapshot keys when one rollback write keeps failing", () => {
-    saveLogs([makeLog("OLD")]);
+    saveLogs([makeLog("OLD", PAST)]);
     saveCatalog([shopProduct({ id: "old-prod" })]);
     savePeople([person({ id: "old-p" })]);
     saveSettings(SETTINGS);
@@ -1729,7 +1732,7 @@ describe("applyBackup", () => {
       }),
     );
     expect(result.ok).toBe(false);
-    expect(stored(LOGS_KEY)).toEqual([makeLog("OLD")]);
+    expect(stored(LOGS_KEY)).toEqual([makeLog("OLD", PAST)]);
     expect(stored(CATALOG_KEY)).toEqual([shopProduct({ id: "old-prod" })]);
     expect(stored(PEOPLE_KEY)).toEqual([person({ id: "old-p" })]);
     expect(loadLogsQuarantine()).toEqual([prior]);
@@ -1744,7 +1747,7 @@ describe("applyBackup", () => {
   });
 
   it("restores a smaller prior log in place after a larger neighbor is written back", () => {
-    saveLogs([makeLog("OLD")]);
+    saveLogs([makeLog("OLD", PAST)]);
     saveCatalog([shopProduct({ id: "old-prod" })]);
     saveSettings(SETTINGS);
     put(LOGS_QUARANTINE_KEY, [{ id: "prior-q" }]);
@@ -1771,7 +1774,7 @@ describe("applyBackup", () => {
       }),
     );
     expect(result.ok).toBe(false);
-    expect(stored(LOGS_KEY)).toEqual([makeLog("OLD")]);
+    expect(stored(LOGS_KEY)).toEqual([makeLog("OLD", PAST)]);
     expect(stored(CATALOG_KEY)).toEqual([shopProduct({ id: "old-prod" })]);
     expect(loadLogsQuarantine()).toEqual([{ id: "prior-q" }]);
     expect(stored(SETTINGS_KEY)).toEqual(SETTINGS);
@@ -1832,7 +1835,7 @@ describe("applyBackup", () => {
   });
 
   it("leaves a large logs key as written when the prior cannot be stored", () => {
-    saveLogs([makeLog("OLD")]);
+    saveLogs([makeLog("OLD", PAST)]);
     saveSettings(SETTINGS);
     const priorRaw = storage.getItem(LOGS_KEY)!;
     const incomingLog = makeLog("NEW", { poleLocation: "x".repeat(4000) });

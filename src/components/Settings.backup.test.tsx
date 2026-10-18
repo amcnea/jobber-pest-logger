@@ -259,7 +259,7 @@ describe("Settings backup: restore from file", () => {
     await restoreText(JSON.stringify(backup));
     await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
     expect(confirm.mock.calls[0]![0]).toBe(
-      "Restoring replaces this device's logs with the backup, except logs that have change history or a review the backup doesn't. Those stay on this device.",
+      "Restoring replaces this device's logs with the backup, except logs that have change history or a review the backup doesn't, and logs less than 2 years old that the backup doesn't have. Those stay on this device.",
     );
     expect(onRestored).not.toHaveBeenCalled();
     expect(storage.loadLogs()).toHaveLength(2);
@@ -473,6 +473,24 @@ describe("Settings wipe confirm and set-aside copies", () => {
       `${WIPE} This also deletes 3 set-aside copies from sync conflicts. Download the backup JSON first if you need them.`,
     );
     expect(text).not.toMatch(BANNED);
+  });
+
+  it("logs under 2 years: warning with the count, before the set-aside sentence", async () => {
+    seedDevice(); // LOG_A / LOG_B, applied 2026-10-01 / 02 (NOW is 2026-10-17)
+    expect(storage.saveLogs([LOG_A, LOG_B, makeLog({ id: "old", dateUsed: "2020-01-01", createdAt: "2020-01-01T18:00:00.000Z" })])).toBe(true);
+    addAside(1);
+    const text = await firstConfirmText();
+    expect(text).toBe(
+      `${WIPE} 2 logs are less than 2 years old. Texas requires the shop to keep these records for 2 years. Download the backup JSON or export first. This also deletes 1 set-aside copy from sync conflicts. Download the backup JSON first if you need it.`,
+    );
+    expect(text).not.toMatch(BANNED);
+  });
+
+  it("one log under 2 years: singular warning", async () => {
+    expect(storage.saveLogs([LOG_A])).toBe(true);
+    expect(await firstConfirmText()).toBe(
+      `${WIPE} 1 log is less than 2 years old. Texas requires the shop to keep this record for 2 years. Download the backup JSON or export first.`,
+    );
   });
 
   it("wording helpers avoid banned terms", async () => {

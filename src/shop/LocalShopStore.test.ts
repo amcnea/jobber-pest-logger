@@ -304,7 +304,7 @@ describe("LocalShopStore.putShop", () => {
   for (const key of [LOGS_KEY, CATALOG_KEY, PEOPLE_KEY, SETTINGS_KEY]) {
     it(`rolls back every section to prior values when saving ${key.split(":")[1]} fails`, async () => {
       const prior: Record<string, string> = {
-        [LOGS_KEY]: JSON.stringify([makeLog("OLD")]),
+        [LOGS_KEY]: JSON.stringify([{ ...makeLog("OLD"), dateUsed: "2020-01-01", createdAt: "2020-01-01T18:00:00.000Z" }]),
         [CATALOG_KEY]: JSON.stringify([]),
         [PEOPLE_KEY]: JSON.stringify([]),
         [SETTINGS_KEY]: JSON.stringify(emptySettings()),
@@ -336,14 +336,14 @@ describe("LocalShopStore.putShop", () => {
   });
 
   it("rolls back all sections when only the updatedAt stamp write fails", async () => {
-    storage.setItem(LOGS_KEY, JSON.stringify([makeLog("OLD")]));
+    storage.setItem(LOGS_KEY, JSON.stringify([{ ...makeLog("OLD"), dateUsed: "2020-01-01", createdAt: "2020-01-01T18:00:00.000Z" }]));
     storage.failSetKeys.add(UPDATED_AT_KEY);
     const res = await new LocalShopStore().putShop(makeDoc());
     expect(res).toEqual({
       ok: false,
       error: "Could not stamp local shop updatedAt on this device (storage full or blocked).",
     });
-    expect(storage.getItem(LOGS_KEY)).toBe(JSON.stringify([makeLog("OLD")]));
+    expect(storage.getItem(LOGS_KEY)).toBe(JSON.stringify([{ ...makeLog("OLD"), dateUsed: "2020-01-01", createdAt: "2020-01-01T18:00:00.000Z" }]));
     expect(storage.getItem(CATALOG_KEY)).toBeNull();
     expect(storage.getItem(PEOPLE_KEY)).toBeNull();
     expect(storage.getItem(SETTINGS_KEY)).toBeNull();
@@ -359,7 +359,7 @@ describe("LocalShopStore.putShop", () => {
   });
 
   it("rolls back when a section cannot be serialized", async () => {
-    storage.setItem(LOGS_KEY, JSON.stringify([makeLog("OLD")]));
+    storage.setItem(LOGS_KEY, JSON.stringify([{ ...makeLog("OLD"), dateUsed: "2020-01-01", createdAt: "2020-01-01T18:00:00.000Z" }]));
     // JSON.stringify of a BigInt throws inside the saver's try — the saver catches it and
     // returns false, so this surfaces as the generic save error with a rollback.
     const bad = makeDoc({ settings: { ...SETTINGS, shopName: 1n as unknown as string } });
@@ -368,7 +368,7 @@ describe("LocalShopStore.putShop", () => {
       ok: false,
       error: "Could not save shop data on this device (storage full or blocked).",
     });
-    expect(storage.getItem(LOGS_KEY)).toBe(JSON.stringify([makeLog("OLD")]));
+    expect(storage.getItem(LOGS_KEY)).toBe(JSON.stringify([{ ...makeLog("OLD"), dateUsed: "2020-01-01", createdAt: "2020-01-01T18:00:00.000Z" }]));
     expect(storage.getItem(CATALOG_KEY)).toBeNull();
   });
 });
