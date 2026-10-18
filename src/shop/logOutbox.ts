@@ -10,6 +10,7 @@
 import type { ApplicationLog } from "../types";
 import { mergeLogIntoSet, normalizeLog } from "../storage";
 import type { RemoteShopStore } from "./RemoteShopStore";
+import type { ShopDocument } from "./types";
 import { isSessionAuthenticated, loadShopSession } from "./session";
 
 export const LOG_OUTBOX_KEY = "jobber-pest-logger:log-outbox:v1";
@@ -278,9 +279,33 @@ async function annotateOutboxErrors(
   );
 }
 
+/** Session may expire or switch shops while a remote call awaits. */
+const SESSION_CHANGED_ERROR = "Session expired or shop changed — unlock to sync queued logs.";
+const OUTBOX_CLEAR_FAILED_ERROR = "Synced to shop but could not update the local outbox.";
+
+function isLiveEntry(shopId: string, entryId: string): boolean {
+  return outboxEntriesForShop(shopId).some((e) => e.entryId === entryId);
+}
+
 /**
- * Merge pending outbox logs into remote shop.logs by id (idempotent).
- * One CAS conflict retry. Leaves remaining entries in outbox on failure.
+ * Merge pending outbox logs into remote shop.logs by id (idempotent), ONE LOG PER WRITE.
+ *
+ * Each queued log is its own putShop, so a write only ever changes one log. That keeps
+ * every write far under the Firestore rules' per-request expression limit (#208), so a
+ * large offline backlog drains in many small writes instead of one write the rules
+ * refuse. Entries go oldest-first, so new logs end up newest-first on the remote (same
+ * order as upsertLog / syncLogToRemote). The last committed doc is reused as the base
+ * for the next write (CAS on its updatedAt); a CAS conflict re-reads once, as before.
+ *
+ * A refused entry never blocks the ones behind it:
+ * - remote copy kept (ahead / split / reviewed): annotated REMOTE_COPY_KEPT_ERROR and left
+ *   queued for the conflict screen (#166/#167); the flush moves on.
+ * - a put the shop refuses (e.g. rules) or a second CAS conflict: that entry is
+ *   annotated with the error and left queued; the flush moves on.
+ * Stops (nothing more is put) when the shop can't be read, the session expired or
+ * switched shops, or the local outbox can't be updated after a successful put.
+ * Entries queued during the flush are left for the next one, except that a CAS
+ * conflict re-reads the queue (so a payload queued meanwhile joins this flush).
  */
 export async function flushLogOutbox(
   remote: RemoteShopStore,
@@ -297,118 +322,113 @@ export async function flushLogOutbox(
     return { ok: true, flushed: 0, remaining: 0 };
   }
 
-  const attempt = async (): Promise<{
-    ok: boolean;
-    flushed: number;
-    remaining: number;
-    error?: string;
-    conflict?: boolean;
-  }> => {
-    // Re-read each attempt so a payload queued during the previous await is included.
-    const pending = outboxEntriesForShop(id);
-    if (pending.length === 0) return { ok: true, flushed: 0, remaining: 0 };
+  // Outbox is newest-first; push oldest-first.
+  const work: LogOutboxEntry[] = [...outboxEntriesForShop(id)].reverse();
+  const seen = new Set(work.map((e) => e.entryId));
+  let base: ShopDocument | null = null;
+  let flushed = 0;
+  let refused = 0;
+  let superseded = 0;
+  let putError: string | undefined;
+  let putConflict: boolean | undefined;
 
+  const stop = (error: string) => ({
+    ok: false,
+    flushed,
+    remaining: outboxEntriesForShop(id).length,
+    error,
+  });
+
+  /** Read the shop; on failure annotate every entry still waiting in `work`. */
+  const read = async (from: number): Promise<ShopDocument | { error: string }> => {
     const got = await remote.getShop();
-    if (!got.ok) {
-      await annotateOutboxErrors(
-        id,
-        pending.map((e) => e.log.id),
-        got.error,
-      );
-      return {
-        ok: false,
-        flushed: 0,
-        remaining: pending.length,
-        error: got.error,
-      };
-    }
-
-    // Drop entries superseded while getShop awaited.
-    const currentIds = new Set(outboxEntriesForShop(id).map((e) => e.entryId));
-    const live = pending.filter((e) => currentIds.has(e.entryId));
-    if (live.length === 0) {
-      return { ok: true, flushed: 0, remaining: 0 };
-    }
-
-    let logs = [...got.value.logs];
-    // Outbox is newest-first; merge oldest-first so prepended new logs end up
-    // newest-first on the remote (same order as upsertLog / syncLogToRemote).
-    // A remote copy that is ahead / split / reviewed is kept (mergeLogIntoSet);
-    // that entry stays queued with REMOTE_COPY_KEPT_ERROR instead of overwriting it.
-    const refused: LogOutboxEntry[] = [];
-    const merged: LogOutboxEntry[] = [];
-    for (const entry of [...live].reverse()) {
-      const result = mergeLogIntoSet(logs, entry.log);
-      if (result.kept) refused.push(entry);
-      else merged.push(entry);
-      logs = result.logs;
-    }
-    if (refused.length > 0) {
-      await annotateOutboxErrors(
-        id,
-        refused.map((e) => e.log.id),
-        REMOTE_COPY_KEPT_ERROR,
-      );
-    }
-    if (merged.length === 0) {
-      return {
-        ok: false,
-        flushed: 0,
-        remaining: outboxEntriesForShop(id).length,
-        error: REMOTE_COPY_KEPT_ERROR,
-      };
-    }
-
-    // Session may expire or switch shops while getShop awaited — do not put or clear outbox.
-    const session = loadShopSession();
-    if (!isSessionAuthenticated(session) || session.shopId.trim() !== id) {
-      return {
-        ok: false,
-        flushed: 0,
-        remaining: live.length,
-        error: "Session expired or shop changed — unlock to sync queued logs.",
-      };
-    }
-
-    const put = await remote.putShop({ ...got.value, logs });
-    if (!put.ok) {
-      await annotateOutboxErrors(
-        id,
-        merged.map((e) => e.log.id),
-        put.error,
-      );
-      return {
-        ok: false,
-        flushed: 0,
-        remaining: live.length,
-        error: put.error,
-        conflict: put.conflict,
-      };
-    }
-
-    const cleared = await removeOutboxVersions(
+    if (got.ok) return got.value;
+    await annotateOutboxErrors(
       id,
-      merged.map((e) => e.entryId),
+      work.slice(from).map((e) => e.log.id),
+      got.error,
     );
-    const remaining = outboxEntriesForShop(id).length;
-    if (!cleared) {
-      return {
-        ok: false,
-        flushed: merged.length,
-        remaining,
-        error: "Synced to shop but could not update the local outbox.",
-      };
-    }
-    if (refused.length > 0) {
-      return { ok: false, flushed: merged.length, remaining, error: REMOTE_COPY_KEPT_ERROR };
-    }
-    return { ok: true, flushed: merged.length, remaining };
+    return { error: got.error };
   };
 
-  const first = await attempt();
-  if (first.ok || !first.conflict) return first;
-  // One conflict retry with a fresh read (and fresh pending/queuedAt).
-  return attempt();
+  /** Pull in entries queued since the flush started (used after a CAS conflict). */
+  const addNewlyQueued = () => {
+    for (const e of [...outboxEntriesForShop(id)].reverse()) {
+      if (!seen.has(e.entryId)) {
+        seen.add(e.entryId);
+        work.push(e);
+      }
+    }
+  };
+
+  for (let i = 0; i < work.length; i++) {
+    const entry = work[i];
+    let conflictRetried = false;
+    for (;;) {
+      // Superseded (or removed) while a remote call awaited: the newer version stays queued.
+      if (!isLiveEntry(id, entry.entryId)) {
+        superseded += 1;
+        break;
+      }
+      if (!base) {
+        const doc = await read(i);
+        if ("error" in doc) return stop(doc.error);
+        base = doc;
+        if (!isLiveEntry(id, entry.entryId)) {
+          superseded += 1;
+          break;
+        }
+      }
+
+      const merged = mergeLogIntoSet(base.logs, entry.log);
+      if (merged.kept) {
+        // Remote copy kept: flag it for the conflict screen; don't block the rest.
+        await annotateOutboxErrors(id, [entry.log.id], REMOTE_COPY_KEPT_ERROR);
+        refused += 1;
+        break;
+      }
+
+      const session = loadShopSession();
+      if (!isSessionAuthenticated(session) || session.shopId.trim() !== id) {
+        return stop(SESSION_CHANGED_ERROR);
+      }
+
+      const nextDoc: ShopDocument = { ...base, logs: merged.logs };
+      const put = await remote.putShop(nextDoc);
+      if (put.ok) {
+        base = { ...nextDoc, updatedAt: put.value.updatedAt };
+        flushed += 1;
+        if (!(await removeOutboxVersions(id, [entry.entryId]))) {
+          return stop(OUTBOX_CLEAR_FAILED_ERROR);
+        }
+        break;
+      }
+      if (put.conflict && !conflictRetried) {
+        // One conflict retry with a fresh read (and anything queued meanwhile).
+        conflictRetried = true;
+        base = null;
+        addNewlyQueued();
+        continue;
+      }
+      // Refused or still conflicting: keep this entry queued with its error; move on.
+      await annotateOutboxErrors(id, [entry.log.id], put.error);
+      putError = put.error;
+      putConflict = put.conflict;
+      if (put.conflict) base = null;
+      break;
+    }
+  }
+
+  // Every entry was superseded or cleared elsewhere: nothing of ours is left to report.
+  if (superseded === work.length) return { ok: true, flushed: 0, remaining: 0 };
+  const remaining = outboxEntriesForShop(id).length;
+  if (putError !== undefined) {
+    return { ok: false, flushed, remaining, error: putError, conflict: putConflict };
+  }
+  if (refused > 0) {
+    return { ok: false, flushed, remaining, error: REMOTE_COPY_KEPT_ERROR };
+  }
+  return { ok: true, flushed, remaining };
 }
 
 /**
