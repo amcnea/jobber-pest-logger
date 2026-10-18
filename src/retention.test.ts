@@ -126,7 +126,7 @@ describe("isWithinRetention: age boundary (device-local dates)", () => {
 describe("strings", () => {
   it("delete reason names the first deletable date", () => {
     expect(deleteBlockedReason(makeLog({ dateUsed: "2026-09-20", createdAt: "2026-09-20T12:00:00" }), at(2026, 10, 17))).toBe(
-      "Can't delete yet. Texas requires keeping this record for 2 years from the application date. This app holds it until 2028-09-20.",
+      "Can't delete yet. Texas requires keeping this record for 2 years from the application date. This app holds it until 2028-09-20, at least 2 years after the latest date saved for it.",
     );
     expect(deleteBlockedReason(makeLog({ dateUsed: "2020-09-20", createdAt: "2020-09-20T12:00:00" }), at(2026, 10, 17))).toBeNull();
   });
@@ -189,7 +189,7 @@ describe("storage: no path deletes a log under 2 years", () => {
     expect(saveLogs([recent, old])).toBe(true);
     const res = deleteLog("R");
     expect(res.saved).toBe(false);
-    expect(res.blocked).toMatch(/^Can't delete yet\. .* This app holds it until 2028-09-20\.$/);
+    expect(res.blocked).toMatch(/^Can't delete yet\. .* This app holds it until 2028-09-20, at least 2 years after the latest date saved for it\.$/);
     expect(loadLogs().map((l) => l.id)).toEqual(["R", "O"]);
     expect(deleteLog("O")).toMatchObject({ saved: true });
     expect(loadLogs().map((l) => l.id)).toEqual(["R"]);
@@ -432,7 +432,7 @@ describe("clearExampleDemoData skips example logs still under the hold (#189)", 
   it("the new delete-blocked text avoids banned terms (#185)", () => {
     const log = { ...makeLog({ id: "H", dateUsed: "2020-01-01", createdAt: "2020-01-01T12:00:00" }), retainUntil: "2028-10-01" };
     expect(deleteBlockedReason(log)).toBe(
-      "Can't delete yet. Texas requires keeping this record for 2 years from the application date. This app holds it until 2028-10-01.",
+      "Can't delete yet. Texas requires keeping this record for 2 years from the application date. This app holds it until 2028-10-01, at least 2 years after the latest date saved for it.",
     );
     expect(deleteBlockedReason(log)).not.toMatch(BANNED);
   });

@@ -112,7 +112,7 @@ export function deleteBlockedReason(log: ApplicationLog, now: Date = new Date())
   if (!from) {
     return "Can't delete. This log has no readable application date, and Texas requires keeping records for 2 years from that date.";
   }
-  return `Can't delete yet. Texas requires keeping this record for 2 years from the application date. This app holds it until ${from}.`;
+  return `Can't delete yet. Texas requires keeping this record for 2 years from the application date. This app holds it until ${from}, at least 2 years after the latest date saved for it.`;
 }
 
 /** Wipe-confirm warning when real logs under 2 years old exist; "" when none. */
