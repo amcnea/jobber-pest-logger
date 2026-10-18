@@ -506,7 +506,7 @@ describe("Settings — premises keep-alive note (#190)", () => {
     const note = container.querySelector(".premises-keepalive");
     const text = (note?.textContent ?? "").replace(/\s+/g, " ");
     expect(text).toContain(
-      "This app blocks deleting a log until 2 years after its application date. It isn't your premises copy: keep the records at your business for 2 years by downloading the backup JSON and exports regularly. Wipe ALL data still removes everything on this device.",
+      "This app blocks deleting a log until 2 years after the latest date saved for it. It isn't your premises copy: keep the records at your business for 2 years by downloading the backup JSON and exports regularly. Wipe ALL data still removes everything on this device.",
     );
     expect(text).not.toContain("retention engine");
     expect(text).not.toMatch(/tamper-proof|immutable|audit-proof|legally valid|compliant|noncompliant|violation|invalid|certified/i);
