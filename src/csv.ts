@@ -4,6 +4,7 @@ import {
   shopSlugForFilename,
   type ExportProvenance,
 } from "./exportProvenance";
+import { changeHistoryCell, correctedLabel, CORRECTION_CSV_COLUMNS, isCorrectedLog } from "./correctionExport";
 import type { ApplicationLog } from "./types";
 
 /** Texas TDA CSV columns matching 4 TAC § 7.144(a)/(b). Optional Jobber link is last and labeled not-TDA. */
@@ -87,7 +88,13 @@ function yesBlank(flag: boolean): string {
 }
 
 export function logsToCsv(logs: ApplicationLog[]): string {
-  const header = TDA_CSV_COLUMNS.map(csvEscape).join(",");
+  // Change-history columns are appended only when a corrected log is in the export,
+  // so exports with no corrections are byte-identical to the pre-correction format.
+  const withCorrections = logs.some(isCorrectedLog);
+  const columns: readonly string[] = withCorrections
+    ? [...TDA_CSV_COLUMNS, ...CORRECTION_CSV_COLUMNS]
+    : TDA_CSV_COLUMNS;
+  const header = columns.map(csvEscape).join(",");
   const rows = logs.map((log) => {
     const pesticides = log.products.filter((p) => p.method !== "device");
     const devices = log.products.filter((p) => p.method === "device");
@@ -153,14 +160,16 @@ export function logsToCsv(logs: ApplicationLog[]): string {
       log.jobberJobNumber,
       log.jobberAddress,
     ];
+    if (withCorrections) cells.push(correctedLabel(log), changeHistoryCell(log));
     return cells.map(csvEscape).join(",");
   });
   return [header, ...rows].join("\r\n") + "\r\n";
 }
 
 /**
- * CSV provenance goes in the filename only — the row format stays exactly the
- * TDA_CSV_COLUMNS header + one row per log (no preamble lines, no extra columns).
+ * CSV provenance goes in the filename only — the row format stays the
+ * TDA_CSV_COLUMNS header + one row per log (no preamble lines). The only extra
+ * columns are CORRECTION_CSV_COLUMNS, and only when a corrected log is included.
  */
 export function downloadCsv(
   logs: ApplicationLog[],

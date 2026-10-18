@@ -7,6 +7,7 @@ import {
   provenanceSummary,
   type ExportProvenance,
 } from "./exportProvenance";
+import { changeHistoryPdfLines, correctedLabel } from "./correctionExport";
 import type { ApplicationLog } from "./types";
 
 function person(log: ApplicationLog, role: ApplicationLog["personnel"][number]["role"]) {
@@ -211,7 +212,9 @@ export function downloadPdf(
       ? "  [includes example catalog items]"
       : "";
     const dateUsed = log.dateUsed.trim() || "(no date)";
-    const title = `Log ${i + 1} — ${dateUsed}${exampleMark}`;
+    // Empty for uncorrected logs, so their title is unchanged.
+    const correctedMark = correctedLabel(log) ? `  [${correctedLabel(log)}]` : "";
+    const title = `Log ${i + 1} — ${dateUsed}${exampleMark}${correctedMark}`;
     ensureSpace(wrappedHeight(doc, title, MAX_WIDTH, 5.5) + 4);
     y = wrap(doc, title, MARGIN, y, MAX_WIDTH, 5.5);
     y += 3;
@@ -260,6 +263,9 @@ export function downloadPdf(
         );
       }
     }
+
+    // Change history from the stored model only; adds nothing for uncorrected logs.
+    lines.push(...changeHistoryPdfLines(log));
 
     for (const line of lines) {
       const h = wrappedHeight(doc, line, MAX_WIDTH);
