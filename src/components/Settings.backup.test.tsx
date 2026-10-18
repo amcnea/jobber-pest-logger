@@ -461,7 +461,7 @@ describe("Settings wipe confirm and set-aside copies", () => {
     addAside(1);
     const text = await firstConfirmText();
     expect(text).toBe(
-      `${WIPE} This also deletes 1 set-aside copy from sync conflicts. Download the backup JSON first if you need it.`,
+      `${WIPE} This also deletes 1 set-aside copy of a log. Download the backup JSON first if you need it.`,
     );
     expect(text).not.toMatch(BANNED);
   });
@@ -470,7 +470,7 @@ describe("Settings wipe confirm and set-aside copies", () => {
     addAside(3);
     const text = await firstConfirmText();
     expect(text).toBe(
-      `${WIPE} This also deletes 3 set-aside copies from sync conflicts. Download the backup JSON first if you need them.`,
+      `${WIPE} This also deletes 3 set-aside copies of logs. Download the backup JSON first if you need them.`,
     );
     expect(text).not.toMatch(BANNED);
   });
@@ -481,7 +481,7 @@ describe("Settings wipe confirm and set-aside copies", () => {
     addAside(1);
     const text = await firstConfirmText();
     expect(text).toBe(
-      `${WIPE} 2 logs are less than 2 years old. Texas requires the shop to keep these records for 2 years. Download the backup JSON or export first. This also deletes 1 set-aside copy from sync conflicts. Download the backup JSON first if you need it.`,
+      `${WIPE} 2 logs are less than 2 years old. Texas requires the shop to keep these records for 2 years. Download the backup JSON or export first. This also deletes 1 set-aside copy of a log. Download the backup JSON first if you need it.`,
     );
     expect(text).not.toMatch(BANNED);
   });
