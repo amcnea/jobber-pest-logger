@@ -98,6 +98,7 @@ export {
   removeOutboxVersions,
   syncLogToRemote,
   type LogOutboxEntry,
+  REMOTE_COPY_KEPT_ERROR,
 } from "./logOutbox";
 
 export {

@@ -184,6 +184,9 @@ function makeLog(id: string, overrides: Partial<ApplicationLog> = {}): Applicati
       startTime: "",
       stopTime: "",
     },
+    // Normalized shape: normalizeLog fills the correction-history defaults.
+    revision: 0,
+    history: [],
     ...overrides,
   };
 }

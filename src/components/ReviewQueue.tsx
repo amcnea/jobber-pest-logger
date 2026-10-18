@@ -1,6 +1,9 @@
 import { useMemo } from "react";
-import { buildReviewQueue } from "../reviewQueue";
+import { buildReviewQueue, isLogReviewed } from "../reviewQueue";
 import type { ApplicationLog, ShopProduct } from "../types";
+import { useNow } from "../useNow";
+
+export const REVIEWED_LOCK_NOTE = "Reviewed logs can't be edited in place; original values kept.";
 
 interface Props {
   logs: ApplicationLog[];
@@ -8,14 +11,15 @@ interface Props {
   /** Office role only; App also hides the tab and screen for tech sessions. */
   canReview: boolean;
   onEdit: (log: ApplicationLog) => void;
-  /** Injected for tests; defaults to the device clock. */
+  /** Pins the clock (tests). Omit to use the device clock, refreshed each minute / on focus. */
   now?: Date;
 }
 
 export function ReviewQueue({ logs, catalog, canReview, onEdit, now }: Props) {
+  const clock = useNow(now);
   const entries = useMemo(
-    () => (canReview ? buildReviewQueue(logs, catalog, now ?? new Date()) : []),
-    [canReview, logs, catalog, now],
+    () => (canReview ? buildReviewQueue(logs, catalog, clock) : []),
+    [canReview, logs, catalog, clock],
   );
 
   if (!canReview) return null;
@@ -32,21 +36,27 @@ export function ReviewQueue({ logs, catalog, canReview, onEdit, now }: Props) {
         <ul className="review-queue">
           {entries.map(({ log, flags }) => {
             const applicator = log.personnel.find((p) => p.role === "applying")?.name.trim();
+            const reviewed = isLogReviewed(log);
             return (
               <li className="card" key={log.id} aria-label={`Review ${log.id}`}>
                 <strong>
                   {log.dateUsed.trim() || "(no date)"} ·{" "}
                   {log.serviceAddress.trim() || "(no service address)"}
                 </strong>
+                {reviewed && <span className="chip"> Reviewed</span>}
                 <p className="log-meta">Applicator: {applicator || "(none)"}</p>
                 <ul className="warn-list">
                   {flags.map((f) => (
                     <li key={f.field}>{f.text}</li>
                   ))}
                 </ul>
-                <button type="button" className="btn btn-secondary" onClick={() => onEdit(log)}>
-                  Edit
-                </button>
+                {reviewed ? (
+                  <p className="hint">{REVIEWED_LOCK_NOTE}</p>
+                ) : (
+                  <button type="button" className="btn btn-secondary" onClick={() => onEdit(log)}>
+                    Edit
+                  </button>
+                )}
               </li>
             );
           })}

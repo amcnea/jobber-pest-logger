@@ -1,6 +1,18 @@
 import { EXAMPLE_SEEDS, inferIsExample, isExampleShopProduct, logHasExampleProducts } from "./catalog";
+import { localIsoWithOffset } from "./dates";
 import { newId } from "./ids";
-import type { ApplicationLog, AppliedProduct, Person, PersonnelRole, ShopProduct, ShopSettings } from "./types";
+import { isLogReviewed, reviewFlagsForLog } from "./reviewQueue";
+import type {
+  ApplicationLog,
+  AppliedProduct,
+  CorrectionEntry,
+  FieldChange,
+  LogSnapshot,
+  Person,
+  PersonnelRole,
+  ShopProduct,
+  ShopSettings,
+} from "./types";
 
 const LOGS_KEY = "jobber-pest-logger:logs:v1";
 const CATALOG_KEY = "jobber-pest-logger:catalog:v1";
@@ -235,12 +247,55 @@ function isLogShape(value: unknown): value is Record<string, unknown> {
   );
 }
 
-export function normalizeLog(value: unknown): ApplicationLog | null {
+function isNonBlankString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isTimestamp(value: unknown): value is string {
+  return isNonBlankString(value) && !Number.isNaN(Date.parse(value.trim()));
+}
+
+/** Recursively freeze a plain JSON value. Returns the same (now frozen) value. */
+function deepFreeze<T>(value: T): T {
+  if (typeof value === "object" && value !== null && !Object.isFrozen(value)) {
+    for (const key of Object.keys(value)) {
+      deepFreeze((value as Record<string, unknown>)[key]);
+    }
+    Object.freeze(value);
+  }
+  return value;
+}
+
+/** Deep copy of a JSON-safe value (logs are plain strings/booleans/numbers/arrays). */
+function jsonClone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/**
+ * Normalize every log field except `history`. Review fields: both present (non-blank,
+ * parseable timestamp) or both absent — a half-set pair is rejected (fail closed, raw row
+ * goes to quarantine). Missing revision → `defaultRevision`.
+ */
+function normalizeLogBase(value: unknown, defaultRevision: number): LogSnapshot | null {
   if (!isLogShape(value)) return null;
   const rawProducts = value.products as unknown[];
   const products = rawProducts.map(normalizeProduct).filter((p): p is AppliedProduct => p !== null);
   if (products.length !== rawProducts.length) return null;
-  return {
+
+  let revision = defaultRevision;
+  if (value.revision !== undefined) {
+    if (typeof value.revision !== "number" || !Number.isInteger(value.revision) || value.revision < 0) {
+      return null;
+    }
+    revision = value.revision;
+  }
+
+  const hasAt = value.reviewedAt !== undefined && value.reviewedAt !== null;
+  const hasBy = value.reviewedBy !== undefined && value.reviewedBy !== null;
+  if (hasAt !== hasBy) return null;
+  if (hasAt && (!isTimestamp(value.reviewedAt) || !isNonBlankString(value.reviewedBy))) return null;
+
+  const log: LogSnapshot = {
     id: value.id as string,
     createdAt: value.createdAt as string,
     sampleData: products.some((p) => p.isExample),
@@ -258,7 +313,72 @@ export function normalizeLog(value: unknown): ApplicationLog | null {
     shopTpclLetter: value.shopTpclLetter as string,
     isTermite: value.isTermite as boolean,
     termite: value.termite as ApplicationLog["termite"],
+    revision,
   };
+  if (hasAt) {
+    log.reviewedAt = (value.reviewedAt as string).trim();
+    log.reviewedBy = (value.reviewedBy as string).trim();
+  }
+  return log;
+}
+
+function isChangeValue(value: unknown): value is FieldChange["old"] {
+  return (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  );
+}
+
+function normalizeFieldChange(value: unknown): FieldChange | null {
+  if (!isRecord(value) || !isNonBlankString(value.field)) return null;
+  const oldValue = value.old === undefined ? null : value.old;
+  const newValue = value.new === undefined ? null : value.new;
+  if (!isChangeValue(oldValue) || !isChangeValue(newValue)) return null;
+  return { field: value.field, old: oldValue, new: newValue };
+}
+
+/** Validate one stored correction entry. Returned entry (and its snapshot) is deep-frozen. */
+function normalizeCorrectionEntry(value: unknown): CorrectionEntry | null {
+  if (!isRecord(value)) return null;
+  if (typeof value.revision !== "number" || !Number.isInteger(value.revision) || value.revision < 1) {
+    return null;
+  }
+  if (!isTimestamp(value.changedAt) || !isNonBlankString(value.changedBy)) return null;
+  if (!isNonBlankString(value.reason)) return null;
+  if (!Array.isArray(value.changes)) return null;
+  const changes = value.changes.map(normalizeFieldChange);
+  if (changes.some((c) => c === null)) return null;
+  const priorSnapshot = normalizeLogBase(value.priorSnapshot, value.revision - 1);
+  if (!priorSnapshot) return null;
+  return deepFreeze({
+    revision: value.revision,
+    priorSnapshot,
+    changedAt: value.changedAt.trim(),
+    changedBy: value.changedBy.trim(),
+    reason: value.reason.trim(),
+    changes: changes as FieldChange[],
+  });
+}
+
+/**
+ * Normalize a stored / pulled / restored log. Legacy logs without the correction model
+ * come back with revision 0 and history []. A malformed history entry rejects the whole
+ * row (quarantined raw, never silently dropped).
+ */
+export function normalizeLog(value: unknown): ApplicationLog | null {
+  if (!isRecord(value)) return null;
+  let history: CorrectionEntry[] = [];
+  if (value.history !== undefined && value.history !== null) {
+    if (!Array.isArray(value.history)) return null;
+    const entries = value.history.map(normalizeCorrectionEntry);
+    if (entries.some((e) => e === null)) return null;
+    history = entries as CorrectionEntry[];
+  }
+  const base = normalizeLogBase(value, history.length);
+  if (!base) return null;
+  return { ...base, history };
 }
 
 export function loadLogs(): ApplicationLog[] {
@@ -306,9 +426,21 @@ export function saveLogs(
   }
 }
 
-export function upsertLog(log: ApplicationLog): { logs: ApplicationLog[]; saved: boolean } {
+/**
+ * Create or replace a log. A stored log that is reviewed is locked: this refuses to
+ * overwrite it in place (`locked: true`, nothing written). Corrections go through
+ * applyCorrection instead.
+ */
+export function upsertLog(log: ApplicationLog): {
+  logs: ApplicationLog[];
+  saved: boolean;
+  locked?: boolean;
+} {
   const logs = loadLogs();
   const idx = logs.findIndex((l) => l.id === log.id);
+  if (idx !== -1 && isLogReviewed(logs[idx])) {
+    return { logs, saved: false, locked: true };
+  }
   const next = idx === -1 ? [log, ...logs] : logs.map((l) => (l.id === log.id ? log : l));
   const saved = saveLogs(next);
   return { logs: saved ? next : logs, saved };
@@ -319,6 +451,181 @@ export function deleteLog(id: string): { logs: ApplicationLog[]; saved: boolean 
   const next = current.filter((l) => l.id !== id);
   const saved = saveLogs(next);
   return { logs: saved ? next : current, saved };
+}
+
+// ---------------------------------------------------------------------------
+// Lock on review + correction history (correction history 2/4)
+// ---------------------------------------------------------------------------
+
+export type LogMutationResult =
+  | { ok: true; log: ApplicationLog; logs: ApplicationLog[] }
+  | { ok: false; error: string; logs: ApplicationLog[] };
+
+function rosterName(people: Person[], personId: string): string | null {
+  const id = String(personId ?? "").trim();
+  if (!id) return null;
+  const person = people.find((p) => p.id === id);
+  const name = person?.name.trim();
+  return name ? name : null;
+}
+
+/**
+ * Office marks a log reviewed (locks it). Only when the log has zero review-queue
+ * flags. `reviewedBy` is a roster person id; the stored value is that person's name.
+ * Role gating is the caller's job (App: office surfaces only).
+ */
+export function markLogReviewed(
+  logId: string,
+  options: { reviewedBy: string; people: Person[]; catalog: ShopProduct[]; now?: Date },
+): LogMutationResult {
+  const logs = loadLogs();
+  const current = logs.find((l) => l.id === logId);
+  if (!current) return { ok: false, error: "Log not found on this device.", logs };
+  if (isLogReviewed(current)) return { ok: false, error: "This log is already reviewed.", logs };
+  const now = options.now ?? new Date();
+  if (reviewFlagsForLog(current, options.catalog, now).length > 0) {
+    return { ok: false, error: "Clear the Review queue items on this log first.", logs };
+  }
+  const name = rosterName(options.people, options.reviewedBy);
+  if (!name) return { ok: false, error: "Choose who reviewed this log from People.", logs };
+  const updated: ApplicationLog = {
+    ...current,
+    reviewedAt: localIsoWithOffset(now),
+    reviewedBy: name,
+  };
+  const next = logs.map((l) => (l.id === logId ? updated : l));
+  if (!saveLogs(next)) return { ok: false, error: "Could not save on this device.", logs };
+  return { ok: true, log: updated, logs: next };
+}
+
+/** Fields that are bookkeeping, not record content — never diffed. */
+const DIFF_EXCLUDED = new Set([
+  "id",
+  "createdAt",
+  "sampleData",
+  "revision",
+  "history",
+  "reviewedAt",
+  "reviewedBy",
+]);
+
+type DiffValue = FieldChange["old"];
+
+function toDiffValue(value: unknown): DiffValue {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  return JSON.stringify(value);
+}
+
+/**
+ * Flatten a log to stable field paths. Product lines are keyed by lineId and
+ * personnel rows by role, so reordering does not read as a change.
+ */
+function flattenLog(log: LogSnapshot): Map<string, DiffValue> {
+  const out = new Map<string, DiffValue>();
+  for (const [key, value] of Object.entries(log)) {
+    if (DIFF_EXCLUDED.has(key)) continue;
+    if (key === "products") {
+      for (const p of log.products) {
+        for (const [pk, pv] of Object.entries(p)) {
+          if (pk === "lineId") continue;
+          out.set(`products[${p.lineId}].${pk}`, toDiffValue(pv));
+        }
+      }
+    } else if (key === "personnel") {
+      const seen = new Map<string, number>();
+      for (const row of log.personnel) {
+        const n = (seen.get(row.role) ?? 0) + 1;
+        seen.set(row.role, n);
+        const slot = n === 1 ? row.role : `${row.role}#${n}`;
+        out.set(`personnel[${slot}].name`, toDiffValue(row.name));
+        out.set(`personnel[${slot}].licenseNumber`, toDiffValue(row.licenseNumber));
+      }
+    } else if (key === "termite") {
+      for (const [tk, tv] of Object.entries(log.termite)) {
+        out.set(`termite.${tk}`, toDiffValue(tv));
+      }
+    } else {
+      out.set(key, toDiffValue(value));
+    }
+  }
+  return out;
+}
+
+/** Every changed record field between two versions of a log. Added/removed lines use null. */
+export function diffLogs(prev: LogSnapshot, next: LogSnapshot): FieldChange[] {
+  const a = flattenLog(prev);
+  const b = flattenLog(next);
+  const changes: FieldChange[] = [];
+  for (const [field, oldValue] of a) {
+    const newValue = b.has(field) ? (b.get(field) as DiffValue) : null;
+    if (oldValue !== newValue) changes.push({ field, old: oldValue, new: newValue });
+  }
+  for (const [field, newValue] of b) {
+    if (!a.has(field) && newValue !== null) changes.push({ field, old: null, new: newValue });
+  }
+  return changes;
+}
+
+/**
+ * Apply a correction to a saved log (the only way to change a reviewed log).
+ * Rejects a blank reason, a `changedBy` that is not a roster person id, an id mismatch,
+ * an unreadable log, or no actual field change. On success: appends a frozen history
+ * entry (deep-copied prior snapshot + field diff), bumps revision by 1, keeps id /
+ * createdAt / review stamp, and saves locally. The caller then sends `log` through the
+ * shared-shop sync/outbox (App `syncSavedLog`) exactly like a normal save.
+ */
+export function applyCorrection(
+  logId: string,
+  nextLog: ApplicationLog,
+  options: { changedBy: string; reason: string; people: Person[]; now?: Date },
+): LogMutationResult {
+  const logs = loadLogs();
+  const current = logs.find((l) => l.id === logId);
+  if (!current) return { ok: false, error: "Log not found on this device.", logs };
+  const reason = String(options.reason ?? "").trim();
+  if (!reason) return { ok: false, error: "Enter a reason for the change.", logs };
+  const changedBy = rosterName(options.people, options.changedBy);
+  if (!changedBy) return { ok: false, error: "Choose who made the change from People.", logs };
+  if (!nextLog || nextLog.id !== logId) {
+    return { ok: false, error: "The changed log does not match the saved log.", logs };
+  }
+
+  const { history: priorHistory = [], ...currentBase } = current;
+  const priorRevision = current.revision ?? priorHistory.length;
+  // Detach from the caller's object, then pin bookkeeping fields to the saved values.
+  const candidate = {
+    ...jsonClone(nextLog),
+    id: current.id,
+    createdAt: current.createdAt,
+    revision: priorRevision,
+    reviewedAt: current.reviewedAt,
+    reviewedBy: current.reviewedBy,
+  };
+  const normalizedNext = normalizeLogBase(candidate, priorRevision);
+  if (!normalizedNext) return { ok: false, error: "The changed log could not be read.", logs };
+
+  const changes = diffLogs(currentBase, normalizedNext);
+  if (changes.length === 0) return { ok: false, error: "No fields changed.", logs };
+
+  const revision = priorRevision + 1;
+  const entry: CorrectionEntry = deepFreeze({
+    revision,
+    priorSnapshot: jsonClone(currentBase),
+    changedAt: localIsoWithOffset(options.now ?? new Date()),
+    changedBy,
+    reason,
+    changes,
+  });
+  const corrected: ApplicationLog = {
+    ...normalizedNext,
+    revision,
+    history: [...priorHistory, entry],
+  };
+  const next = logs.map((l) => (l.id === logId ? corrected : l));
+  if (!saveLogs(next)) return { ok: false, error: "Could not save on this device.", logs };
+  return { ok: true, log: corrected, logs: next };
 }
 
 /** Normalize service address for grouping: trim, collapse whitespace, case-fold. */
@@ -1344,8 +1651,150 @@ export function parseBackup(raw: unknown): RestoreResult {
 }
 
 export type ApplyBackupResult =
-  | { ok: true }
+  | { ok: true; history?: RestoreHistoryReport }
   | { ok: false; unrestoredKeys: string[]; message: string };
+
+/** What a restore did to protect change history on logs already on this device. */
+export interface RestoreHistoryReport {
+  /** Ids in both sets where the device copy was kept (any reason below). */
+  keptDevice: string[];
+  /** Subset of keptDevice: neither history is an earlier part of the other. */
+  diverged: string[];
+  /** Device logs absent from the backup kept because they carry history or a review stamp. */
+  keptAbsent: string[];
+}
+
+function sameCorrectionEntry(a: CorrectionEntry, b: CorrectionEntry): boolean {
+  return (
+    a.revision === b.revision &&
+    a.changedAt === b.changedAt &&
+    a.changedBy === b.changedBy &&
+    a.reason === b.reason &&
+    stableStringify(a.changes) === stableStringify(b.changes)
+  );
+}
+
+/** True when `earlier` is an exact earlier part (prefix, possibly equal) of `later`. */
+export function isHistoryPrefix(earlier: CorrectionEntry[], later: CorrectionEntry[]): boolean {
+  if (earlier.length > later.length) return false;
+  return earlier.every((entry, i) => sameCorrectionEntry(entry, later[i]));
+}
+
+function logRevision(log: ApplicationLog): number {
+  return log.revision ?? log.history?.length ?? 0;
+}
+
+function carriesHistoryOrReview(log: ApplicationLog): boolean {
+  return logRevision(log) > 0 || (log.history?.length ?? 0) > 0 || isLogReviewed(log);
+}
+
+/**
+ * Lawgical records rule — a restore never drops correction history. For a log id on
+ * both the device and in the backup:
+ *   1. reviewed device copy vs unreviewed backup copy → keep device (never unlock);
+ *   2. device history is an exact prefix of the backup's AND the backup's revision is
+ *      higher (backup extends the device) → take backup;
+ *   3. device is ahead (higher revision, or the backup's history is a strict prefix of
+ *      the device's) or the histories have split apart → keep device;
+ *   4. otherwise (equal history and revision, or no history either side) → take backup.
+ */
+export function shouldKeepDeviceLog(device: ApplicationLog, backup: ApplicationLog): boolean {
+  if (isLogReviewed(device) && !isLogReviewed(backup)) return true;
+  const dh = device.history ?? [];
+  const bh = backup.history ?? [];
+  if (isHistoryPrefix(dh, bh) && logRevision(backup) > logRevision(device)) return false;
+  if (logRevision(device) > logRevision(backup)) return true;
+  // Backup history is a strict prefix of the device's (device ahead) or split apart.
+  if (bh.length < dh.length || !isHistoryPrefix(bh, dh)) return true;
+  return false;
+}
+
+/**
+ * Same rule as shouldKeepDeviceLog, named for any "existing copy vs incoming copy"
+ * write (shared-shop sync: existing = remote log, incoming = this device's log).
+ */
+export function shouldKeepExistingLog(existing: ApplicationLog, incoming: ApplicationLog): boolean {
+  return shouldKeepDeviceLog(existing, incoming);
+}
+
+/**
+ * Put `incoming` into a log set by id (new ids go to the front). When the existing
+ * copy must be kept (shouldKeepExistingLog) the set is returned unchanged with
+ * `kept: true`. Pure.
+ */
+export function mergeLogIntoSet(
+  logs: ApplicationLog[],
+  incoming: ApplicationLog,
+): { logs: ApplicationLog[]; kept: boolean } {
+  const idx = logs.findIndex((l) => l.id === incoming.id);
+  if (idx === -1) return { logs: [incoming, ...logs], kept: false };
+  if (shouldKeepExistingLog(logs[idx], incoming)) return { logs, kept: true };
+  const next = [...logs];
+  next[idx] = incoming;
+  return { logs: next, kept: false };
+}
+
+/**
+ * Merge the backup's log set with the logs already on this device (whole-set replace
+ * otherwise). Pure: no storage access.
+ */
+export function mergeRestoredLogs(
+  device: ApplicationLog[],
+  backup: ApplicationLog[],
+): { logs: ApplicationLog[]; report: RestoreHistoryReport } {
+  const deviceById = new Map(device.map((l) => [l.id, l]));
+  const backupIds = new Set(backup.map((l) => l.id));
+  const report: RestoreHistoryReport = { keptDevice: [], diverged: [], keptAbsent: [] };
+  const logs = backup.map((incoming) => {
+    const local = deviceById.get(incoming.id);
+    if (!local || !shouldKeepDeviceLog(local, incoming)) return incoming;
+    report.keptDevice.push(local.id);
+    const lh = local.history ?? [];
+    const bh = incoming.history ?? [];
+    if (!isHistoryPrefix(bh, lh) && !isHistoryPrefix(lh, bh)) report.diverged.push(local.id);
+    return local;
+  });
+  for (const local of device) {
+    if (!backupIds.has(local.id) && carriesHistoryOrReview(local)) {
+      report.keptAbsent.push(local.id);
+      logs.push(local);
+    }
+  }
+  return { logs, report };
+}
+
+/** Neutral one-liner for the restore banner, or null when nothing was kept. */
+export function restoreHistoryMessage(report: RestoreHistoryReport | undefined): string | null {
+  if (!report) return null;
+  const n = report.keptDevice.length + report.keptAbsent.length;
+  if (n === 0) return null;
+  return `${n} log${n === 1 ? "" : "s"} kept ${n === 1 ? "its" : "their"} change history from this device.`;
+}
+
+/**
+ * After a restore, which stored logs differ from the backup's copy (device copy kept)
+ * or are absent from it (kept for history / review). For callers that only see the
+ * parsed backup and the stored result (App after Settings restore).
+ */
+export function restoredKeptReport(
+  backupLogs: ApplicationLog[],
+  storedLogs: ApplicationLog[],
+): RestoreHistoryReport {
+  const backupById = new Map(backupLogs.map((l) => [l.id, l]));
+  const report: RestoreHistoryReport = { keptDevice: [], diverged: [], keptAbsent: [] };
+  for (const stored of storedLogs) {
+    const incoming = backupById.get(stored.id);
+    if (!incoming) report.keptAbsent.push(stored.id);
+    else if (stableStringify(incoming) !== stableStringify(stored)) report.keptDevice.push(stored.id);
+  }
+  return report;
+}
+
+/** Normalized logs currently stored, without the quarantine side effect of loadLogs. */
+function readStoredLogsForRestore(): ApplicationLog[] {
+  const raw = readStoredArray(LOGS_KEY) ?? [];
+  return raw.map(normalizeLog).filter((l): l is ApplicationLog => l !== null);
+}
 
 const RESTORE_STORAGE_LABELS: Record<string, string> = {
   [LOGS_KEY]: "logs",
@@ -1451,9 +1900,14 @@ export function applyBackup(backup: DeviceBackup): ApplyBackupResult {
     return unrestored;
   };
 
+  // Never drop correction history: merge against the device's current logs
+  // (see shouldKeepDeviceLog / mergeRestoredLogs). Read after the snapshot so a
+  // failed restore rolls back to the exact prior bytes.
+  const merged = mergeRestoredLogs(readStoredLogsForRestore(), backup.logs);
+
   // skipQuarantine: writeBackupQuarantine replaces those keys next. Appending
   // the replaced invalid rows first can fail on quota and abort the restore.
-  const logsOk = saveLogs(backup.logs, { skipQuarantine: true });
+  const logsOk = saveLogs(merged.logs, { skipQuarantine: true });
   const catalogOk = saveCatalog(backup.catalog, { skipQuarantine: true });
   const peopleOk = savePeople(backup.people, { skipQuarantine: true });
   const settingsOk = saveSettings(backup.settings);
@@ -1464,7 +1918,7 @@ export function applyBackup(backup: DeviceBackup): ApplyBackupResult {
   if (!writeBackupQuarantine(quarantine)) {
     return applyBackupFailed(rollback());
   }
-  return { ok: true };
+  return { ok: true, history: merged.report };
 }
 
 /** Soft first-run setup steps (not a hard gate on logging). */
