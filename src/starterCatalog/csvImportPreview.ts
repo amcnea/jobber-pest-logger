@@ -72,6 +72,28 @@ function shopMatch(
   return null;
 }
 
+/** Shop-list duplicate message for a match (shared by preview and add-time recheck). */
+function shopDuplicateMessage(match: { product: ShopProduct; by: "epa" | "name" }): string {
+  return match.by === "epa"
+    ? `Needs a look: same EPA reg # as "${match.product.name}" on your shop list.`
+    : `Needs a look: same name as a product on your shop list.`;
+}
+
+/**
+ * "Needs a look: …" when this candidate now matches a shop row (same
+ * normalized effective EPA reg # or normalized name rules as the preview),
+ * else null. Used right before saving, against the current catalog plus rows
+ * already added in the same run (#178).
+ */
+export function findShopDuplicate(candidate: CsvCandidate, catalog: ShopProduct[]): string | null {
+  const match = shopMatch(
+    catalog,
+    normalizeImportEpa(effectiveImportEpa(candidate)),
+    normalizeImportName(candidate.name),
+  );
+  return match ? shopDuplicateMessage(match) : null;
+}
+
 /**
  * Build the preview list. A row is a duplicate when its normalized EPA reg #
  * or normalized name matches a shop row, or an earlier row in the file. The
@@ -87,10 +109,7 @@ export function buildCsvImportPreview(result: CsvImportResult, catalog: ShopProd
     let duplicate: string | null = null;
     const match = shopMatch(catalog, epa, name);
     if (match) {
-      duplicate =
-        match.by === "epa"
-          ? `Needs a look: same EPA reg # as "${match.product.name}" on your shop list.`
-          : `Needs a look: same name as a product on your shop list.`;
+      duplicate = shopDuplicateMessage(match);
     } else {
       const earlierEpa = epa ? seenEpa.get(epa) : undefined;
       const earlierName = name ? seenName.get(name) : undefined;
