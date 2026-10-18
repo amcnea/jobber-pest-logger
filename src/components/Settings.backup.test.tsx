@@ -519,7 +519,7 @@ describe("Settings — demo reset notice (#198)", () => {
     const heading = screen.getByRole("heading", { name: "Demo / reset" });
     const text = (heading.nextElementSibling?.textContent ?? "").replace(/\s+/g, " ").trim();
     expect(text).toBe(
-      "Soft demo reset clears example catalog seeds and any logs that only used them. Real products, people, settings, and backups stay. A full wipe needs an explicit confirm — it removes real shop data on this device and re-seeds examples. Any log still under its 2-year hold stays until its hold date.",
+      "Soft demo reset clears example catalog seeds and any logs that only used them. Real products, people, settings, and backups stay. A full wipe needs an explicit confirm — it removes real shop data on this device and re-seeds examples. Resetting example data keeps any log still under its 2-year hold until its hold date. Wipe ALL data removes everything, including held logs.",
     );
     expect(text).not.toMatch(/tamper-proof|immutable|audit-proof|legally valid|compliant|noncompliant|violation|invalid|certified/i);
   });

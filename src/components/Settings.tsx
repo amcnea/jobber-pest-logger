@@ -907,8 +907,8 @@ export function Settings({
       <p className="hint">
         Soft demo reset clears example catalog seeds and any logs that only used them. Real products,
         people, settings, and backups stay. A full wipe needs an explicit confirm — it removes real
-        shop data on this device and re-seeds examples. Any log still under its 2-year hold stays
-        until its hold date.
+        shop data on this device and re-seeds examples. Resetting example data keeps any log still under its 2-year hold until
+        its hold date. Wipe ALL data removes everything, including held logs.
       </p>
       <div className="card settings-backup-actions">
         <button
