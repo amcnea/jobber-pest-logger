@@ -1118,6 +1118,12 @@ export function clearExampleDemoData(): {
         }),
     );
     if (hadExamples && kept.length === 0) {
+      // Still under the 2-year hold (a stored retainUntil): leave it, so the save
+      // guard doesn't refuse the whole clear (#189).
+      if (isWithinRetention(log)) {
+        nextLogs.push(log);
+        continue;
+      }
       removedLogs += 1;
       continue;
     }

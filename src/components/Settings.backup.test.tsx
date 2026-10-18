@@ -499,3 +499,16 @@ describe("Settings wipe confirm and set-aside copies", () => {
     for (const s of [WIPE_CONFIRM_TEXT, wipeSetAsideSentence(1), wipeSetAsideSentence(2)]) expect(s).not.toMatch(BANNED);
   });
 });
+
+describe("Settings — premises keep-alive note (#190)", () => {
+  it("states the 2-year delete block and the premises copy; no retention-engine line", () => {
+    const { container } = setup();
+    const note = container.querySelector(".premises-keepalive");
+    const text = (note?.textContent ?? "").replace(/\s+/g, " ");
+    expect(text).toContain(
+      "This app blocks deleting a log until 2 years after its application date. It isn't your premises copy: keep the records at your business for 2 years by downloading the backup JSON and exports regularly. Wipe ALL data still removes everything on this device.",
+    );
+    expect(text).not.toContain("retention engine");
+    expect(text).not.toMatch(/tamper-proof|immutable|audit-proof|legally valid|compliant|noncompliant|violation|invalid|certified/i);
+  });
+});

@@ -126,7 +126,7 @@ describe("isWithinRetention: age boundary (device-local dates)", () => {
 describe("strings", () => {
   it("delete reason names the first deletable date", () => {
     expect(deleteBlockedReason(makeLog({ dateUsed: "2026-09-20", createdAt: "2026-09-20T12:00:00" }), at(2026, 10, 17))).toBe(
-      "Can't delete yet. Texas requires keeping this record for 2 years from the application date. You can delete it on or after 2028-09-20.",
+      "Can't delete yet. Texas requires keeping this record for 2 years from the application date. This app holds it until 2028-09-20, 2 years after the latest date saved for this log.",
     );
     expect(deleteBlockedReason(makeLog({ dateUsed: "2020-09-20", createdAt: "2020-09-20T12:00:00" }), at(2026, 10, 17))).toBeNull();
   });
@@ -189,7 +189,7 @@ describe("storage: no path deletes a log under 2 years", () => {
     expect(saveLogs([recent, old])).toBe(true);
     const res = deleteLog("R");
     expect(res.saved).toBe(false);
-    expect(res.blocked).toMatch(/^Can't delete yet\. .* on or after 2028-09-20\.$/);
+    expect(res.blocked).toMatch(/^Can't delete yet\. .* This app holds it until 2028-09-20, 2 years after the latest date saved for this log\.$/);
     expect(loadLogs().map((l) => l.id)).toEqual(["R", "O"]);
     expect(deleteLog("O")).toMatchObject({ saved: true });
     expect(loadLogs().map((l) => l.id)).toEqual(["R"]);
@@ -407,5 +407,33 @@ describe("restore summary ignores retainUntil", () => {
         );
       }
     }
+  });
+});
+
+describe("clearExampleDemoData skips example logs still under the hold (#189)", () => {
+  it("clears the unheld example logs and leaves the held one", () => {
+    const ex = (id: string, extra: Partial<ReturnType<typeof makeLog>> = {}) =>
+      makeLog({ id, sampleData: true, products: [EXAMPLE], dateUsed: "2020-01-01", createdAt: "2020-01-01T12:00:00", ...extra });
+    const held = { ...ex("held"), retainUntil: "2027-06-01" };
+    expect(saveLogs([ex("a"), held, ex("b"), ex("c"), makeLog({ id: "real" })])).toBe(true);
+    const res = clearExampleDemoData();
+    expect(res.saved).toBe(true);
+    expect(res.removedLogs).toBe(3);
+    expect(loadLogs().map((l) => l.id)).toEqual(["held", "real"]);
+    expect(loadLogs()[0].products).toEqual(held.products);
+    // Once the hold has passed, it clears too.
+    vi.setSystemTime(at(2027, 6, 1, 0, 0));
+    const later = clearExampleDemoData();
+    expect(later.saved).toBe(true);
+    expect(later.removedLogs).toBe(1);
+    expect(loadLogs().map((l) => l.id)).toEqual(["real"]);
+  });
+
+  it("the new delete-blocked text avoids banned terms (#185)", () => {
+    const log = { ...makeLog({ id: "H", dateUsed: "2020-01-01", createdAt: "2020-01-01T12:00:00" }), retainUntil: "2028-10-01" };
+    expect(deleteBlockedReason(log)).toBe(
+      "Can't delete yet. Texas requires keeping this record for 2 years from the application date. This app holds it until 2028-10-01, 2 years after the latest date saved for this log.",
+    );
+    expect(deleteBlockedReason(log)).not.toMatch(BANNED);
   });
 });
