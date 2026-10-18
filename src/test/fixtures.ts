@@ -55,6 +55,9 @@ export function makeLog(over: Partial<ApplicationLog> = {}): ApplicationLog {
       startTime: "",
       stopTime: "",
     },
+    // Normalized shape: normalizeLog fills the correction-history defaults.
+    revision: 0,
+    history: [],
     ...over,
   };
 }
