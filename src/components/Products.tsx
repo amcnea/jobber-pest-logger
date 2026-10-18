@@ -30,6 +30,7 @@ import {
   type StarterProduct,
 } from "../starterCatalog";
 import { highlightSegments } from "../starterCatalog/highlight";
+import { buildShopRegLookup } from "../starterCatalog/shopRegLookup";
 import {
   CSV_FIELD_LABELS,
   CSV_IMPORT_MAX_BYTES,
@@ -116,6 +117,8 @@ function toDraft(product: ShopProduct): ShopProduct {
 }
 
 export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Props) {
+  /** Shared shop reg # lookup, built once per catalog change (perf only; same results as the scans). */
+  const shopRegLookup = useMemo(() => buildShopRegLookup(catalog), [catalog]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState<ShopProduct>(() => emptyShopProduct());
@@ -201,7 +204,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
       // storage is unreadable. Never reset the durable key to [] (would drop IDs).
       const heuristic: string[] = [];
       for (const starter of TEXAS_COMMON_STARTER) {
-        const match = findShopMatchForStarter(catalog, starter);
+        const match = findShopMatchForStarter(catalog, starter, shopRegLookup);
         if (match && match.archived && match.isExample !== true) {
           heuristic.push(match.id);
         }
@@ -390,7 +393,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   }
 
   function addStarterToCatalog(starter: StarterProduct) {
-    const existing = findShopMatchForStarter(catalog, starter);
+    const existing = findShopMatchForStarter(catalog, starter, shopRegLookup);
     if (existing) {
       if (existing.archived) {
         markPendingLabel(existing.id);
@@ -536,7 +539,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
       return;
     }
     if (token !== csvReadTokenRef.current) return;
-    openCsvPreview(buildCsvImportPreview(parseCatalogCsv(text), catalog), file.name);
+    openCsvPreview(buildCsvImportPreview(parseCatalogCsv(text), catalog, shopRegLookup), file.name);
   }
 
   /** Blank template: header row only, made on this device. No product rows or data. */
@@ -589,7 +592,12 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
       // plus rows already added in this run. A row the office ticked despite a preview
       // flag is left as their choice.
       if (row.duplicate === null) {
-        const dup = findShopDuplicate(candidate, [...addedProducts, ...catalog]);
+        // Same list as before; the shared lookup only applies while nothing was added
+        // yet in this run (the combined array is then just `catalog`).
+        const dup =
+          addedProducts.length === 0
+            ? findShopDuplicate(candidate, catalog, shopRegLookup)
+            : findShopDuplicate(candidate, [...addedProducts, ...catalog]);
         if (dup) {
           skipped.set(index, dup);
           continue;
@@ -845,9 +853,9 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   const starterResults = useMemo(() => {
     const rows = starterMatches;
     // hide-active hides only active shop matches; pending/archived stay so office can Confirm label…
-    const filtered = filterStartersByShopStatus(rows, catalog, starterShopStatus, pendingLabelIds);
-    return sortStarters(filtered, catalog, pendingLabelIds, starterSort);
-  }, [starterMatches, starterShopStatus, starterSort, catalog, pendingLabelIds]);
+    const filtered = filterStartersByShopStatus(rows, catalog, starterShopStatus, pendingLabelIds, shopRegLookup);
+    return sortStarters(filtered, catalog, pendingLabelIds, starterSort, shopRegLookup);
+  }, [starterMatches, starterShopStatus, starterSort, catalog, pendingLabelIds, shopRegLookup]);
 
   // Counts over the search + kind + 25(b) results (before the shop status filter).
   const starterStatusCounts = useMemo(() => {
@@ -855,14 +863,14 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
     const ids = new Set(pendingLabelIds);
     const counts = { notAdded: 0, pending: 0, archived: 0, active: 0 };
     for (const starter of rows) {
-      const state = starterShopState(catalog, starter, ids);
+      const state = starterShopState(catalog, starter, ids, shopRegLookup);
       if (state === "not-added") counts.notAdded += 1;
       else if (state === "pending") counts.pending += 1;
       else if (state === "archived") counts.archived += 1;
       else counts.active += 1;
     }
     return counts;
-  }, [starterMatches, catalog, pendingLabelIds]);
+  }, [starterMatches, catalog, pendingLabelIds, shopRegLookup]);
 
   return (
     <div>
@@ -1045,7 +1053,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
               <p className="hint">No starter rows match this search/filter.</p>
             ) : (
               starterResults.map((starter) => {
-                const state = starterShopState(catalog, starter, pendingLabelIds);
+                const state = starterShopState(catalog, starter, pendingLabelIds, shopRegLookup);
                 const alreadyActive = state === "active";
                 const alreadyPending = state === "pending";
                 const alreadyArchived = state === "archived";
