@@ -148,7 +148,7 @@ function ConflictRow({
               disabled={!personId || !reason.trim() || busy}
               onClick={submitKeep}
             >
-              Save as a correction
+              Save this device's copy
             </button>
             <button type="button" className="btn btn-ghost" onClick={() => setMode(null)}>
               Cancel

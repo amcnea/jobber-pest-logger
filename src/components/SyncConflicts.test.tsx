@@ -96,7 +96,7 @@ describe("SyncConflicts", () => {
         "Uploads this device's copy to the shop. If the shop still has this log, it's saved as a correction with change history.",
       ),
     ).toBeInTheDocument();
-    const save = screen.getByRole("button", { name: "Save as a correction" });
+    const save = screen.getByRole("button", { name: "Save this device's copy" });
     expect(save).toBeDisabled();
     await userEvent.selectOptions(screen.getByLabelText("Changed by"), "p-ana");
     expect(save).toBeDisabled();
@@ -116,7 +116,7 @@ describe("SyncConflicts", () => {
     await userEvent.click(screen.getByRole("button", { name: "Keep this device's copy" }));
     await userEvent.selectOptions(screen.getByLabelText("Changed by"), "p-ana");
     await userEvent.type(screen.getByLabelText("Reason"), "x");
-    await userEvent.click(screen.getByRole("button", { name: "Save as a correction" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save this device's copy" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("No fields changed.");
   });
 });
@@ -130,7 +130,7 @@ describe("SyncConflicts — partial failure (#170)", () => {
     await userEvent.click(within(row).getByRole("button", { name: "Keep this device's copy" }));
     await userEvent.selectOptions(within(row).getByLabelText("Changed by"), "p-ana");
     await userEvent.type(within(row).getByLabelText("Reason"), "Keep tech copy");
-    await userEvent.click(within(row).getByRole("button", { name: "Save as a correction" }));
+    await userEvent.click(within(row).getByRole("button", { name: "Save this device's copy" }));
     expect(onResolved).toHaveBeenCalledWith(saved, "offline");
     expect(within(row).getByRole("alert")).toHaveTextContent("offline");
   });
@@ -142,7 +142,7 @@ describe("SyncConflicts — partial failure (#170)", () => {
     await userEvent.click(within(row).getByRole("button", { name: "Keep this device's copy" }));
     await userEvent.selectOptions(within(row).getByLabelText("Changed by"), "p-ana");
     await userEvent.type(within(row).getByLabelText("Reason"), "x");
-    await userEvent.click(within(row).getByRole("button", { name: "Save as a correction" }));
+    await userEvent.click(within(row).getByRole("button", { name: "Save this device's copy" }));
     expect(onResolved).not.toHaveBeenCalled();
   });
 });
@@ -158,7 +158,7 @@ describe("SyncConflicts — shop no longer had the log (#175)", () => {
     await userEvent.click(within(row).getByRole("button", { name: "Keep this device's copy" }));
     await userEvent.selectOptions(within(row).getByLabelText("Changed by"), "p-ana");
     await userEvent.type(within(row).getByLabelText("Reason"), "Shop lost it");
-    await userEvent.click(within(row).getByRole("button", { name: "Save as a correction" }));
+    await userEvent.click(within(row).getByRole("button", { name: "Save this device's copy" }));
     expect(onResolved).toHaveBeenCalledWith([entry.log]);
     rerender(<SyncConflicts shopId="SHOP1" remote={remote} people={PEOPLE} refreshKey={1} onResolved={onResolved} />);
     const status = screen.getByRole("status");
@@ -174,7 +174,7 @@ describe("SyncConflicts — shop no longer had the log (#175)", () => {
     await userEvent.click(within(row).getByRole("button", { name: "Keep this device's copy" }));
     await userEvent.selectOptions(within(row).getByLabelText("Changed by"), "p-ana");
     await userEvent.type(within(row).getByLabelText("Reason"), "x");
-    await userEvent.click(within(row).getByRole("button", { name: "Save as a correction" }));
+    await userEvent.click(within(row).getByRole("button", { name: "Save this device's copy" }));
     expect(screen.queryByRole("status")).toBeNull();
   });
 });
