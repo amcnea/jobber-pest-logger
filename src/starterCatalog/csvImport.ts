@@ -10,12 +10,22 @@ import type { ProductKind, ShopProduct } from "../types";
 
 export const CSV_IMPORT_MAX_BYTES = 1_000_000;
 export const CSV_IMPORT_MAX_ROWS = 2000;
+/** Header columns above this reject the file (a shop list needs a handful). */
+export const CSV_IMPORT_MAX_COLUMNS = 1000;
+/** At most this many per-column "isn't used" notes; the rest roll into one note. */
+export const CSV_UNUSED_COLUMN_NOTES_MAX = 10;
 
 /** Fields a CSV column may map onto — all already exist on ShopProduct. */
 export type CsvImportField = "name" | "epaRegNo" | "is25b" | "kind";
 
+/**
+ * Header names accepted per field. Matching ignores case, spacing and punctuation
+ * (see headerKey), so "EPA Reg. No.", "epa reg no" and "EPA_Reg_No" are the same.
+ * Keep this conservative: never add a name that could plausibly mean another field
+ * (for example a bare "Number", "No", "Reg" or "Registration").
+ */
 const HEADER_ALIASES: Record<CsvImportField, string[]> = {
-  name: ["name", "product", "product name", "productname", "item", "item name"],
+  name: ["name", "product", "product name", "productname", "item", "item name", "trade name"],
   epaRegNo: [
     "epa reg no",
     "epa reg #",
@@ -30,9 +40,26 @@ const HEADER_ALIASES: Record<CsvImportField, string[]> = {
     "epaRegNo",
     "reg no",
     "reg #",
+    "reg number",
+    "registration #",
+    "registration no",
+    "registration number",
+    "epa registration",
   ],
-  is25b: ["25b", "25(b)", "is 25b", "is25b", "minimum risk", "25(b) exempt", "25b exempt"],
-  kind: ["kind", "type", "product type"],
+  is25b: [
+    "25b",
+    "25(b)",
+    "is 25b",
+    "is25b",
+    "minimum risk",
+    "minimum risk pesticide",
+    "25(b) exempt",
+    "25b exempt",
+    "fifra 25b",
+    "fifra 25(b)",
+    "fifra 25b exempt",
+  ],
+  kind: ["kind", "type", "product type", "product kind"],
 };
 
 /** Plain column labels for user-facing text (never show the internal field ids). */
@@ -45,8 +72,19 @@ export const CSV_FIELD_LABELS: Record<CsvImportField, string> = {
 
 export const REQUIRED_CSV_FIELDS: CsvImportField[] = ["name"];
 
+/**
+ * Compare key for a header: lowercase, "#" / "number" / "num" / "nbr" read as "no",
+ * then every space and punctuation mark dropped. "EPA Reg. No.", "EPA reg #",
+ * "epaRegNo" and "EPA Reg Number" all become "eparegno"; "25(b)" becomes "25b".
+ */
 function headerKey(raw: string): string {
-  return raw.trim().toLowerCase().replace(/\s+/g, " ").replace(/\s*([#()])\s*/g, "$1").replace(/\.$/, "");
+  return raw
+    .toLowerCase()
+    .replace(/#/g, " no ")
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .map((t) => (t === "number" || t === "num" || t === "nbr" ? "no" : t))
+    .join("");
 }
 
 const ALIAS_LOOKUP = new Map<string, CsvImportField>();
@@ -56,7 +94,24 @@ for (const [field, aliases] of Object.entries(HEADER_ALIASES) as [CsvImportField
 
 export function matchCsvHeader(raw: string): CsvImportField | null {
   const key = headerKey(raw);
-  return ALIAS_LOOKUP.get(key) ?? ALIAS_LOOKUP.get(key.replace(/\./g, "")) ?? null;
+  return key ? (ALIAS_LOOKUP.get(key) ?? null) : null;
+}
+
+/** Header row of the blank template, in this order, using the canonical labels. */
+export const CSV_TEMPLATE_FIELDS: CsvImportField[] = ["name", "epaRegNo", "is25b", "kind"];
+
+export const CSV_TEMPLATE_FILENAME = "shop-products-template.csv";
+
+function csvCell(value: string): string {
+  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+}
+
+/**
+ * Blank import template: the header row only (canonical labels), no product rows
+ * and no product data. parseCatalogCsv maps every header back to its field.
+ */
+export function catalogCsvTemplate(): string {
+  return `${CSV_TEMPLATE_FIELDS.map((f) => csvCell(CSV_FIELD_LABELS[f])).join(",")}\r\n`;
 }
 
 /** Candidate row: ShopProduct fields minus id. Always archived, never an example. */
@@ -78,8 +133,14 @@ export interface CsvParsedRow {
 export interface CsvImportResult {
   rows: CsvParsedRow[];
   fileProblems: string[];
-  /** Header cells that did not map to a shop-list field (ignored). */
+  /**
+   * Columns that did not map to a shop-list field (ignored), as shown to the user:
+   * the trimmed header, or `column {n}` for a blank header over non-blank cells.
+   * Blank-header columns with no data at all are left out silently.
+   */
   ignoredColumns: string[];
+  /** Mapped columns in header order, for the preview step. */
+  columns: { index: number; header: string; field: CsvImportField }[];
   /** Column index -> field, for the preview step. */
   columnMap: Record<number, CsvImportField>;
 }
@@ -287,7 +348,7 @@ export function csvTooLargeMessage(): string {
 }
 
 export function parseCatalogCsv(input: string): CsvImportResult {
-  const result: CsvImportResult = { rows: [], fileProblems: [], ignoredColumns: [], columnMap: {} };
+  const result: CsvImportResult = { rows: [], fileProblems: [], ignoredColumns: [], columns: [], columnMap: {} };
   if (csvOverByteLimit(input)) {
     result.fileProblems.push(csvTooLargeMessage());
     return result;
@@ -321,27 +382,76 @@ export function parseCatalogCsv(input: string): CsvImportResult {
     );
     return result;
   }
+  if (header.cells.length > CSV_IMPORT_MAX_COLUMNS) {
+    result.fileProblems.push(
+      `Needs a look: this file has ${header.cells.length} columns; the import reads files with up to ${CSV_IMPORT_MAX_COLUMNS} columns. Nothing was imported.`,
+    );
+    return result;
+  }
+  // Blank-header columns that hold data somewhere: found in ONE pass over the body
+  // (each cell visited at most once), stopping as soon as every one is found.
+  const blankPending = new Set<number>();
+  header.cells.forEach((raw, idx) => {
+    if (raw.trim() === "") blankPending.add(idx);
+  });
+  const blankWithData = new Set<number>();
+  if (blankPending.size > 0) {
+    for (const rec of body) {
+      const cells = rec.cells;
+      const end = Math.min(cells.length, header.cells.length);
+      for (let i = 0; i < end; i++) {
+        if (blankPending.has(i) && cells[i].trim() !== "") {
+          blankPending.delete(i);
+          blankWithData.add(i);
+        }
+      }
+      if (blankPending.size === 0) break;
+    }
+  }
   const seen = new Set<CsvImportField>();
+  /** One duplicate-column note per field, however many extra columns map to it. */
+  const dupReported = new Set<CsvImportField>();
+  const unusedNotes: string[] = [];
   header.cells.forEach((raw, idx) => {
     const field = matchCsvHeader(raw);
     if (!field) {
-      if (raw.trim()) result.ignoredColumns.push(raw.trim());
+      const header = raw.trim();
+      if (header) {
+        result.ignoredColumns.push(header);
+        unusedNotes.push(`Needs a look: column "${header}" isn't used.`);
+      } else if (blankWithData.has(idx)) {
+        // A blank header over real data: say which column, by position.
+        result.ignoredColumns.push(`column ${idx + 1}`);
+        unusedNotes.push(`Needs a look: column ${idx + 1} has no header and isn't used.`);
+      }
+      // A blank header with no data (e.g. a trailing comma on every line) is skipped silently.
       return;
     }
     if (seen.has(field)) {
-      result.fileProblems.push(
-        `Needs a look: more than one column maps to "${CSV_FIELD_LABELS[field]}"; using the first.`,
-      );
+      if (!dupReported.has(field)) {
+        dupReported.add(field);
+        result.fileProblems.push(
+          `Needs a look: more than one column maps to "${CSV_FIELD_LABELS[field]}"; using the first.`,
+        );
+      }
       return;
     }
     seen.add(field);
     result.columnMap[idx] = field;
+    result.columns.push({ index: idx, header: raw.trim(), field });
   });
+  // Cap the per-column notes; ignoredColumns keeps the true total for the summary count.
+  result.fileProblems.push(...unusedNotes.slice(0, CSV_UNUSED_COLUMN_NOTES_MAX));
+  const moreUnused = unusedNotes.length - CSV_UNUSED_COLUMN_NOTES_MAX;
+  if (moreUnused > 0) {
+    result.fileProblems.push(
+      moreUnused === 1
+        ? "Needs a look: 1 more column isn't used."
+        : `Needs a look: ${moreUnused} more columns aren't used.`,
+    );
+  }
   for (const req of REQUIRED_CSV_FIELDS) {
     if (!seen.has(req)) result.fileProblems.push("Needs a look: missing a product name column.");
-  }
-  if (result.ignoredColumns.length) {
-    result.fileProblems.push(`Ignored columns: ${result.ignoredColumns.join(", ")}.`);
   }
   if (!seen.has("name")) return result;
   if (body.length === 0) result.fileProblems.push("Needs a look: no product rows under the header.");
