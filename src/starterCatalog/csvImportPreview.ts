@@ -17,14 +17,10 @@ import {
   type CsvImportResult,
 } from "./csvImport";
 
-/** Lowercase, drop all whitespace, and treat any dash-like character as "-". */
-export function normalizeImportEpa(epa: string | null | undefined): string {
-  return String(epa ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/[\u2010-\u2015\u2212]/g, "-")
-    .replace(/\s+/g, "");
-}
+import { normalizeImportEpa, shopRowsWithRegNo, type ShopRegLookup } from "./shopRegLookup";
+
+// Moved to shopRegLookup.ts (shared lookup); re-exported so existing imports keep working.
+export { normalizeImportEpa };
 
 /** Lowercase, trim, and collapse inner whitespace. */
 export function normalizeImportName(name: string | null | undefined): string {
@@ -121,9 +117,11 @@ function shopMatch(
   catalog: ShopProduct[],
   epa: string,
   name: string,
+  lookup?: ShopRegLookup,
 ): { product: ShopProduct; by: "epa" | "name" } | null {
   if (epa) {
-    const byEpa = catalog.find((p) => normalizeImportEpa(p.epaRegNo) === epa);
+    // First reg # match in catalog order (same as the old catalog.find).
+    const byEpa = shopRowsWithRegNo(catalog, epa, lookup)[0];
     if (byEpa) return { product: byEpa, by: "epa" };
   }
   if (name) {
@@ -146,11 +144,16 @@ function shopDuplicateMessage(match: { product: ShopProduct; by: "epa" | "name" 
  * else null. Used right before saving, against the current catalog plus rows
  * already added in the same run (#178).
  */
-export function findShopDuplicate(candidate: CsvCandidate, catalog: ShopProduct[]): string | null {
+export function findShopDuplicate(
+  candidate: CsvCandidate,
+  catalog: ShopProduct[],
+  lookup?: ShopRegLookup,
+): string | null {
   const match = shopMatch(
     catalog,
     normalizeImportEpa(effectiveImportEpa(candidate)),
     normalizeImportName(candidate.name),
+    lookup,
   );
   return match ? shopDuplicateMessage(match) : null;
 }
@@ -171,7 +174,11 @@ export function findShopNameDuplicate(candidate: CsvCandidate, catalog: ShopProd
  * or normalized name matches a shop row, or an earlier row in the file. The
  * first row in the file wins; later copies are marked.
  */
-export function buildCsvImportPreview(result: CsvImportResult, catalog: ShopProduct[]): CsvImportPreview {
+export function buildCsvImportPreview(
+  result: CsvImportResult,
+  catalog: ShopProduct[],
+  lookup?: ShopRegLookup,
+): CsvImportPreview {
   const seenEpa = new Map<string, number>();
   const seenName = new Map<string, number>();
   const rows: CsvPreviewRow[] = result.rows.map((row) => {
@@ -179,7 +186,7 @@ export function buildCsvImportPreview(result: CsvImportResult, catalog: ShopProd
     const epa = normalizeImportEpa(effectiveImportEpa(candidate));
     const name = normalizeImportName(candidate.name);
     let duplicate: string | null = null;
-    const match = shopMatch(catalog, epa, name);
+    const match = shopMatch(catalog, epa, name, lookup);
     if (match) {
       duplicate = shopDuplicateMessage(match);
     } else {

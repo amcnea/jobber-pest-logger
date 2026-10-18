@@ -1,7 +1,7 @@
 import type { ShopProduct } from "../types";
 import { TEXAS_COMMON_STARTER, TEXAS_STARTER_CATALOG_VERSION } from "./texasCommon";
 import type { StarterProduct } from "./types";
-import { normalizeImportEpa } from "./csvImportPreview";
+import { normalizeImportEpa, shopRowsWithRegNo, type ShopRegLookup } from "./shopRegLookup";
 
 export type { StarterProduct } from "./types";
 export type { LabelConfirmReadResult } from "./labelConfirmStore";
@@ -32,14 +32,17 @@ function normalizeName(name: string): string {
 export function findShopMatchForStarter(
   catalog: ShopProduct[],
   starter: StarterProduct,
+  lookup?: ShopRegLookup,
 ): ShopProduct | undefined {
   const starterEpa = normalizeEpa(starter.epaRegNo);
   const name = normalizeName(starter.name);
-  const matches = catalog.filter((p) =>
-    starterEpa
-      ? normalizeEpa(p.epaRegNo) === starterEpa
-      : p.kind === starter.kind && normalizeName(p.name) === name && !normalizeEpa(p.epaRegNo),
-  );
+  // Reg # rows come from the shared lookup when it was built from this catalog
+  // (same rows, same catalog order as the old filter); the name branch is unchanged.
+  const matches = starterEpa
+    ? shopRowsWithRegNo(catalog, starterEpa, lookup)
+    : catalog.filter(
+        (p) => p.kind === starter.kind && normalizeName(p.name) === name && !normalizeEpa(p.epaRegNo),
+      );
   return matches.find((p) => !p.archived) ?? matches[0];
 }
 
@@ -71,8 +74,9 @@ export function starterShopState(
   catalog: ShopProduct[],
   starter: StarterProduct,
   pendingIds: ReadonlySet<string> | readonly string[],
+  lookup?: ShopRegLookup,
 ): StarterShopState {
-  const match = findShopMatchForStarter(catalog, starter);
+  const match = findShopMatchForStarter(catalog, starter, lookup);
   if (!match) return "not-added";
   if (!match.archived) return "active";
   return toIdSet(pendingIds).has(match.id) ? "pending" : "archived";
@@ -92,11 +96,12 @@ export function filterStartersByShopStatus(
   catalog: ShopProduct[],
   status: StarterShopStatusFilter,
   pendingIds: ReadonlySet<string> | readonly string[],
+  lookup?: ShopRegLookup,
 ): StarterProduct[] {
   if (status === "all") return rows;
   const ids = toIdSet(pendingIds);
   return rows.filter((starter) => {
-    const state = starterShopState(catalog, starter, ids);
+    const state = starterShopState(catalog, starter, ids, lookup);
     switch (status) {
       case "hide-active":
         return state !== "active";
@@ -136,6 +141,7 @@ export function sortStarters(
   catalog: ShopProduct[],
   pendingIds: ReadonlySet<string> | readonly string[],
   order: StarterSortOrder,
+  lookup?: ShopRegLookup,
 ): StarterProduct[] {
   if (order === "name") {
     return [...rows].sort((a, b) => {
@@ -150,7 +156,7 @@ export function sortStarters(
       .map((starter, index) => ({
         starter,
         index,
-        rank: NEEDS_ACTION_RANK[starterShopState(catalog, starter, ids)],
+        rank: NEEDS_ACTION_RANK[starterShopState(catalog, starter, ids, lookup)],
       }))
       .sort((a, b) => a.rank - b.rank || a.index - b.index)
       .map((entry) => entry.starter);
