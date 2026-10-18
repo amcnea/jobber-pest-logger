@@ -2160,9 +2160,21 @@ export function restoredKeptReport(
   for (const stored of storedLogs) {
     const incoming = backupById.get(stored.id);
     if (!incoming) report.keptAbsent.push(stored.id);
-    else if (stableStringify(incoming) !== stableStringify(stored)) report.keptDevice.push(stored.id);
+    else if (stableStringify(withoutHold(incoming)) !== stableStringify(withoutHold(stored))) {
+      report.keptDevice.push(stored.id);
+    }
   }
   return report;
+}
+
+/**
+ * The log without its internal retainUntil. Restore stamps the later hold onto
+ * whichever copy wins, so a hold-only difference must not count as "kept".
+ */
+function withoutHold(log: ApplicationLog): Omit<ApplicationLog, "retainUntil"> {
+  const { retainUntil: _hold, ...rest } = log;
+  void _hold;
+  return rest;
 }
 
 /** Normalized logs currently stored, without the quarantine side effect of loadLogs. */

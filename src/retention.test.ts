@@ -23,6 +23,7 @@ import {
   mergeRestoredLogs,
   normalizeLog,
   restoreBannerText,
+  restoredKeptReport,
   upsertLog,
   restoreRecentSentence,
   saveLogs,
@@ -363,5 +364,48 @@ describe("retainUntil — the hold never gets shorter (#182)", () => {
     const backup = buildBackup();
     expect(JSON.parse(JSON.stringify(backup)).logs[0].retainUntil).toBe("2028-10-01");
     expect(normalizeLog({ ...log, retainUntil: "soon" })).toBeNull();
+  });
+});
+
+describe("restore summary ignores retainUntil", () => {
+  it("logs that differ only in retainUntil aren't counted; the later hold is kept", () => {
+    const base = makeLog({ id: "H", dateUsed: "2026-10-01", createdAt: "2026-10-01T12:00:00" });
+    const backupOf = (logs: unknown[]) => {
+      const parsed = parseBackup({
+        version: BACKUP_VERSION,
+        exportedAt: "2026-09-01T12:00:00.000Z",
+        logs: JSON.parse(JSON.stringify(logs)),
+        catalog: [],
+        people: [],
+        settings: { shopName: "Acme", shopTpclNumber: "1", shopTpclLetter: "" },
+      });
+      if (!parsed.ok) throw new Error(parsed.error);
+      return parsed.backup;
+    };
+    // Device later hold, backup none / an earlier one; and the reverse.
+    const cases: [string | undefined, string | undefined][] = [
+      ["2029-03-01", undefined],
+      ["2029-03-01", "2028-12-01"],
+      [undefined, "2029-03-01"],
+    ];
+    for (const [deviceHold, backupHold] of cases) {
+      localStorage.clear();
+      expect(saveLogs([{ ...base, ...(deviceHold ? { retainUntil: deviceHold } : {}) }], { allowRetainedRemoval: true })).toBe(true);
+      const backup = backupOf([{ ...base, ...(backupHold ? { retainUntil: backupHold } : {}) }]);
+      const res = applyBackup(backup);
+      if (!res.ok) throw new Error(res.message);
+      const stored = loadLogs();
+      expect(stored.map((l) => l.id)).toEqual(["H"]);
+      expect(stored[0].retainUntil).toBe("2029-03-01");
+      const fromStored = restoredKeptReport(backup.logs, stored);
+      for (const report of [res.history, fromStored]) {
+        expect(report?.keptDevice ?? []).toEqual([]);
+        expect(report?.keptAbsent ?? []).toEqual([]);
+        expect(report?.keptRecent ?? []).toEqual([]);
+        expect(restoreBannerText(backup, report)).toBe(
+          "Restored backup (v" + BACKUP_VERSION + ") from 2026-09-01T12:00:00.000Z. Device data replaced.",
+        );
+      }
+    }
   });
 });
