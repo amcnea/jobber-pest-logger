@@ -595,8 +595,14 @@ describe("#220: join and legacy PIN setup on a doc with no logs field", () => {
 const DAY = 86400000;
 const ymd = (ms) => new Date(ms).toISOString().slice(0, 10);
 const minusYears = (s, n) => `${Number(s.slice(0, 4)) - n}${s.slice(4)}`;
-const LAST_RELEASED = ymd(Date.now() - 1.5 * DAY);
-const FIRST_HELD = ymd(Date.now() - 1.5 * DAY + DAY);
+// Release times fall at 12:00 UTC, and each case sits as far from its cutoff as now is
+// from 12:00 UTC. Within 10 minutes of it, wait until 10 minutes past (a run takes seconds).
+const GUARD = 10 * 60000;
+const sinceNoon = (Date.now() % DAY) - DAY / 2;
+if (Math.abs(sinceNoon) < GUARD) await new Promise((resolve) => setTimeout(resolve, GUARD - sinceNoon));
+const NOW = Date.now();
+const LAST_RELEASED = ymd(NOW - 1.5 * DAY);
+const FIRST_HELD = ymd(NOW - 0.5 * DAY);
 
 describe("#221: removing a log under its 2-year hold", () => {
   const removeOnly = async (log) => {
