@@ -20,7 +20,17 @@ interface Props {
   /** True when opening an existing saved log (same id; upsert in place). */
   isEditing?: boolean;
   onSave: (log: ApplicationLog) => boolean;
+  /**
+   * Office, reviewed log: save as a correction instead of an in-place edit. `onSubmit`
+   * gets the changed log, a People id and the reason; returns an error message or null.
+   */
+  correction?: {
+    onSubmit: (log: ApplicationLog, changedBy: string, reason: string) => string | null;
+  };
 }
+
+export const CORRECTION_HINT =
+  "This log is reviewed. Saving records a correction; original values kept in change history.";
 
 const ROLE_TITLE: Record<PersonnelRole, string> = {
   applying: "Applying",
@@ -35,7 +45,11 @@ export function NewLogForm({
   initialDraft = null,
   isEditing = false,
   onSave,
+  correction,
 }: Props) {
+  const [changedBy, setChangedBy] = useState("");
+  const [reason, setReason] = useState("");
+  const [correctionError, setCorrectionError] = useState<string | null>(null);
   const [log, setLog] = useState<ApplicationLog>(() => initialDraft ?? emptyLog(settings));
   const [errors, setErrors] = useState<FieldErrors>({});
   const [picker, setPicker] = useState("");
@@ -97,6 +111,19 @@ export function NewLogForm({
     const nextErrors = validateLog(log);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
+    if (correction) {
+      // Same checks applyCorrection makes; the form catches them before the save call.
+      if (!people.some((p) => p.id === changedBy && p.name.trim())) {
+        setCorrectionError("Choose who made the change from People.");
+        return;
+      }
+      if (!reason.trim()) {
+        setCorrectionError("Enter a reason for the change.");
+        return;
+      }
+      setCorrectionError(correction.onSubmit(log, changedBy, reason));
+      return;
+    }
     const savedOk = onSave(withSaveFlags(log, { preserveCreatedAt: isEditing }));
     if (!savedOk) return;
     // App navigates to History on success and unmounts this form.
@@ -105,9 +132,11 @@ export function NewLogForm({
   return (
     <form onSubmit={submit} noValidate>
       <section className="section">
-        <h2>{isEditing ? "Edit application log" : "New application log"}</h2>
+        <h2>{correction ? "Correct this log" : isEditing ? "Edit application log" : "New application log"}</h2>
         <p className="hint">
-          {isEditing
+          {correction
+            ? CORRECTION_HINT
+            : isEditing
             ? "Updating a saved log in place (same id). Save returns you to History."
             : "Fill the stop, then save. Records stay on this device until you export or back up."}
         </p>
@@ -652,10 +681,49 @@ export function NewLogForm({
         )}
       </section>
 
+      {correction && (
+        <section className="section">
+          <h2>Change history</h2>
+          <label className="field">
+            Changed by <span className="req">*</span>
+            <select
+              value={changedBy}
+              onChange={(e) => {
+                setCorrectionError(null);
+                setChangedBy(e.target.value);
+              }}
+            >
+              <option value="">Choose…</option>
+              {people.filter((p) => p.name.trim()).map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            Reason <span className="req">*</span>
+            <textarea
+              rows={2}
+              value={reason}
+              onChange={(e) => {
+                setCorrectionError(null);
+                setReason(e.target.value);
+              }}
+            />
+          </label>
+          {correctionError && (
+            <p className="error" role="alert">
+              {correctionError}
+            </p>
+          )}
+        </section>
+      )}
+
       <p className="hint">Records are kept 2 years. This app does not run a retention engine.</p>
       <div className="sticky-save">
         <button className="btn btn-primary" type="submit">
-          {isEditing ? "Save changes" : "Save application log"}
+          {correction ? "Save correction" : isEditing ? "Save changes" : "Save application log"}
         </button>
       </div>
     </form>

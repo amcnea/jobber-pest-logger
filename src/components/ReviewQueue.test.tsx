@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeApplied, makeLog, makeShopProduct } from "../test/fixtures";
@@ -179,5 +179,21 @@ describe("ReviewQueue — clock refresh (#160)", () => {
     expect(vi.getTimerCount()).toBe(1);
     unmount();
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("ReviewQueue — Correct this log", () => {
+  it("offers Correct this log on a reviewed log when office can correct", () => {
+    const locked = makeLog({
+      id: "r2",
+      serviceAddress: "",
+      reviewedAt: "2026-10-01T09:00:00-05:00",
+      reviewedBy: "Ana Office",
+    });
+    const onCorrect = vi.fn();
+    render(<ReviewQueue logs={[locked]} catalog={CATALOG} canReview onEdit={() => {}} onCorrect={onCorrect} now={NOW} />);
+    const item = screen.getByLabelText("Review r2");
+    fireEvent.click(within(item).getByRole("button", { name: "Correct this log" }));
+    expect(onCorrect).toHaveBeenCalledWith(locked);
   });
 });
