@@ -463,6 +463,126 @@ describe("#214: paired replacement of a reviewed log", () => {
 
 // ---- Bundle #218: a `logIds` field is ignored -----------------------------------------
 
+// ---- Bundle #219: deletions must not shift the pairing ---------------------------------
+// Grow writes (same size or bigger) may not delete; shrink writes may not add. A forged
+// second copy of R next to its correction has no pair either way.
+
+describe("#219: a forged copy of R next to its correction", () => {
+  const forged = (r) => ({ ...r, serviceAddress: "Forged" });
+
+  it("forged duplicate behind R is denied (plain, with an inserted log, with a deleted unreviewed log)", async () => {
+    const r = reviewed(makeLog("R"));
+    const fixed = correct(r, { serviceAddress: "9 Elm St" });
+    for (const [stored, next] of [
+      [[r], [fixed, forged(r)]],
+      [[r], [makeLog("N"), fixed, forged(r)]],
+      [[r, makeLog("U")], [fixed, forged(r), makeLog("U")]],
+      [[r, makeLog("U")], [fixed, forged(r)]],
+      [[r, makeLog("U")], [makeLog("N"), fixed, forged(r)]],
+      [[makeLog("U"), r, makeLog("V")], [fixed, forged(r)]],
+      [[makeLog("U"), r, makeLog("V")], [makeLog("N"), makeLog("M"), fixed, forged(r)]],
+    ]) {
+      for (const [, uid] of WRITERS) {
+        await seed(stored);
+        await assertFails(put(uid, next));
+      }
+    }
+  });
+
+  it("forged duplicate in front of a corrected R is denied", async () => {
+    const r = reviewed(makeLog("R"));
+    const fixed = correct(r, { serviceAddress: "9 Elm St" });
+    await seed([r, makeLog("U")]);
+    await assertFails(put(TECH, [forged(r), fixed, makeLog("U")]));
+    await seed([r, makeLog("U")]);
+    await assertFails(put(TECH, [makeLog("N"), forged(r), fixed, makeLog("U")]));
+  });
+
+  it("a correction while an unreviewed log is deleted passes ([R, U] -> [correct(R)])", async () => {
+    const r = reviewed(makeLog("R"));
+    const fixed = correct(r, { serviceAddress: "9 Elm St" });
+    for (const [, uid] of WRITERS) {
+      await seed([r, makeLog("U")]);
+      await assertSucceeds(put(uid, [fixed]));
+      await seed([makeLog("U"), r]);
+      await assertSucceeds(put(uid, [fixed]));
+    }
+  });
+
+  it("deleting an unreviewed log next to an unchanged R passes", async () => {
+    const r = reviewed(makeLog("R"));
+    for (const [, uid] of WRITERS) {
+      await seed([r, makeLog("U")]);
+      await assertSucceeds(put(uid, [r]));
+      await seed([makeLog("U"), r]);
+      await assertSucceeds(put(uid, [r]));
+      await seed([makeLog("U"), r, makeLog("V")]);
+      await assertSucceeds(put(uid, [r, makeLog("V")]));
+    }
+  });
+
+  it("#211 cleanup: removing an unreviewed duplicate or an exact copy next to R passes", async () => {
+    const r = reviewed(makeLog("R"));
+    const u = makeLog("U");
+    await seed([u, { ...u, targetPestOrPurpose: "Ants" }, r]);
+    await assertSucceeds(put(TECH, [u, r]));
+    await seed([u, u, r]);
+    await assertSucceeds(put(TECH, [u, r]));
+    await seed([r, u, r]);
+    await assertSucceeds(put(TECH, [u, r]));
+  });
+
+  it("deleting R while an unreviewed log is edited, or overwriting R while one is deleted, is denied", async () => {
+    const r = reviewed(makeLog("R"));
+    await seed([r, makeLog("U")]);
+    await assertFails(put(TECH, [{ ...makeLog("U"), targetPestOrPurpose: "Ants" }]));
+    await seed([r, makeLog("U")]);
+    await assertFails(put(TECH, [forged(r)]));
+  });
+});
+
+// ---- #220: a shop doc with no logs field ----------------------------------------------
+
+describe("#220: join and legacy PIN setup on a doc with no logs field", () => {
+  async function seedRaw(data) {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "shops", SHOP), data);
+    });
+  }
+
+  it("join-self membership update passes", async () => {
+    const { logs, ...noLogs } = shopDoc([]);
+    await seedRaw(noLogs);
+    const db = env.authenticatedContext("uid-new").firestore();
+    await assertSucceeds(
+      updateDoc(doc(db, "shops", SHOP), {
+        members: { [OFFICE]: "office", [TECH]: "tech", "uid-new": "tech" },
+        updatedAt: "2026-10-17T12:10:00.000Z",
+      }),
+    );
+  });
+
+  it("legacy PIN bootstrap passes", async () => {
+    const { logs, pinsConfigured, ownerUid, members, ...legacy } = shopDoc([]);
+    await seedRaw({ ...legacy, members: {} });
+    const db = env.authenticatedContext(OFFICE).firestore();
+    await assertSucceeds(
+      updateDoc(doc(db, "shops", SHOP), {
+        auth: { officePinHash: "h1", techPinHash: "h2" },
+        ownerUid: OFFICE,
+        members: { [OFFICE]: "office" },
+        updatedAt: "2026-10-17T12:10:00.000Z",
+      }),
+    );
+  });
+
+  it("adding logs to such a doc still goes through the lock", async () => {
+    const { logs, ...noLogs } = shopDoc([]);
+    await seedRaw(noLogs);
+    await assertSucceeds(put(TECH, [makeLog("N")]));
+  });
+});
+
 describe("a stray logIds field neither blocks nor is required", () => {
   it("normal saves without logIds, and with a stale one, pass on a doc that carries it", async () => {
     const r = reviewed(makeLog("R"));
@@ -497,14 +617,16 @@ describe("a stray logIds field neither blocks nor is required", () => {
 });
 
 describe("per-write limits (measured)", () => {
-  it("35 unreviewed edits, 3 corrections and 4 re-sends in one write pass on a 100-log doc", async () => {
+  it("29 unreviewed edits, 3 corrections, 5 re-sends and 32 unreviewed deletions in one write pass on a 100-log doc", async () => {
     const rec = { reuploadedAt: "2026-10-02T08:00:00-05:00", reuploadedBy: "Ana Office", reason: "x" };
     const base = Array.from({ length: 100 }, (_, i) => (i < 10 ? reviewed(makeLog(`L${i}`, { reuploads: [rec] })) : makeLog(`L${i}`)));
     await seed(base);
-    await assertSucceeds(put(TECH, base.map((l, i) => (i >= 10 && i < 45 ? { ...l, targetPestOrPurpose: "Roaches" } : l))));
+    await assertSucceeds(put(TECH, base.map((l, i) => (i >= 10 && i < 39 ? { ...l, targetPestOrPurpose: "Roaches" } : l))));
     await seed(base);
     await assertSucceeds(put(TECH, base.map((l, i) => (i < 3 ? correct(l, { serviceAddress: "9 Elm St" }) : l))));
     await seed(base);
-    await assertSucceeds(put(TECH, base.map((l, i) => (i < 4 ? { ...l, reuploads: [rec, rec] } : l))));
+    await assertSucceeds(put(TECH, base.map((l, i) => (i < 5 ? { ...l, reuploads: [rec, rec] } : l))));
+    await seed(base);
+    await assertSucceeds(put(TECH, base.filter((l, i) => !(i >= 10 && i < 42))));
   });
 });
