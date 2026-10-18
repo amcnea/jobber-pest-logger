@@ -7,7 +7,13 @@ import {
   provenanceSummary,
   type ExportProvenance,
 } from "./exportProvenance";
-import { changeHistoryPdfLines, changeStatusLabel } from "./correctionExport";
+import {
+  ANOTHER_REVIEWED_VERSION_PDF_MARK,
+  changeHistoryPdfLines,
+  changeStatusLabel,
+  type ExportFlags,
+  hasAnotherReviewedVersion,
+} from "./correctionExport";
 import type { ApplicationLog } from "./types";
 
 function person(log: ApplicationLog, role: ApplicationLog["personnel"][number]["role"]) {
@@ -151,6 +157,7 @@ export function downloadPdf(
   logs: ApplicationLog[],
   shopName?: string,
   provenance?: ExportProvenance,
+  flags?: ExportFlags,
 ): void {
   const doc = new jsPDF({ unit: "mm", format: "letter" });
   // Split provenance + disclaimer once; reuse lines + band height for every page.
@@ -215,7 +222,9 @@ export function downloadPdf(
     // Empty for logs never corrected or re-uploaded, so their title is unchanged.
     const status = changeStatusLabel(log);
     const correctedMark = status ? `  [${status}]` : "";
-    const title = `Log ${i + 1} — ${dateUsed}${exampleMark}${correctedMark}`;
+    // #212: empty unless the shop data holds another reviewed copy of this log.
+    const copiesMark = hasAnotherReviewedVersion(log, flags) ? `  ${ANOTHER_REVIEWED_VERSION_PDF_MARK}` : "";
+    const title = `Log ${i + 1} — ${dateUsed}${exampleMark}${correctedMark}${copiesMark}`;
     ensureSpace(wrappedHeight(doc, title, MAX_WIDTH, 5.5) + 4);
     y = wrap(doc, title, MARGIN, y, MAX_WIDTH, 5.5);
     y += 3;

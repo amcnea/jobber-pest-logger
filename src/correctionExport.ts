@@ -24,6 +24,24 @@ export function hasChangeHistory(log: ApplicationLog): boolean {
   return isCorrectedLog(log) || isReuploadedLog(log);
 }
 
+/**
+ * #212: the shop data holds another reviewed copy of this log that doesn't match
+ * (src/shop/reviewedCopies.ts). Lawgical wording, word for word.
+ */
+export const ANOTHER_REVIEWED_VERSION_CSV =
+  "Another reviewed version of this log exists in the shop data. It is kept in the backup JSON.";
+export const ANOTHER_REVIEWED_VERSION_PDF_MARK = "[Another reviewed version exists]";
+
+/** Export options. Absent or empty: output exactly as before. */
+export interface ExportFlags {
+  /** Log ids flagged for this shop by the reviewed-copies record (#212). */
+  anotherReviewedVersion?: ReadonlySet<string>;
+}
+
+export function hasAnotherReviewedVersion(log: ApplicationLog, flags?: ExportFlags): boolean {
+  return flags?.anotherReviewedVersion?.has(log.id) ?? false;
+}
+
 /** "Corrected (rev N)" or "" for uncorrected logs. */
 export function correctedLabel(log: ApplicationLog): string {
   if (!isCorrectedLog(log)) return "";
@@ -208,15 +226,18 @@ function historyItems(log: ApplicationLog): HistoryItem[] {
     .map(({ item }) => item);
 }
 
-/** One CSV cell: items oldest first, separated by " | "; changes within an entry by "; ". */
-export function changeHistoryCell(log: ApplicationLog): string {
-  return historyItems(log)
-    .map((item) => {
-      if (item.kind === "reupload") return reuploadHeading(item.record);
-      const changes = item.entry.changes.map((c) => changeText(c, "→", item.after, item.before)).join("; ");
-      return changes ? `${entryHeading(item.entry)} · ${changes}` : entryHeading(item.entry);
-    })
-    .join(" | ");
+/**
+ * One CSV cell: items oldest first, separated by " | "; changes within an entry by "; ".
+ * A #212 flagged log gets ANOTHER_REVIEWED_VERSION_CSV as the last item.
+ */
+export function changeHistoryCell(log: ApplicationLog, flags?: ExportFlags): string {
+  const items = historyItems(log).map((item) => {
+    if (item.kind === "reupload") return reuploadHeading(item.record);
+    const changes = item.entry.changes.map((c) => changeText(c, "→", item.after, item.before)).join("; ");
+    return changes ? `${entryHeading(item.entry)} · ${changes}` : entryHeading(item.entry);
+  });
+  if (hasAnotherReviewedVersion(log, flags)) items.push(ANOTHER_REVIEWED_VERSION_CSV);
+  return items.join(" | ");
 }
 
 /** PDF lines for a log with change history (heading + lines per item); [] otherwise. */

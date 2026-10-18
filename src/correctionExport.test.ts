@@ -278,3 +278,54 @@ describe("re-upload record in exports", () => {
     }
   });
 });
+
+describe("#212: another reviewed version in exports", () => {
+  const CSV_LINE = "Another reviewed version of this log exists in the shop data. It is kept in the backup JSON.";
+  const PDF_MARK = "[Another reviewed version exists]";
+  const flag = (...ids: string[]) => ({ anotherReviewedVersion: new Set(ids) });
+  const pdfTexts = () => FakeJsPDF.instances.at(-1)!.texts.map((t) => (Array.isArray(t.text) ? t.text.join("") : t.text));
+
+  it("unflagged exports stay byte-identical to main (no flags, empty flags, flags for logs not exported)", () => {
+    for (const flags of [undefined, flag(), flag("not-here")]) {
+      expect(logsToCsv(uncorrectedExportLogs(), flags)).toBe(GOLDEN_CSV);
+      FakeJsPDF.instances = [];
+      downloadPdf(uncorrectedExportLogs(), "Acme Pest", PROVENANCE, flags);
+      expect(JSON.parse(JSON.stringify(pdfRecord(FakeJsPDF.instances[0])))).toEqual(GOLDEN_PDF);
+    }
+  });
+
+  it("CSV: a flagged log gets the line in the change-history column; unflagged rows keep main's cells", () => {
+    const logs = uncorrectedExportLogs();
+    const flaggedId = logs[1].id;
+    const [header, ...body] = rows(logsToCsv(logs, flag(flaggedId)));
+    const [goldenHeader, ...goldenBody] = rows(GOLDEN_CSV);
+    expect(header).toBe(`${goldenHeader},${CORRECTION_CSV_COLUMNS.join(",")}`);
+    goldenBody.forEach((row, i) => expect(body[i]).toBe(i === 1 ? `${row},,${CSV_LINE}` : `${row},,`));
+  });
+
+  it("CSV: joined after re-upload / correction entries with ' | '", () => {
+    const res = buildReupload(corrected(), { reuploadedBy: "p-ana", reason: "Shop copy was deleted", people: PEOPLE, now: NOW });
+    if (!res.ok) throw new Error(res.error);
+    const log = res.log;
+    expect(changeHistoryCell(log, flag(log.id))).toBe(`${changeHistoryCell(log)} | ${CSV_LINE}`);
+    expect(changeHistoryCell(log, flag("other"))).toBe(changeHistoryCell(log));
+    const last = rows(logsToCsv([log], flag(log.id))).at(-1)!;
+    expect(last.endsWith(` | ${CSV_LINE}`)).toBe(true);
+  });
+
+  it("PDF: flagged log title gets the suffix after any status mark; others don't", () => {
+    const logs = uncorrectedExportLogs();
+    downloadPdf([...logs, corrected()], "Acme Pest", PROVENANCE, flag(logs[0].id, "c1"));
+    const flat = pdfTexts();
+    expect(flat.filter((t) => t.includes(PDF_MARK))).toEqual([
+      `Log 1 — ${logs[0].dateUsed.trim() || "(no date)"}  ${PDF_MARK}`,
+      `Log 6 — 2026-09-09  [Corrected (rev 1)]  ${PDF_MARK}`,
+    ]);
+    expect(flat.find((t) => t.startsWith("Log 2 — "))).not.toContain(PDF_MARK);
+  });
+
+  it("wording avoids banned terms", () => {
+    expect(CSV_LINE).not.toMatch(BANNED);
+    expect(PDF_MARK).not.toMatch(BANNED);
+  });
+});

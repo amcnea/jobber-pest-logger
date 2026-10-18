@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { exportBlockedByExamples, productEpaCaption } from "../catalog";
+import type { ExportFlags } from "../correctionExport";
 import { downloadCsv } from "../csv";
 import { filterLogsByDateUsed, monthRangeLocal } from "../dates";
 import { LAWGICAL_DISCLAIMER } from "../disclaimer";
@@ -14,6 +15,7 @@ import {
   resolveShopStore,
   sharedExportPullHint,
 } from "../shop";
+import { loadReviewedCopyConflicts } from "../shop/reviewedCopies";
 import { backupNagMessage, formatLastBackupLabel } from "../storage";
 import type { ApplicationLog, Screen, ShopProduct, ShopSettings } from "../types";
 
@@ -121,6 +123,7 @@ export function Export({
     logs: ApplicationLog[];
     shopName: string;
     provenance?: ExportProvenance;
+    flags?: ExportFlags;
   } | null> {
     setPullError(null);
     setGateMsg(null);
@@ -174,6 +177,11 @@ export function Export({
         ok: true,
         logs: rangeLogs,
         shopName: sections.settings.shopName.trim(),
+        // #212: this shop's reviewed-copies record (refreshed by the shared pull); none for local-only.
+        flags:
+          pulled.kind === "local"
+            ? undefined
+            : { anotherReviewedVersion: new Set(Object.keys(loadReviewedCopyConflicts(pulled.shopId))) },
         provenance: buildExportProvenance({
           kind: pulled.kind,
           shopId: pulled.kind === "local" ? null : pulled.shopId,
@@ -195,7 +203,7 @@ export function Export({
       setGateMsg("No logs in range to export.");
       return;
     }
-    downloadCsv(prepared.logs, prepared.shopName || undefined, prepared.provenance);
+    downloadCsv(prepared.logs, prepared.shopName || undefined, prepared.provenance, prepared.flags);
     setLastExport(prepared.provenance ?? null);
   }
 
@@ -209,7 +217,7 @@ export function Export({
     }
     try {
       const mod = await import("../pdf");
-      mod.downloadPdf(prepared.logs, prepared.shopName || undefined, prepared.provenance);
+      mod.downloadPdf(prepared.logs, prepared.shopName || undefined, prepared.provenance, prepared.flags);
       setLastExport(prepared.provenance ?? null);
     } catch (err) {
       console.error("jobber-pest-logger: PDF export failed", err);

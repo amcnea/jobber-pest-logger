@@ -582,3 +582,35 @@ describe("Export: printable log list", () => {
     expect(document.querySelector(".print-logs > p")).toHaveTextContent(/^Acme Pest$/);
   });
 });
+
+describe("Export: #212 reviewed-copies flag reaches the exports (current shop only)", () => {
+  const KEY = "jobber-pest-logger:reviewed-copies:v1";
+  beforeEach(() => {
+    localStorage.setItem(KEY, JSON.stringify({ "SHOP-1": { sep1: "revision" }, OTHER: { sep20: "other" } }));
+  });
+  afterEach(() => localStorage.removeItem(KEY));
+
+  it("shared pull: CSV and PDF get this shop's flagged ids, not another shop's", async () => {
+    sharedPullOf({ logs: [SEP1, SEP20] });
+    const { user } = setup();
+    await user.click(csvBtn());
+    const csvFlags = downloadCsv.mock.calls[0][3] as { anotherReviewedVersion: Set<string> };
+    expect([...csvFlags.anotherReviewedVersion]).toEqual(["sep1"]);
+    await user.click(pdfBtn());
+    await vi.waitFor(() => expect(downloadPdf).toHaveBeenCalledTimes(1));
+    expect([...(downloadPdf.mock.calls[0][3] as { anotherReviewedVersion: Set<string> }).anotherReviewedVersion]).toEqual(["sep1"]);
+  });
+
+  it("shared fallback to local data still uses this shop's record", async () => {
+    sharedPullOf({ logs: [SEP1] }, "shared-fallback-local");
+    const { user } = setup();
+    await user.click(csvBtn());
+    expect([...(downloadCsv.mock.calls[0][3] as { anotherReviewedVersion: Set<string> }).anotherReviewedVersion]).toEqual(["sep1"]);
+  });
+
+  it("local-only export passes no flags", async () => {
+    const { user } = setup();
+    await user.click(csvBtn());
+    expect(downloadCsv.mock.calls[0][3]).toBeUndefined();
+  });
+});

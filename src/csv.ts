@@ -4,7 +4,14 @@ import {
   shopSlugForFilename,
   type ExportProvenance,
 } from "./exportProvenance";
-import { changeHistoryCell, changeStatusLabel, CORRECTION_CSV_COLUMNS, hasChangeHistory } from "./correctionExport";
+import {
+  changeHistoryCell,
+  changeStatusLabel,
+  CORRECTION_CSV_COLUMNS,
+  type ExportFlags,
+  hasAnotherReviewedVersion,
+  hasChangeHistory,
+} from "./correctionExport";
 import type { ApplicationLog } from "./types";
 
 /** Texas TDA CSV columns matching 4 TAC § 7.144(a)/(b). Optional Jobber link is last and labeled not-TDA. */
@@ -87,10 +94,11 @@ function yesBlank(flag: boolean): string {
   return flag ? "yes" : "";
 }
 
-export function logsToCsv(logs: ApplicationLog[]): string {
-  // Change-history columns are appended only when a corrected or re-uploaded log is in
-  // the export, so exports with neither are byte-identical to the pre-correction format.
-  const withCorrections = logs.some(hasChangeHistory);
+export function logsToCsv(logs: ApplicationLog[], flags?: ExportFlags): string {
+  // Change-history columns are appended only when a corrected, re-uploaded or #212
+  // flagged log is in the export, so exports with none are byte-identical to the
+  // pre-correction format.
+  const withCorrections = logs.some((l) => hasChangeHistory(l) || hasAnotherReviewedVersion(l, flags));
   const columns: readonly string[] = withCorrections
     ? [...TDA_CSV_COLUMNS, ...CORRECTION_CSV_COLUMNS]
     : TDA_CSV_COLUMNS;
@@ -160,7 +168,7 @@ export function logsToCsv(logs: ApplicationLog[]): string {
       log.jobberJobNumber,
       log.jobberAddress,
     ];
-    if (withCorrections) cells.push(changeStatusLabel(log), changeHistoryCell(log));
+    if (withCorrections) cells.push(changeStatusLabel(log), changeHistoryCell(log, flags));
     return cells.map(csvEscape).join(",");
   });
   return [header, ...rows].join("\r\n") + "\r\n";
@@ -175,8 +183,9 @@ export function downloadCsv(
   logs: ApplicationLog[],
   shopName?: string,
   provenance?: ExportProvenance,
+  flags?: ExportFlags,
 ): void {
-  const body = logsToCsv(logs);
+  const body = logsToCsv(logs, flags);
   const blob = new Blob([body], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
