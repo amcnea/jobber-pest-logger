@@ -91,7 +91,11 @@ export interface CsvPreviewRow {
   duplicate: string | null;
   /** EPA reg # (as given) passes the format check. False when blank. */
   epaFormatOk: boolean;
-  /** Row can be added at all (has a name). */
+  /**
+   * Row can be added with the file's own name (it has one). A blank-name row with a
+   * starterMatch can still be added once the office ticks "Use starter name" (see
+   * csvRowAddable).
+   */
   addable: boolean;
   /** Included in the import unless the user changes it. */
   includeByDefault: boolean;
@@ -214,6 +218,35 @@ export function buildCsvImportPreview(result: CsvImportResult, catalog: ShopProd
         ? CSV_UNUSED_COLUMN_NOTES_MAX + 1
         : result.ignoredColumns.length,
   };
+}
+
+/**
+ * True when this row can be added: it has a name in the file, or the office ticked
+ * "Use starter name" on a row with a starter reg # match (blank-name rescue).
+ */
+export function csvRowAddable(
+  row: Pick<CsvPreviewRow, "addable" | "starterMatch">,
+  useStarterName: boolean,
+): boolean {
+  return row.addable || (useStarterName && row.starterMatch !== null);
+}
+
+/**
+ * Label-confirm note, shown when a shop row's name is the same as the starter list's
+ * name for its reg #. Pending Lawgical: keep this the only copy of the text.
+ */
+export const STARTER_NAME_LABEL_CONFIRM_NOTE =
+  "Same name as the starter list for this reg #. Check it against the label.";
+
+/**
+ * True when this shop row's name equals (normalizeImportName) the name of the starter
+ * row with the same full reg # (findStarterRegMatch: normalizeImportEpa, exact full
+ * number). Worked out at confirm time from the row itself; nothing is stored.
+ */
+export function shopNameMatchesStarter(product: ShopProduct): boolean {
+  if (!product.name.trim()) return false;
+  const starter = findStarterRegMatch(product);
+  return starter !== null && normalizeImportName(starter.name) === normalizeImportName(product.name);
 }
 
 /**
