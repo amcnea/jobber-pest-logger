@@ -33,6 +33,8 @@ import { highlightSegments } from "../starterCatalog/highlight";
 import {
   CSV_FIELD_LABELS,
   CSV_IMPORT_MAX_BYTES,
+  CSV_TEMPLATE_FILENAME,
+  catalogCsvTemplate,
   csvTooLargeMessage,
   parseCatalogCsv,
 } from "../starterCatalog/csvImport";
@@ -78,10 +80,19 @@ function csvPreviewSummary(preview: CsvImportPreview, include: boolean[]): strin
   const parts = [plural(preview.rows.length, "row read", "rows read"), `${toAdd} to add`];
   if (dupes > 0) parts.push(plural(dupes, "possible duplicate", "possible duplicates"));
   if (needLook > 0) parts.push(`${needLook} ${needLook === 1 ? "needs" : "need"} a look`);
-  if (preview.fileProblems.length > 0) {
-    parts.push(plural(preview.fileProblems.length, "file note", "file notes"));
+  if (preview.columns.length > 0) {
+    parts.push(`Columns used: ${preview.columns.map((c) => c.label).join(", ")}`);
   }
-  return `${parts.join(". ")}.`;
+  if (preview.unusedColumns > 0) {
+    parts.push(plural(preview.unusedColumns, "column not used", "columns not used"));
+  }
+  // Unused-column notes are counted above; count the other file notes here.
+  const otherNotes = preview.fileProblems.length - preview.unusedColumnNotes;
+  if (otherNotes > 0) {
+    parts.push(plural(otherNotes, "file note", "file notes"));
+  }
+  // Some labels already end in "." (e.g. "EPA Reg. No."), so don't double it.
+  return parts.map((part) => (part.endsWith(".") ? part : `${part}.`)).join(" ");
 }
 
 function toDraft(product: ShopProduct): ShopProduct {
@@ -494,7 +505,10 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
     const token = ++csvReadTokenRef.current;
     if (!file) return;
     if (file.size > CSV_IMPORT_MAX_BYTES) {
-      openCsvPreview({ rows: [], fileProblems: [csvTooLargeMessage()] }, file.name);
+      openCsvPreview(
+        { rows: [], fileProblems: [csvTooLargeMessage()], columns: [], unusedColumns: 0, unusedColumnNotes: 0 },
+        file.name,
+      );
       return;
     }
     let text: string;
@@ -507,6 +521,31 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
     }
     if (token !== csvReadTokenRef.current) return;
     openCsvPreview(buildCsvImportPreview(parseCatalogCsv(text), catalog), file.name);
+  }
+
+  /** Blank template: header row only, made on this device. No product rows or data. */
+  function downloadCsvTemplate() {
+    if (typeof URL.createObjectURL !== "function") {
+      setStarterAnnouncement("Needs a look: could not make the template on this device.");
+      return;
+    }
+    let url: string;
+    try {
+      url = URL.createObjectURL(new Blob([catalogCsvTemplate()], { type: "text/csv;charset=utf-8" }));
+    } catch {
+      setStarterAnnouncement("Needs a look: could not make the template on this device.");
+      return;
+    }
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = CSV_TEMPLATE_FILENAME;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // Give the browser a moment to start the download before freeing the URL.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setStarterAnnouncement(`Blank template download started: ${CSV_TEMPLATE_FILENAME}.`);
   }
 
   function addCsvRowsToCatalog() {
@@ -1035,6 +1074,21 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
               />
             </label>
           )}
+          {!csvPreview && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              aria-describedby={`${csvIdPrefix}-csv-template-hint`}
+              onClick={downloadCsvTemplate}
+            >
+              Download a blank CSV template
+            </button>
+          )}
+          {!csvPreview && (
+            <p className="hint" id={`${csvIdPrefix}-csv-template-hint`}>
+              Header row only, no products. Saved as {CSV_TEMPLATE_FILENAME}.
+            </p>
+          )}
           {csvPreview && (
             <div>
               <h4 ref={csvPreviewHeadingRef} tabIndex={-1}>
@@ -1043,6 +1097,15 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
               <p className="hint" id={csvSummaryId}>
                 {csvPreviewSummary(csvPreview, csvInclude.map((v, i) => v && !csvAdded[i]))}
               </p>
+              {csvPreview.columns.length > 0 && (
+                <ul aria-label="Columns used">
+                  {csvPreview.columns.map((col, i) => (
+                    <li key={i}>
+                      Column &quot;{col.header}&quot; → {col.label}
+                    </li>
+                  ))}
+                </ul>
+              )}
               {csvPreview.fileProblems.length > 0 && (
                 <ul aria-label="File notes">
                   {csvPreview.fileProblems.map((msg, i) => (
