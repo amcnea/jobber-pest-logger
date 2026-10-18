@@ -62,7 +62,7 @@ function time(value: string | undefined): number {
   return Number.isNaN(t) ? -Infinity : t;
 }
 
-function revisionOf(log: ApplicationLog): number {
+export function revisionOf(log: ApplicationLog): number {
   return typeof log.revision === "number" ? log.revision : (log.history?.length ?? 0);
 }
 

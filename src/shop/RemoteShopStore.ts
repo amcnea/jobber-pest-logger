@@ -8,6 +8,7 @@
 import { parseShopSections } from "../storage";
 import { dedupeLogsById, planDedupedWrite, setAsideDuplicateCopies } from "./dedupeLogs";
 import { ensureAnonymousAuth } from "./firebaseAuth";
+import { recordReviewedCopyConflicts } from "./reviewedCopies";
 import { getFirebaseApp } from "./firebaseApp";
 import type { FirebaseClientConfig } from "./firebaseConfig";
 import { isShopRole, parseShopPinAuth } from "./pinCrypto";
@@ -275,6 +276,7 @@ export class RemoteShopStore implements ShopStore {
   private dedupeStored(doc: ShopDocument): ShopDocument {
     const { logs, losers } = dedupeLogsById(doc.logs);
     const setAsideOk = setAsideDuplicateCopies(this.shopId, losers);
+    recordReviewedCopyConflicts(this.shopId, doc.logs); // #212 office note
     this.stored = { doc, setAsideOk };
     return losers.length ? { ...doc, logs } : doc;
   }

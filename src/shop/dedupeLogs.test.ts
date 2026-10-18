@@ -338,3 +338,88 @@ describe("RemoteShopStore write path", () => {
     expect(fake.writes).toEqual([]);
   });
 });
+
+const {
+  findReviewedCopyConflicts,
+  loadReviewedCopyConflicts,
+  reviewedCopiesNote,
+  reviewedCopiesNoteFor,
+  REVIEWED_COPIES_KEY,
+} = await import("./reviewedCopies");
+
+describe("#212: reviewed copies that don't match (office note)", () => {
+  const REVISION_TEXT =
+    "Needs a look: the shop data has two reviewed versions of this log that don't match. This app shows the higher revision. The other is set aside and kept in the backup JSON.";
+  const OTHER_TEXT =
+    "Needs a look: the shop data has two reviewed versions of this log that don't match. This app shows the one picked by revision and review date. The other is set aside and kept in the backup JSON.";
+
+  it("texts are Lawgical's, word for word", () => {
+    expect(reviewedCopiesNote("revision")).toBe(REVISION_TEXT);
+    expect(reviewedCopiesNote("other")).toBe(OTHER_TEXT);
+  });
+
+  it("winner picked by revision → the 'higher revision' text", () => {
+    const v = versions();
+    expect(findReviewedCopyConflicts([v.reviewedRev0, v.reviewedRev1])).toEqual({ L1: "revision" });
+  });
+
+  it("winner picked by reviewedAt → the 'revision and review date' text", () => {
+    const v = versions();
+    expect(findReviewedCopyConflicts([v.reviewedEarly, v.reviewedLate])).toEqual({ L1: "other" });
+  });
+
+  it("winner picked by changedAt or array order → the 'revision and review date' text", () => {
+    const v = versions();
+    const stamp = (l: ApplicationLog) => ({ ...l, reviewedAt: v.reviewedRev0.reviewedAt, reviewedBy: v.reviewedRev0.reviewedBy });
+    expect(compareDuplicateCopies(stamp(v.rev1Late), stamp(v.rev1Early))).toBeGreaterThan(0); // decided by changedAt
+    expect(findReviewedCopyConflicts([stamp(v.rev1Early), stamp(v.rev1Late)])).toEqual({ L1: "other" });
+    const a = v.reviewedRev0;
+    const b = { ...v.reviewedRev0, serviceAddress: "Elsewhere" }; // same stamps: array order
+    expect(compareDuplicateCopies(a, b)).toBe(0);
+    expect(findReviewedCopyConflicts([a, b])).toEqual({ L1: "other" });
+  });
+
+  it("mixed: one copy lost on revision, another on review date → 'other'", () => {
+    const v = versions();
+    const lateRev1 = { ...v.reviewedRev1, reviewedAt: v.reviewedLate.reviewedAt };
+    expect(findReviewedCopyConflicts([v.reviewedRev0, lateRev1, v.reviewedRev1])).toEqual({ L1: "other" });
+  });
+
+  it("no note for exact copies, or when only one copy is reviewed", () => {
+    const v = versions();
+    expect(findReviewedCopyConflicts([v.reviewedRev0, clone(v.reviewedRev0)])).toEqual({});
+    expect(findReviewedCopyConflicts([v.reviewedRev0, v.rev2])).toEqual({});
+    expect(findReviewedCopyConflicts([v.rev1, v.rev2])).toEqual({});
+    expect(findReviewedCopyConflicts([v.reviewedRev0, makeLog({ id: "o" })])).toEqual({});
+  });
+
+  it("recorded on shared reads (per shop), survives a new store instance, clears once the duplicate is gone", async () => {
+    const v = versions();
+    fake.data = shopDoc([v.reviewedRev0, v.reviewedRev1, v.rev2]);
+    await new RemoteShopStore(CONFIG, SHOP).getShop();
+    expect(loadReviewedCopyConflicts(SHOP)).toEqual({ L1: "revision" });
+    expect(loadReviewedCopyConflicts()).toEqual({ L1: "revision" }); // current session shop
+    expect(reviewedCopiesNoteFor("L1")).toBe(REVISION_TEXT);
+    expect(reviewedCopiesNoteFor("other")).toBeNull();
+    expect(loadReviewedCopyConflicts("OTHERSHOP")).toEqual({});
+
+    // A write keeps the reviewed loser in the doc (#208): still flagged.
+    const store = new RemoteShopStore(CONFIG, SHOP);
+    await enqueueLogOutbox(SHOP, makeLog({ id: "N" }));
+    expect(await flushLogOutbox(store, SHOP)).toMatchObject({ ok: true });
+    expect(loadReviewedCopyConflicts(SHOP)).toEqual({ L1: "revision" });
+
+    // The doc no longer holds the duplicate (e.g. fixed on the server): next read clears it.
+    fake.data = shopDoc([v.reviewedRev1, makeLog({ id: "N" })], { updatedAt: "2026-10-03T00:00:00.000Z" });
+    await new RemoteShopStore(CONFIG, SHOP).getShop();
+    expect(loadReviewedCopyConflicts(SHOP)).toEqual({});
+    expect(storage.getItem(REVIEWED_COPIES_KEY)).toBeNull();
+  });
+
+  it("an identical or unreviewed duplicate in the shop doc records nothing", async () => {
+    const v = versions();
+    fake.data = shopDoc([v.reviewedRev0, clone(v.reviewedRev0), v.rev2]);
+    await new RemoteShopStore(CONFIG, SHOP).getShop();
+    expect(storage.getItem(REVIEWED_COPIES_KEY)).toBeNull();
+  });
+});
