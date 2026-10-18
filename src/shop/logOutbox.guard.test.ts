@@ -9,6 +9,7 @@ import {
   REMOTE_COPY_KEPT_ERROR,
   syncLogToRemote,
 } from "./logOutbox";
+import { listSyncConflicts } from "./conflicts";
 import type { RemoteShopStore } from "./RemoteShopStore";
 import { SHOP_SESSION_KEY } from "./session";
 import type { ShopDocument, ShopStoreResult } from "./types";
@@ -218,6 +219,38 @@ describe("flushLogOutbox — queued entries", () => {
     const [left] = outboxEntriesForShop(SHOP);
     expect(left.log).toEqual(v.rev1);
     expect(left.lastError).toBe(REMOTE_COPY_KEPT_ERROR);
+  });
+
+  it("a refused entry in the middle of a backlog doesn't stall the entries behind it", async () => {
+    const v = versions();
+    const offline = { getShop: async () => ({ ok: false, error: "offline" }) } as unknown as RemoteShopStore;
+    await syncLogToRemote(offline, SHOP, makeLog({ id: "A" }));
+    await syncLogToRemote(offline, SHOP, v.rev1); // stale vs the remote rev2: refused
+    await syncLogToRemote(offline, SHOP, makeLog({ id: "B" }));
+    await syncLogToRemote(offline, SHOP, makeLog({ id: "C" }));
+    const { remote, putShop, putDocs } = fakeRemote([shopDoc([v.rev2])]);
+    const res = await flushLogOutbox(remote, SHOP);
+    // Not silent: the flush reports the refusal and the entry stays flagged for the conflict screen.
+    expect(res).toMatchObject({ ok: false, flushed: 3, remaining: 1, error: REMOTE_COPY_KEPT_ERROR });
+    expect(putShop).toHaveBeenCalledTimes(3); // one log per write
+    expect(putDocs.at(-1)!.logs.map((l) => l.id)).toEqual(["C", "B", "A", "L1"]);
+    expect(putDocs.at(-1)!.logs[3]).toEqual(v.rev2);
+    const [left] = outboxEntriesForShop(SHOP);
+    expect(left.log).toEqual(v.rev1);
+    expect(left.lastError).toBe(REMOTE_COPY_KEPT_ERROR);
+    expect(listSyncConflicts(SHOP).map((e) => e.log.id)).toEqual(["L1"]);
+  });
+
+  it("a correction to a shop log goes up in its own write (one log per write)", async () => {
+    const v = versions();
+    const offline = { getShop: async () => ({ ok: false, error: "offline" }) } as unknown as RemoteShopStore;
+    await syncLogToRemote(offline, SHOP, makeLog({ id: "A" }));
+    await syncLogToRemote(offline, SHOP, v.rev1); // correction on top of the remote rev0
+    const { remote, putDocs } = fakeRemote([shopDoc([v.rev0])]);
+    expect(await flushLogOutbox(remote, SHOP)).toMatchObject({ ok: true, flushed: 2, remaining: 0 });
+    // Each write changes exactly one log relative to the doc before it.
+    expect(putDocs[0].logs).toEqual([makeLog({ id: "A" }), v.rev0]);
+    expect(putDocs[1].logs).toEqual([makeLog({ id: "A" }), v.rev1]);
   });
 
   it("only refused entries: nothing is put", async () => {
