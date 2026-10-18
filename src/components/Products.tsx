@@ -40,7 +40,10 @@ import {
 } from "../starterCatalog/csvImport";
 import {
   buildCsvImportPreview,
+  STARTER_NAME_LABEL_CONFIRM_NOTE,
   candidateForImport,
+  csvRowAddable,
+  shopNameMatchesStarter,
   csvCandidateToShopProduct,
   findShopDuplicate,
   findShopNameDuplicate,
@@ -565,7 +568,10 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
     if (!csvPreview || labelConfirmStoreUnavailable) return;
     const picked = csvPreview.rows
       .map((row, index) => ({ row, index }))
-      .filter(({ row, index }) => csvInclude[index] && !csvAdded[index] && row.addable);
+      .filter(
+        ({ row, index }) =>
+          csvInclude[index] && !csvAdded[index] && csvRowAddable(row, csvUseStarterName[index] === true),
+      );
     if (picked.length === 0) return;
     const added = [...csvAdded];
     const nextPending = [...pendingLabelIdsRef.current];
@@ -664,7 +670,9 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   }
 
   const csvToAddCount = csvPreview
-    ? csvPreview.rows.filter((row, i) => csvInclude[i] && !csvAdded[i] && row.addable).length
+    ? csvPreview.rows.filter(
+        (row, i) => csvInclude[i] && !csvAdded[i] && csvRowAddable(row, csvUseStarterName[i] === true),
+      ).length
     : 0;
   const csvSummaryId = `${csvIdPrefix}-csv-summary`;
 
@@ -1151,10 +1159,11 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                     const rowDone = csvAdded[index];
                     const useStarter = row.starterMatch !== null && csvUseStarterName[index] === true;
                     const shownName = useStarter && row.starterMatch ? row.starterMatch.name : c.name;
+                    const canAdd = csvRowAddable(row, useStarter);
                     return (
                       <li key={`${row.line}-${index}`} style={{ marginBottom: "0.65rem" }}>
                         <strong id={nameId}>{shownName || `(no name, line ${row.line})`}</strong>
-                        {useStarter && <div className="hint">Name in file: {c.name}</div>}
+                        {useStarter && c.name.trim() !== "" && <div className="hint">Name in file: {c.name}</div>}
                         <div>
                           <span className="chip">line {row.line}</span>{" "}
                           <span className="chip">{c.kind}</span>{" "}
@@ -1184,8 +1193,8 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                         <label className="toggle">
                           <input
                             type="checkbox"
-                            checked={csvInclude[index] === true && !rowDone}
-                            disabled={!row.addable || rowDone}
+                            checked={csvInclude[index] === true && !rowDone && canAdd}
+                            disabled={!canAdd || rowDone}
                             aria-describedby={nameId}
                             onChange={(e) => {
                               const checked = e.target.checked;
@@ -1199,11 +1208,19 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                             <input
                               type="checkbox"
                               checked={useStarter}
-                              disabled={!row.addable || rowDone}
+                              disabled={rowDone}
                               aria-describedby={`${nameId} ${starterNoteId}`}
                               onChange={(e) => {
                                 const checked = e.target.checked;
                                 setCsvUseStarterName((use) => use.map((v, i) => (i === index ? checked : v)));
+                                // Blank-name rescue: the name now comes from the starter, so the
+                                // row can be added. Include it only when the preview did not flag
+                                // it (flagged rows stay out until the office ticks Include).
+                                // Unticking takes it back out, since it has no name again.
+                                if (!row.addable) {
+                                  const include = checked && row.duplicate === null;
+                                  setCsvInclude((inc) => inc.map((v, i) => (i === index ? include : v)));
+                                }
                               }}
                             />
                             Use starter name
@@ -1392,6 +1409,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                 <span className="chip">{product.kind}</span>{" "}
                 <span className="chip">{productEpaCaption(product)}</span>
               </p>
+              {shopNameMatchesStarter(product) && <p className="hint">{STARTER_NAME_LABEL_CONFIRM_NOTE}</p>}
               <label className="toggle">
                 <input
                   type="checkbox"
