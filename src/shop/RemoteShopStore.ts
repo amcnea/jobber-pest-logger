@@ -6,6 +6,7 @@
  */
 
 import { parseShopSections } from "../storage";
+import { dedupeLogsById, planDedupedWrite, setAsideDuplicateCopies } from "./dedupeLogs";
 import { ensureAnonymousAuth } from "./firebaseAuth";
 import { getFirebaseApp } from "./firebaseApp";
 import type { FirebaseClientConfig } from "./firebaseConfig";
@@ -219,6 +220,8 @@ export class RemoteShopStore implements ShopStore {
   private readonly config: FirebaseClientConfig;
   private readonly shopId: string;
   private firestore: FirestoreFns | null = null;
+  /** #209: last doc read or written, as stored (duplicates included), with whether its losers are set aside. */
+  private stored: { doc: ShopDocument; setAsideOk: boolean } | null = null;
 
   constructor(config: FirebaseClientConfig, shopId: string) {
     this.config = config;
@@ -257,7 +260,7 @@ export class RemoteShopStore implements ShopStore {
       if (!doc) {
         return { ok: false, error: "Remote shop document has an invalid shape." };
       }
-      return { ok: true, value: doc };
+      return { ok: true, value: this.dedupeStored(doc) };
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Could not load shop from Firestore.";
@@ -265,12 +268,62 @@ export class RemoteShopStore implements ShopStore {
     }
   }
 
+  /**
+   * #209: one copy per log id for every caller (pull, merge, conflicts, outbox, export);
+   * the other copies go to the set-aside store. Remembers the stored doc for putShop.
+   */
+  private dedupeStored(doc: ShopDocument): ShopDocument {
+    const { logs, losers } = dedupeLogsById(doc.logs);
+    const setAsideOk = setAsideDuplicateCopies(this.shopId, losers);
+    this.stored = { doc, setAsideOk };
+    return losers.length ? { ...doc, logs } : doc;
+  }
+
+  /**
+   * #209: write the de-duplicated logs. Stored copies that can be removed (exact copies,
+   * unreviewed losers already set aside) go in a cleanup write first, so the #208 rules
+   * see removals and the caller's change separately; reviewed losers stay unchanged.
+   */
+  private async planWrite(
+    doc: ShopDocument,
+    fs: FirestoreFns,
+  ): Promise<{ cleanup: ShopDocument | null; doc: ShopDocument } | null> {
+    const own = dedupeLogsById(doc.logs);
+    const ownOk = setAsideDuplicateCopies(this.shopId, own.losers);
+    const nextLogs = ownOk ? own.logs : doc.logs;
+    if (!this.stored || this.stored.doc.updatedAt !== doc.updatedAt) {
+      this.stored = null;
+      if (!doc.updatedAt) return { cleanup: null, doc: { ...doc, logs: nextLogs } };
+      const snap = await fs.getDoc(fs.docRef);
+      const current = snap.exists() ? coerceShopDocument(snap.data()) : null;
+      if (current && current.updatedAt !== doc.updatedAt) return null; // CAS would fail
+      if (current) this.dedupeStored(current);
+      else return { cleanup: null, doc: { ...doc, logs: nextLogs } };
+    }
+    const { doc: storedDoc, setAsideOk } = this.stored!;
+    const plan = planDedupedWrite(storedDoc.logs, nextLogs, setAsideOk);
+    return {
+      cleanup: plan.cleanup ? { ...storedDoc, logs: plan.cleanup } : null,
+      doc: { ...doc, logs: plan.logs },
+    };
+  }
+
   async putShop(doc: ShopDocument): Promise<ShopStoreResult<{ updatedAt: string }>> {
     try {
-      const { putWithCas } = await this.fs();
-      const updatedAt = await putWithCas(doc.updatedAt, doc);
+      const fs = await this.fs();
+      const plan = await this.planWrite(doc, fs);
+      if (!plan) throw new ShopWriteConflictError();
+      let expected = doc.updatedAt;
+      if (plan.cleanup) {
+        expected = await fs.putWithCas(expected, plan.cleanup);
+        this.dedupeStored({ ...plan.cleanup, updatedAt: expected });
+      }
+      const updatedAt = await fs.putWithCas(expected, plan.doc);
+      // The written doc is the stored doc for the next write (no re-read; #210 reuses it).
+      this.dedupeStored({ ...plan.doc, updatedAt });
       return { ok: true, value: { updatedAt } };
     } catch (err) {
+      this.stored = null;
       if (err instanceof ShopWriteConflictError || (err && (err as { conflict?: boolean }).conflict)) {
         return {
           ok: false,
