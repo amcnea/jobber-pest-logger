@@ -1127,15 +1127,12 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                     </div>
                     <div className="card-actions">
                       {alreadyActive ? (
-                        <>
-                          <span className="hint">Already in catalog</span>
-                          {showButton}
-                        </>
+                        <span className="hint">Already in catalog</span>
                       ) : shopMatch && !alreadyPending && !alreadyArchived ? (
-                        // A full reg # match the existing check missed: show it, don't add it twice.
+                        // A full reg # match the existing check missed: show it, don't add it
+                        // twice. Matches the existing check already handles keep today's actions.
                         showButton
                       ) : (
-                        <>
                         <button
                           type="button"
                           className="btn btn-secondary"
@@ -1146,8 +1143,6 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                           {/* Archived matches also route through label confirm in addStarterToCatalog. */}
                           {alreadyPending || alreadyArchived ? "Confirm label…" : "Add to my catalog"}
                         </button>
-                        {showButton}
-                        </>
                       )}
                     </div>
                   </div>
