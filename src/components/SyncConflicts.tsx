@@ -178,10 +178,13 @@ export function SyncConflicts({ shopId, remote, people, refreshKey, onResolved, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [shopId, refreshKey],
   );
-  const [note, setNoteState] = useState<(ReuploadNote & { listed: string[] }) | null>(null);
-  // Remember which logs were listed when the note was shown.
+  const [note, setNoteState] = useState<(ReuploadNote & { listed: string[]; shopId: string }) | null>(null);
+  // Remember which logs were listed, and which shop it was, when the note was shown.
   const setNote = (next: ReuploadNote | null) =>
-    setNoteState(next ? { ...next, listed: conflicts.map((e) => e.log.id) } : null);
+    setNoteState(next ? { ...next, listed: conflicts.map((e) => e.log.id), shopId } : null);
+  // #196: never show another shop's note, including on the first render after a shop
+  // change (before the clearing effect below runs).
+  const visibleNote = note && note.shopId === shopId ? note : null;
   // #183: the note belongs to one log. Clear it when the list changes to a log that
   // wasn't listed when it was shown…
   useEffect(() => {
@@ -205,13 +208,13 @@ export function SyncConflicts({ shopId, remote, people, refreshKey, onResolved, 
       setNoteState(null);
     }
   }, [shopId]);
-  if (conflicts.length === 0 && !note) return null;
+  if (conflicts.length === 0 && !visibleNote) return null;
   return (
     <section className="card" aria-label="Sync conflicts">
       <h3>Sync conflicts</h3>
-      {note && (
+      {visibleNote && (
         <p className="hint" role="status">
-          {note.text}
+          {visibleNote.text}
         </p>
       )}
       <ul className="review-queue">
