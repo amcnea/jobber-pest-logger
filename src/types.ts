@@ -134,6 +134,26 @@ export interface CorrectionEntry {
   changes: FieldChange[];
 }
 
+/**
+ * A device copy of a log that was set aside instead of uploaded (sync conflict:
+ * "Take shop copy"). Kept in a separate local store, not in the log's history:
+ * history is the record of the shop copy's revisions; this is a copy that never
+ * became one. Included in backup JSON; restore never drops entries.
+ */
+export interface SetAsideCopy {
+  /** Entry id (unique per set-aside). */
+  id: string;
+  logId: string;
+  /** Full device copy as it stood, including its own revision / history / review stamp. */
+  deviceCopy: ApplicationLog;
+  /** ISO with local offset. */
+  setAsideAt: string;
+  /** Roster person name. */
+  setAsideBy: string;
+  /** Shared shop the conflict was with ("" if unknown). */
+  shopId: string;
+}
+
 export interface ShopSettings {
   shopName: string;
   shopTpclNumber: string;

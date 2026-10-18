@@ -11,11 +11,13 @@ interface Props {
   /** Office role only; App also hides the tab and screen for tech sessions. */
   canReview: boolean;
   onEdit: (log: ApplicationLog) => void;
+  /** Office: open a reviewed log in the correction form. */
+  onCorrect?: (log: ApplicationLog) => void;
   /** Pins the clock (tests). Omit to use the device clock, refreshed each minute / on focus. */
   now?: Date;
 }
 
-export function ReviewQueue({ logs, catalog, canReview, onEdit, now }: Props) {
+export function ReviewQueue({ logs, catalog, canReview, onEdit, onCorrect, now }: Props) {
   const clock = useNow(now);
   const entries = useMemo(
     () => (canReview ? buildReviewQueue(logs, catalog, clock) : []),
@@ -51,7 +53,14 @@ export function ReviewQueue({ logs, catalog, canReview, onEdit, now }: Props) {
                   ))}
                 </ul>
                 {reviewed ? (
-                  <p className="hint">{REVIEWED_LOCK_NOTE}</p>
+                  <>
+                    <p className="hint">{REVIEWED_LOCK_NOTE}</p>
+                    {onCorrect && (
+                      <button type="button" className="btn btn-secondary" onClick={() => onCorrect(log)}>
+                        Correct this log
+                      </button>
+                    )}
+                  </>
                 ) : (
                   <button type="button" className="btn btn-secondary" onClick={() => onEdit(log)}>
                     Edit

@@ -3,6 +3,7 @@ import { LAWGICAL_DISCLAIMER } from "../disclaimer";
 import { buildExportProvenance, provenanceFileSuffix } from "../exportProvenance";
 import {
   applyBackup,
+  restoreBannerText,
   backupNagMessage,
   downloadBackup,
   IncompleteBackupError,
@@ -63,6 +64,9 @@ interface Props {
   onClearExamples: () => { ok: boolean; summary: string };
   onWipeAll: () => { ok: boolean; summary: string };
 }
+
+export const RESTORE_CONFIRM_TEXT =
+  "Restoring replaces this device's logs with the backup, except logs that have change history or a review the backup doesn't. Those stay on this device.";
 
 export function Settings({
   settings,
@@ -299,7 +303,7 @@ export function Settings({
     }
 
     const confirmed = confirm(
-      "Restore this backup? It replaces all logs, catalog, people, settings, and any set-aside rows currently saved on this device.",
+      RESTORE_CONFIRM_TEXT,
     );
     if (!confirmed) return;
 
@@ -316,7 +320,8 @@ export function Settings({
       return;
     }
 
-    const restoreFlash = `Restored backup (v${result.backup.version}) from ${result.backup.exportedAt}. Device data replaced.`;
+    // #163: accurate when restore kept device logs that carry change history.
+    const restoreFlash = restoreBannerText(result.backup, applied.history);
     onRestored(
       {
         logs: result.backup.logs,

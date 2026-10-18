@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { productEpaCaption } from "../catalog";
 import { filterLogsByDateUsed, monthRangeLocal } from "../dates";
+import { correctedLabel, isCorrectedLog } from "../correctionExport";
 import { isLogReviewed, reviewFlagsForLog } from "../reviewQueue";
 import { groupLogsByServiceAddress, type PropertyBookEntry } from "../storage";
 import type { ApplicationLog, Person, ShopProduct } from "../types";
@@ -21,6 +22,8 @@ interface Props {
   people?: Person[];
   /** Office: lock a log with zero review flags. Returns an error message, or null on success. */
   onMarkReviewed?: (logId: string, personId: string) => string | null;
+  /** Office: open a reviewed log in the correction form. */
+  onCorrect?: (log: ApplicationLog) => void;
   /** Pins the clock (tests). */
   now?: Date;
 }
@@ -128,6 +131,7 @@ export function History({
   catalog,
   people = [],
   onMarkReviewed,
+  onCorrect,
   now,
 }: Props) {
   const clock = useNow(now);
@@ -279,6 +283,7 @@ export function History({
                       {log.sampleData && <span className="chip sample">example</span>}
                       {log.isTermite && <span className="chip">termite</span>}
                       {reviewed && <span className="chip">Reviewed</span>}
+                      {isCorrectedLog(log) && <span className="chip">{correctedLabel(log)}</span>}
                     </div>
                     {reviewed && (
                       <div className="log-meta history-log-line">
@@ -298,6 +303,11 @@ export function History({
                       {!reviewed && (
                         <button type="button" className="btn btn-secondary" onClick={() => onEdit(log)}>
                           Edit
+                        </button>
+                      )}
+                      {reviewed && onCorrect && (
+                        <button type="button" className="btn btn-secondary" onClick={() => onCorrect(log)}>
+                          Correct this log
                         </button>
                       )}
                       <button type="button" className="btn btn-ghost" onClick={() => handleDelete(log)}>

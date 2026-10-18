@@ -1,0 +1,119 @@
+// @vitest-environment jsdom
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LogOutboxEntry } from "../shop/logOutbox";
+import type { RemoteShopStore } from "../shop/RemoteShopStore";
+import { makeLog } from "../test/fixtures";
+import type { Person } from "../types";
+
+// Scope: SyncConflicts UI wiring only; resolution logic is covered in shop/conflicts.test.ts.
+const takeShopCopy = vi.fn();
+const keepDeviceCopy = vi.fn();
+let conflicts: LogOutboxEntry[] = [];
+
+vi.mock("../shop/conflicts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../shop/conflicts")>();
+  return {
+    SET_ASIDE_CONFIRM: actual.SET_ASIDE_CONFIRM,
+    listSyncConflicts: () => conflicts,
+    takeShopCopy: (...args: unknown[]) => takeShopCopy(...args),
+    keepDeviceCopy: (...args: unknown[]) => keepDeviceCopy(...args),
+  };
+});
+
+const { SyncConflicts } = await import("./SyncConflicts");
+
+const PEOPLE: Person[] = [
+  { id: "p-ana", name: "Ana Office", licenseNumber: "TX-9", roleTags: [], licenseExpiry: "", ceDueDate: "" },
+];
+const remote = {} as RemoteShopStore;
+const BANNED =
+  /tamper-proof|immutable|audit-proof|legally valid|compliant|noncompliant|violation|invalid|certified|audit/i;
+const entry: LogOutboxEntry = {
+  shopId: "SHOP1",
+  queuedAt: "2026-10-17T23:00:00.000Z",
+  entryId: "e1",
+  log: makeLog({ id: "L1", dateUsed: "2026-10-01", serviceAddress: "200 Oak Ave" }),
+  lastError: "x",
+};
+
+beforeEach(() => {
+  conflicts = [entry];
+  takeShopCopy.mockReset().mockResolvedValue({ ok: true, logs: [], log: entry.log });
+  keepDeviceCopy.mockReset().mockResolvedValue({ ok: true, logs: [], log: entry.log });
+});
+afterEach(() => vi.restoreAllMocks());
+
+function renderIt() {
+  const onResolved = vi.fn();
+  const utils = render(
+    <SyncConflicts shopId="SHOP1" remote={remote} people={PEOPLE} refreshKey={0} onResolved={onResolved} />,
+  );
+  return { ...utils, onResolved };
+}
+
+describe("SyncConflicts", () => {
+  it("renders nothing without conflicts", () => {
+    conflicts = [];
+    const { container } = renderIt();
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("Take shop copy asks the exact confirm text and needs a person", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const { onResolved, container } = renderIt();
+    const row = screen.getByLabelText("Conflict L1");
+    expect(within(row).getByText("2026-10-01 · 200 Oak Ave")).toBeInTheDocument();
+    await userEvent.click(within(row).getByRole("button", { name: "Take shop copy" }));
+    const go = within(row).getByRole("button", { name: "Take shop copy" });
+    expect(go).toBeDisabled();
+    await userEvent.selectOptions(within(row).getByLabelText("Set aside by"), "p-ana");
+    await userEvent.click(go);
+    expect(confirmSpy).toHaveBeenCalledWith(
+      "This device's version will be set aside, not uploaded. It stays in the backup.",
+    );
+    expect(takeShopCopy).toHaveBeenCalledWith(remote, "SHOP1", entry, { setAsideBy: "p-ana", people: PEOPLE });
+    expect(onResolved).toHaveBeenCalled();
+    expect(container.textContent ?? "").not.toMatch(BANNED);
+  });
+
+  it("declining the confirm does nothing", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    renderIt();
+    await userEvent.click(screen.getByRole("button", { name: "Take shop copy" }));
+    await userEvent.selectOptions(screen.getByLabelText("Set aside by"), "p-ana");
+    await userEvent.click(screen.getByRole("button", { name: "Take shop copy" }));
+    expect(takeShopCopy).not.toHaveBeenCalled();
+  });
+
+  it("Keep this device's copy needs Changed by and a Reason, then saves as a correction", async () => {
+    const { container } = renderIt();
+    await userEvent.click(screen.getByRole("button", { name: "Keep this device's copy" }));
+    expect(
+      screen.getByText("Saved as a correction on top of the shop copy, with change history."),
+    ).toBeInTheDocument();
+    const save = screen.getByRole("button", { name: "Save as a correction" });
+    expect(save).toBeDisabled();
+    await userEvent.selectOptions(screen.getByLabelText("Changed by"), "p-ana");
+    expect(save).toBeDisabled();
+    await userEvent.type(screen.getByLabelText("Reason"), "Tech logged fleas");
+    await userEvent.click(save);
+    expect(keepDeviceCopy).toHaveBeenCalledWith(remote, "SHOP1", entry, {
+      changedBy: "p-ana",
+      reason: "Tech logged fleas",
+      people: PEOPLE,
+    });
+    expect(container.textContent ?? "").not.toMatch(BANNED);
+  });
+
+  it("shows the error when a resolution fails", async () => {
+    keepDeviceCopy.mockResolvedValue({ ok: false, error: "No fields changed." });
+    renderIt();
+    await userEvent.click(screen.getByRole("button", { name: "Keep this device's copy" }));
+    await userEvent.selectOptions(screen.getByLabelText("Changed by"), "p-ana");
+    await userEvent.type(screen.getByLabelText("Reason"), "x");
+    await userEvent.click(screen.getByRole("button", { name: "Save as a correction" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("No fields changed.");
+  });
+});

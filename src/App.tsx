@@ -6,6 +6,7 @@ import { ShopPilotCard } from "./components/ShopPilotCard";
 import { History } from "./components/History";
 import { NewLogForm } from "./components/NewLogForm";
 import { ReviewQueue } from "./components/ReviewQueue";
+import { SyncConflicts } from "./components/SyncConflicts";
 import { People } from "./components/People";
 import { Products } from "./components/Products";
 import { Settings } from "./components/Settings";
@@ -26,9 +27,8 @@ import {
   loadPeople,
   loadSettings,
   markLogReviewed,
+  applyCorrection,
   removeExampleProductsFromCatalog,
-  restoreHistoryMessage,
-  restoredKeptReport,
   clearExampleDemoData,
   wipeAllDeviceData,
   saveSettings,
@@ -68,6 +68,8 @@ export default function App() {
   const [storageError, setStorageError] = useState<string | null>(null);
   /** Prefill for New log (from History). Remount via draftKey when set. */
   const [draftSeed, setDraftSeed] = useState<ApplicationLog | null>(null);
+  /** True when draftSeed is a reviewed log opened with "Correct this log". */
+  const [correcting, setCorrecting] = useState(false);
   const [draftKey, setDraftKey] = useState(0);
   /** Remount Settings shop form after wipe/restore so draft matches props. */
   const [settingsFormKey, setSettingsFormKey] = useState(0);
@@ -216,8 +218,9 @@ export default function App() {
     draftSeed !== null &&
     logs.some((l) => l.id === draftSeed.id);
 
-  function openNewLog(draft: ApplicationLog | null) {
+  function openNewLog(draft: ApplicationLog | null, asCorrection = false) {
     setDraftSeed(draft);
+    setCorrecting(asCorrection);
     setDraftKey((k) => k + 1);
     go("new");
   }
@@ -234,6 +237,29 @@ export default function App() {
       return;
     }
     openNewLog(log);
+  }
+
+  /** Office: open a reviewed log in the correction form (the only way to change it). */
+  function handleCorrect(log: ApplicationLog) {
+    if (!allowOfficeSurfaces || !isLogReviewed(log)) return;
+    openNewLog(log, true);
+  }
+
+  /** Save the correction form through applyCorrection, then sync like a normal save. */
+  function handleSubmitCorrection(log: ApplicationLog, changedBy: string, reason: string): string | null {
+    if (shopLocked || needsShopUnlock(loadShopSession())) {
+      return "Unlock the shared shop with a PIN before changing logs.";
+    }
+    if (!allowOfficeSurfaces) return "Only office can correct reviewed logs.";
+    const result = applyCorrection(log.id, log, { changedBy, reason, people });
+    setLogs(result.logs);
+    if (!result.ok) return result.error;
+    setStorageError(null);
+    setDraftSeed(null);
+    setCorrecting(false);
+    syncSavedLog(result.log);
+    go("history");
+    return null;
   }
 
   /** Shared mode: push a locally saved log to Firestore; on network blip keep it in the outbox (#6). */
@@ -455,9 +481,8 @@ export default function App() {
     setCatalog(data.catalog);
     setPeople(data.people);
     setSettings(data.settings);
-    const historyNote = flash ? restoreHistoryMessage(restoredKeptReport(data.logs, storedLogs)) : null;
-    const text = flash && historyNote ? `${flash} ${historyNote}` : flash;
-    setSettingsFlash(text ? { slot: "backup", text } : null);
+    // Settings builds the full banner (restoreBannerText), including logs kept with history.
+    setSettingsFlash(flash ? { slot: "backup", text: flash } : null);
     setSettingsFormKey((k) => k + 1);
     setStorageError(null);
   }
@@ -604,6 +629,28 @@ export default function App() {
             </div>
           );
         })()}
+      {!shopLocked &&
+        allowOfficeSurfaces &&
+        outboxTick >= 0 &&
+        (() => {
+          const info = resolveShopStore();
+          if (info.mode !== "shared" || !info.shopId || !(info.store instanceof RemoteShopStore)) {
+            return null;
+          }
+          return (
+            <SyncConflicts
+              shopId={info.shopId}
+              remote={info.store}
+              people={people}
+              refreshKey={outboxTick}
+              onResolved={(next) => {
+                setLogs(next);
+                setOutboxMessage(null);
+                refreshOutboxBanner();
+              }}
+            />
+          );
+        })()}
       {!shopLocked && (
       <>
       <nav className={allowOfficeSurfaces ? "tabs" : "tabs tabs-tech"} aria-label="Main">
@@ -675,6 +722,11 @@ export default function App() {
             initialDraft={draftSeed}
             isEditing={isEditing}
             onSave={handleSave}
+            correction={
+              correcting && isEditing && draftSeed && isLogReviewed(draftSeed)
+                ? { onSubmit: handleSubmitCorrection }
+                : undefined
+            }
           />
         )}
         {screen === "history" && (
@@ -688,6 +740,7 @@ export default function App() {
             catalog={allowOfficeSurfaces ? catalog : undefined}
             people={people}
             onMarkReviewed={allowOfficeSurfaces ? handleMarkReviewed : undefined}
+            onCorrect={allowOfficeSurfaces ? handleCorrect : undefined}
           />
         )}
         {allowOfficeSurfaces && screen === "review" && (
@@ -696,6 +749,7 @@ export default function App() {
             catalog={catalog}
             canReview={allowOfficeSurfaces}
             onEdit={handleEdit}
+            onCorrect={handleCorrect}
           />
         )}
         {allowOfficeSurfaces && screen === "products" && (

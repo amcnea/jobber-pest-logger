@@ -141,3 +141,37 @@ describe("History — tech session", () => {
     ).not.toBeInTheDocument();
   });
 });
+
+describe("History — Correct this log (office)", () => {
+  const reviewed = makeLog({
+    id: "R1",
+    dateUsed: "2026-10-02",
+    reviewedAt: "2026-10-16T09:00:00-05:00",
+    reviewedBy: "Ana Office",
+  });
+
+  it("reviewed log offers Correct this log (no Edit) and calls back with the log", async () => {
+    const onCorrect = vi.fn();
+    const { container } = renderHistory([reviewed], { onCorrect });
+    const c = card("2026-10-02");
+    expect(within(c).queryByRole("button", { name: "Edit" })).toBeNull();
+    await userEvent.click(within(c).getByRole("button", { name: "Correct this log" }));
+    expect(onCorrect).toHaveBeenCalledWith(reviewed);
+    expect(container.textContent ?? "").not.toMatch(BANNED);
+  });
+
+  it("unreviewed logs and tech sessions get no Correct this log", () => {
+    renderHistory([makeLog({ id: "U1", dateUsed: "2026-10-03" })], { onCorrect: vi.fn() });
+    expect(screen.queryByRole("button", { name: "Correct this log" })).toBeNull();
+  });
+
+  it("tech: no Correct this log on reviewed logs", () => {
+    renderHistory([reviewed], { canEditDelete: false, onCorrect: vi.fn() });
+    expect(screen.queryByRole("button", { name: "Correct this log" })).toBeNull();
+  });
+
+  it("corrected logs show Corrected (rev N)", () => {
+    renderHistory([{ ...reviewed, revision: 2 }]);
+    expect(within(card("2026-10-02")).getByText("Corrected (rev 2)")).toBeInTheDocument();
+  });
+});
