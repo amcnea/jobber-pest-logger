@@ -47,7 +47,6 @@ import {
   csvCandidateToShopProduct,
   findShopDuplicate,
   findShopNameDuplicate,
-  normalizeImportEpa,
   normalizeImportName,
   type CsvImportPreview,
 } from "../starterCatalog/csvImportPreview";
@@ -814,48 +813,6 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   }
   const waitingCountId = `${csvIdPrefix}-waiting-label-count`;
 
-  /**
-   * Slice 7: shop rows by full reg # (normalizeImportEpa, exact full number incl. suffix),
-   * built once per catalog change. When several match, the first non-archived row wins.
-   */
-  const shopByRegNo = useMemo(() => {
-    const map = new Map<string, ShopProduct>();
-    for (const p of catalog) {
-      const key = normalizeImportEpa(p.epaRegNo);
-      if (!key) continue;
-      const prev = map.get(key);
-      if (!prev || (prev.archived && !p.archived)) map.set(key, p);
-    }
-    return map;
-  }, [catalog]);
-
-  /** Shop row the office asked to see from the starter list; focused once rendered. */
-  const [showShopProductId, setShowShopProductId] = useState<string | null>(null);
-  const shopRowIdPrefix = useId();
-
-  function showOnShopList(product: ShopProduct) {
-    // Clear anything that could hide the row so it is on screen.
-    setQuery("");
-    setKindFilter("all");
-    if (
-      (listFilter === "active" && product.archived) ||
-      (listFilter === "archived" && !product.archived) ||
-      (listFilter === "pending" && !pendingLabelIds.includes(product.id))
-    ) {
-      setListFilter("all");
-    }
-    setShowShopProductId(product.id);
-  }
-
-  useEffect(() => {
-    if (showShopProductId === null) return;
-    const el = document.getElementById(`${shopRowIdPrefix}-shop-${showShopProductId}`);
-    setShowShopProductId(null);
-    if (!el) return;
-    if (typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "center" });
-    el.focus();
-  }, [showShopProductId, shopRowIdPrefix]);
-
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return catalog.filter((p) => {
@@ -1093,19 +1050,6 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                 const alreadyPending = state === "pending";
                 const alreadyArchived = state === "archived";
                 const nameId = `${starterRowIdPrefix}-starter-${starter.id}`;
-                const regKey = normalizeImportEpa(starter.epaRegNo);
-                const shopMatch = regKey ? shopByRegNo.get(regKey) : undefined;
-                const showButton = shopMatch && (
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    disabled={labelConfirmId !== null}
-                    aria-describedby={nameId}
-                    onClick={() => showOnShopList(shopMatch)}
-                  >
-                    Show on shop list
-                  </button>
-                );
                 return (
                   <div className="card-head" key={starter.id} style={{ marginBottom: "0.65rem" }}>
                     <div>
@@ -1118,20 +1062,11 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                         {alreadyActive && <span className="chip">on shop list</span>}
                         {alreadyPending && <span className="chip">pending label confirm</span>}
                         {alreadyArchived && <span className="chip">archived on shop list</span>}
-                        {shopMatch && (
-                          <span className="chip">
-                            {shopMatch.archived ? "On your shop list (archived)" : "On your shop list"}
-                          </span>
-                        )}
                       </div>
                     </div>
                     <div className="card-actions">
                       {alreadyActive ? (
                         <span className="hint">Already in catalog</span>
-                      ) : shopMatch && !alreadyPending && !alreadyArchived ? (
-                        // A full reg # match the existing check missed: show it, don't add it
-                        // twice. Matches the existing check already handles keep today's actions.
-                        showButton
                       ) : (
                         <button
                           type="button"
@@ -1455,12 +1390,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
         <p className="hint">No products match this search/filter.</p>
       )}
       {visible.map((product) => (
-        <article
-          className={`card${product.archived ? " card-archived" : ""}`}
-          key={product.id}
-          id={`${shopRowIdPrefix}-shop-${product.id}`}
-          tabIndex={-1}
-        >
+        <article className={`card${product.archived ? " card-archived" : ""}`} key={product.id}>
           {editingId === product.id ? (
             form
           ) : labelConfirmId === product.id ? (

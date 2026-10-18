@@ -1,6 +1,7 @@
 import type { ShopProduct } from "../types";
 import { TEXAS_COMMON_STARTER, TEXAS_STARTER_CATALOG_VERSION } from "./texasCommon";
 import type { StarterProduct } from "./types";
+import { normalizeImportEpa } from "./csvImportPreview";
 
 export type { StarterProduct } from "./types";
 export type { LabelConfirmReadResult } from "./labelConfirmStore";
@@ -10,11 +11,13 @@ export { highlightSegments, type HighlightSegment } from "./highlight";
 export const STARTER_CATALOG_DISCLAIMER =
   "This Texas starter list is not official EPA or TDA data. It may be incomplete or outdated. Always confirm the product name and EPA registration number against the label before activating a row on your shop list.";
 
+/**
+ * Starter <-> shop reg # key: the same normalization as the CSV import checks
+ * (normalizeImportEpa: case, whitespace, and unicode dashes read as "-"). Compared
+ * exactly, so the match is on the full reg # including any suffix.
+ */
 function normalizeEpa(epa: string | null | undefined): string {
-  return String(epa ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "");
+  return normalizeImportEpa(epa);
 }
 
 function normalizeName(name: string): string {
