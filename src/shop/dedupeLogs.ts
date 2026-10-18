@@ -168,6 +168,12 @@ export interface DedupedWritePlan {
   cleanup: ApplicationLog[] | null;
   /** What to write: the caller's logs plus stored copies that must stay. */
   logs: ApplicationLog[];
+  /**
+   * #221: for each removed copy that differs from its kept copy, the kept copy's index in
+   * `cleanup` ({logId: index}). firestore.rules let the cleanup remove a copy still under
+   * its 2-year hold only when that index holds the same id. Undefined when not needed.
+   */
+  keptCopyAt?: Record<string, number>;
 }
 
 /**
@@ -187,8 +193,12 @@ export function planDedupedWrite(
     if (l.identical || (setAsideOk && !isLogReviewed(l.log))) removable.add(l.index);
     else keep.push(l.log);
   }
-  return {
-    cleanup: removable.size ? stored.filter((_, i) => !removable.has(i)) : null,
-    logs: [...next, ...keep],
-  };
+  const cleanup = removable.size ? stored.filter((_, i) => !removable.has(i)) : null;
+  const removedIds = new Set(losers.filter((l) => removable.has(l.index) && !l.identical).map((l) => l.log.id));
+  let keptCopyAt: Record<string, number> | undefined;
+  cleanup?.forEach((log, i) => {
+    if (!removedIds.has(log.id) || (keptCopyAt && log.id in keptCopyAt)) return;
+    keptCopyAt = { ...keptCopyAt, [log.id]: i };
+  });
+  return { cleanup, logs: [...next, ...keep], keptCopyAt };
 }

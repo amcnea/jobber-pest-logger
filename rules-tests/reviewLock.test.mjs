@@ -79,6 +79,10 @@ function makeLog(id, extra = {}) {
   };
 }
 
+/** Dates whose 2-year hold ended in Jan 2026 (#221): such a log may be removed. */
+const PAST_HOLD = { dateUsed: "2024-01-01", createdAt: "2024-01-01T15:00:00.000Z" };
+const oldLog = (id, extra = {}) => makeLog(id, { ...PAST_HOLD, ...extra });
+
 function reviewed(log) {
   return { ...log, reviewedAt: "2026-10-02T09:00:00-05:00", reviewedBy: "Ana Office" };
 }
@@ -331,8 +335,8 @@ describe("re-upload of a log the shop no longer has", () => {
 describe("unreviewed logs behave as before", () => {
   for (const [who, uid] of WRITERS) {
     it(`${who}: overwrite, delete and add are allowed`, async () => {
-      await seed([makeLog("U1"), makeLog("U2")]);
-      await assertSucceeds(put(uid, [makeLog("N"), { ...makeLog("U1"), serviceAddress: "9 Elm St" }, makeLog("U2")]));
+      await seed([oldLog("U1"), makeLog("U2")]);
+      await assertSucceeds(put(uid, [makeLog("N"), { ...oldLog("U1"), serviceAddress: "9 Elm St" }, makeLog("U2")]));
       await assertSucceeds(put(uid, [makeLog("N"), makeLog("U2")]));
     });
   }
@@ -344,8 +348,8 @@ describe("unreviewed logs behave as before", () => {
 
   it("a reviewed log in the shop doesn't block edits to unreviewed ones", async () => {
     const r = reviewed(makeLog("R"));
-    await seed([makeLog("U"), r]);
-    await assertSucceeds(put(TECH, [{ ...makeLog("U"), serviceAddress: "9 Elm St" }, r]));
+    await seed([oldLog("U"), r]);
+    await assertSucceeds(put(TECH, [{ ...oldLog("U"), serviceAddress: "9 Elm St" }, r]));
     await assertSucceeds(put(TECH, [r]));
   });
 
@@ -502,9 +506,9 @@ describe("#219: a forged copy of R next to its correction", () => {
     const r = reviewed(makeLog("R"));
     const fixed = correct(r, { serviceAddress: "9 Elm St" });
     for (const [, uid] of WRITERS) {
-      await seed([r, makeLog("U")]);
+      await seed([r, oldLog("U")]);
       await assertSucceeds(put(uid, [fixed]));
-      await seed([makeLog("U"), r]);
+      await seed([oldLog("U"), r]);
       await assertSucceeds(put(uid, [fixed]));
     }
   });
@@ -512,11 +516,11 @@ describe("#219: a forged copy of R next to its correction", () => {
   it("deleting an unreviewed log next to an unchanged R passes", async () => {
     const r = reviewed(makeLog("R"));
     for (const [, uid] of WRITERS) {
-      await seed([r, makeLog("U")]);
+      await seed([r, oldLog("U")]);
       await assertSucceeds(put(uid, [r]));
-      await seed([makeLog("U"), r]);
+      await seed([oldLog("U"), r]);
       await assertSucceeds(put(uid, [r]));
-      await seed([makeLog("U"), r, makeLog("V")]);
+      await seed([oldLog("U"), r, makeLog("V")]);
       await assertSucceeds(put(uid, [r, makeLog("V")]));
     }
   });
@@ -583,6 +587,97 @@ describe("#220: join and legacy PIN setup on a doc with no logs field", () => {
   });
 });
 
+// ---- #221: 2-year hold on removed logs ------------------------------------------------
+// Hold date D runs to the end of D in UTC-12: removal needs request.time >= (D+1) 12:00 UTC.
+// Dates are relative to now so the tests don't age (the boundary is the UTC date of
+// now - 36 h: that D is released, the next day is still held).
+
+const DAY = 86400000;
+const ymd = (ms) => new Date(ms).toISOString().slice(0, 10);
+const minusYears = (s, n) => `${Number(s.slice(0, 4)) - n}${s.slice(4)}`;
+// Release times fall at 12:00 UTC, and each case sits as far from its cutoff as now is
+// from 12:00 UTC. Within 10 minutes of it, wait until 10 minutes past (a run takes seconds).
+const GUARD = 10 * 60000;
+const sinceNoon = (Date.now() % DAY) - DAY / 2;
+if (Math.abs(sinceNoon) < GUARD) await new Promise((resolve) => setTimeout(resolve, GUARD - sinceNoon));
+const NOW = Date.now();
+const LAST_RELEASED = ymd(NOW - 1.5 * DAY);
+const FIRST_HELD = ymd(NOW - 0.5 * DAY);
+
+describe("#221: removing a log under its 2-year hold", () => {
+  const removeOnly = async (log) => {
+    const r = reviewed(makeLog("R"));
+    await seed([log, r]);
+    return put(TECH, [r]);
+  };
+
+  it("removing a held unreviewed log is denied (recent dates, or a later retainUntil)", async () => {
+    await assertFails(removeOnly(makeLog("U")));
+    await assertFails(removeOnly(oldLog("U", { retainUntil: "2027-01-01" })));
+    await seed([makeLog("U")]);
+    await assertFails(put(OFFICE, []));
+  });
+
+  it("removing a log past its hold is allowed (retainUntil, or no retainUntil and old dates)", async () => {
+    await assertSucceeds(removeOnly(makeLog("U", { retainUntil: "2025-06-01" })));
+    await assertSucceeds(removeOnly(oldLog("U")));
+  });
+
+  it("UTC-12 boundary: retainUntil D is released at (D+1) 12:00 UTC, not before", async () => {
+    await assertSucceeds(removeOnly(makeLog("U", { retainUntil: LAST_RELEASED })));
+    await assertFails(removeOnly(makeLog("U", { retainUntil: FIRST_HELD })));
+  });
+
+  it("no retainUntil: 2 years after dateUsed", async () => {
+    const created = "2023-01-01T15:00:00.000Z";
+    await assertSucceeds(removeOnly(makeLog("U", { dateUsed: minusYears(LAST_RELEASED, 2), createdAt: created })));
+    await assertFails(removeOnly(makeLog("U", { dateUsed: minusYears(FIRST_HELD, 2), createdAt: created })));
+  });
+
+  it("no retainUntil: a later createdAt wins (its date counts one day later)", async () => {
+    const at = (d) => `${d}T23:00:00.000Z`;
+    const prevDay = (d) => ymd(Date.parse(`${d}T00:00:00Z`) - DAY);
+    await assertFails(removeOnly(makeLog("U", { dateUsed: "2023-01-01", createdAt: new Date(Date.now() - 30 * DAY).toISOString() })));
+    // createdAt date C holds until C + 1 day + 2 years.
+    await assertSucceeds(removeOnly(makeLog("U", { dateUsed: "2023-01-01", createdAt: at(prevDay(minusYears(LAST_RELEASED, 2))) })));
+    await assertFails(removeOnly(makeLog("U", { dateUsed: "2023-01-01", createdAt: at(minusYears(LAST_RELEASED, 2)) })));
+  });
+
+  it("no readable date: removal is denied", async () => {
+    for (const extra of [
+      { dateUsed: "", createdAt: "" },
+      { dateUsed: "not a date", createdAt: "soon" },
+      { dateUsed: "2024-13-01", createdAt: undefined },
+    ]) {
+      const log = makeLog("U", extra);
+      if (extra.createdAt === undefined) delete log.createdAt;
+      await assertFails(removeOnly(log));
+    }
+  });
+
+  it("#211: removing a held duplicate copy is allowed when keptCopyAt names a same-id copy", async () => {
+    const r = reviewed(makeLog("R"));
+    const u = makeLog("U");
+    const loser = { ...u, serviceAddress: "Other St" };
+    await seed([loser, r, u]);
+    await assertSucceeds(put(TECH, [r, u], { keptCopyAt: { U: 1 } }));
+    await seed([loser, r, u]);
+    await assertFails(put(TECH, [r, u]));
+    await seed([loser, r, u]);
+    await assertFails(put(TECH, [r, u], { keptCopyAt: { U: 0 } }));
+    await seed([loser, r, u]);
+    await assertFails(put(TECH, [r, u], { keptCopyAt: { U: 7 } }));
+    // An exact copy needs no hint (an identical copy stays).
+    await seed([u, r, u]);
+    await assertSucceeds(put(TECH, [r, u]));
+  });
+
+  it("a stale keptCopyAt doesn't block normal saves", async () => {
+    await seed([makeLog("U")]);
+    await assertSucceeds(put(TECH, [makeLog("N"), makeLog("U")], { keptCopyAt: { U: 9, X: "y" } }));
+  });
+});
+
 describe("a stray logIds field neither blocks nor is required", () => {
   it("normal saves without logIds, and with a stale one, pass on a doc that carries it", async () => {
     const r = reviewed(makeLog("R"));
@@ -617,9 +712,9 @@ describe("a stray logIds field neither blocks nor is required", () => {
 });
 
 describe("per-write limits (measured)", () => {
-  it("29 unreviewed edits, 3 corrections, 5 re-sends and 32 unreviewed deletions in one write pass on a 100-log doc", async () => {
+  it("29 unreviewed edits, 3 corrections, 5 re-sends, 3 removals past hold and 9 held duplicate removals pass on a 100-log doc", async () => {
     const rec = { reuploadedAt: "2026-10-02T08:00:00-05:00", reuploadedBy: "Ana Office", reason: "x" };
-    const base = Array.from({ length: 100 }, (_, i) => (i < 10 ? reviewed(makeLog(`L${i}`, { reuploads: [rec] })) : makeLog(`L${i}`)));
+    const base = Array.from({ length: 100 }, (_, i) => (i < 10 ? reviewed(makeLog(`L${i}`, { reuploads: [rec] })) : oldLog(`L${i}`)));
     await seed(base);
     await assertSucceeds(put(TECH, base.map((l, i) => (i >= 10 && i < 39 ? { ...l, targetPestOrPurpose: "Roaches" } : l))));
     await seed(base);
@@ -627,6 +722,10 @@ describe("per-write limits (measured)", () => {
     await seed(base);
     await assertSucceeds(put(TECH, base.map((l, i) => (i < 5 ? { ...l, reuploads: [rec, rec] } : l))));
     await seed(base);
-    await assertSucceeds(put(TECH, base.filter((l, i) => !(i >= 10 && i < 42))));
+    await assertSucceeds(put(TECH, base.filter((l, i) => !(i >= 10 && i < 13))));
+    const held = base.map((l, i) => (i < 10 ? l : makeLog(l.id)));
+    const losers = held.slice(10, 19).map((l) => ({ ...l, serviceAddress: "Other St" }));
+    await seed([...held, ...losers]);
+    await assertSucceeds(put(TECH, held, { keptCopyAt: Object.fromEntries(held.slice(10, 19).map((l, k) => [l.id, 10 + k])) }));
   });
 });
