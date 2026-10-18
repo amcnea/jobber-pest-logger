@@ -39,6 +39,7 @@ import {
 import {
   buildCsvImportPreview,
   csvCandidateToShopProduct,
+  findShopDuplicate,
   type CsvImportPreview,
 } from "../starterCatalog/csvImportPreview";
 import type { ShopProduct } from "../types";
@@ -62,7 +63,7 @@ interface DraftErrors {
   epaRegNo?: string;
 }
 
-type ListFilter = "active" | "archived" | "all";
+type ListFilter = "active" | "archived" | "all" | "pending";
 type KindFilter = "all" | "pesticide" | "device";
 
 function plural(n: number, one: string, many: string): string {
@@ -130,6 +131,9 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   /** Control that opened label confirm; focus returns here (or to starter search) on close. */
   const labelConfirmReturnFocusRef = useRef<HTMLElement | null>(null);
   const prevLabelConfirmIdRef = useRef<string | null>(null);
+  /** Last row opened from "Review next label", so the next press moves on past it. */
+  const lastReviewedLabelIdRef = useRef<string | null>(null);
+  const reviewNextLabelRef = useRef<HTMLButtonElement>(null);
   const [labelConfirmId, setLabelConfirmId] = useState<string | null>(null);
   const [labelConfirmed, setLabelConfirmed] = useState(false);
   const [pendingLabelIds, setPendingLabelIds] = useState<string[]>(() => {
@@ -478,10 +482,15 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
     setCsvInclude([]);
     setCsvAdded([]);
     setCsvFileName("");
+    if (csvFileRef.current) csvFileRef.current.value = "";
   }
 
   async function onCsvFileChosen(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
+    const input = e.target;
+    const file = input.files?.[0];
+    // #177: clear right away so picking the same file again still fires change
+    // (after an oversize file, a failed read, a preview, or a Cancel).
+    input.value = "";
     const token = ++csvReadTokenRef.current;
     if (!file) return;
     if (file.size > CSV_IMPORT_MAX_BYTES) {
@@ -510,7 +519,22 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
     const nextPending = [...pendingLabelIdsRef.current];
     let addedCount = 0;
     let failure: string | null = null;
+    /** Rows saved in this run, so later rows in the run are checked against them too. */
+    const addedProducts: ShopProduct[] = [];
+    /** #178: rows that became duplicates after the preview was built. */
+    const skipped = new Map<number, string>();
     for (const { row, index } of picked) {
+      // #178: the preview's flags can be stale (the shop list may have changed while it
+      // was open). Re-check rows the preview did not flag against the current shop list
+      // plus rows already added in this run. A row the office ticked despite a preview
+      // flag is left as their choice.
+      if (row.duplicate === null) {
+        const dup = findShopDuplicate(row.candidate, [...addedProducts, ...catalog]);
+        if (dup) {
+          skipped.set(index, dup);
+          continue;
+        }
+      }
       const product = csvCandidateToShopProduct(row.candidate, newId());
       // Persist the label-confirm guard before the catalog row (same order as starter add).
       if (!addPendingLabelConfirm(product.id)) {
@@ -524,6 +548,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
         break;
       }
       if (!nextPending.includes(product.id)) nextPending.push(product.id);
+      addedProducts.push(product);
       added[index] = true;
       addedCount += 1;
     }
@@ -534,12 +559,35 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
       // Show the new archived rows even when the Active filter is on.
       setListFilter("all");
     }
-    if (failure) {
+    const skippedNote =
+      skipped.size === 0
+        ? ""
+        : skipped.size === 1
+          ? " 1 row skipped as a possible duplicate."
+          : ` ${skipped.size} rows skipped as possible duplicates.`;
+    if (failure || skipped.size > 0) {
+      // Keep the preview open so the office can see what was added and why rows were skipped.
       setCsvAdded(added);
-      setCsvInclude((inc) => inc.map((v, i) => v && !added[i]));
-      setStarterAnnouncement(
-        addedCount > 0 ? `${failure} ${plural(addedCount, "row was", "rows were")} added before it.` : failure,
-      );
+      setCsvInclude((inc) => inc.map((v, i) => v && !added[i] && !skipped.has(i)));
+      if (skipped.size > 0) {
+        setCsvPreview((prev) =>
+          prev
+            ? {
+                ...prev,
+                rows: prev.rows.map((r, i) => (skipped.has(i) ? { ...r, duplicate: skipped.get(i)! } : r)),
+              }
+            : prev,
+        );
+      }
+      const head = failure
+        ? addedCount > 0
+          ? `${failure} ${plural(addedCount, "row was", "rows were")} added before it.`
+          : failure
+        : addedCount > 0
+          ? `Added ${addedCount} to the shop catalog as archived. Confirm each label before techs can pick it.`
+          : "Nothing was added.";
+      setStarterAnnouncement(`${head}${skippedNote}`);
+      csvPreviewHeadingRef.current?.focus();
       return;
     }
     const total = added.filter(Boolean).length;
@@ -661,6 +709,36 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   const hasExamples = catalogHasExampleProducts(catalog);
   const archivedCount = catalog.filter((p) => p.archived).length;
 
+  /**
+   * Slice 3: shop rows still waiting on label confirm (archived + on the pending list),
+   * in shop-list order. Covers CSV-imported rows and starter adds alike; both use the
+   * same existing per-product confirm step below. No bulk confirm: one label at a time.
+   */
+  const waitingLabel = useMemo(() => {
+    const ids = new Set(pendingLabelIds);
+    return catalog.filter((p) => p.archived && ids.has(p.id));
+  }, [catalog, pendingLabelIds]);
+  const waitingPosition =
+    labelConfirmId !== null ? waitingLabel.findIndex((p) => p.id === labelConfirmId) + 1 : 0;
+
+  /** Open the existing confirm step on the next waiting row after the last one reviewed. */
+  function reviewNextLabel() {
+    if (waitingLabel.length === 0 || labelConfirmId !== null) return;
+    const lastIdx =
+      lastReviewedLabelIdRef.current === null
+        ? -1
+        : catalog.findIndex((p) => p.id === lastReviewedLabelIdRef.current);
+    const next =
+      (lastIdx >= 0 ? waitingLabel.find((p) => catalog.indexOf(p) > lastIdx) : undefined) ??
+      waitingLabel[0];
+    lastReviewedLabelIdRef.current = next.id;
+    beginLabelConfirm(next.id);
+    // Return focus here when the confirm step closes, so the next press continues the
+    // queue (some mobile browsers do not focus a button on tap).
+    labelConfirmReturnFocusRef.current = reviewNextLabelRef.current;
+  }
+  const waitingCountId = `${csvIdPrefix}-waiting-label-count`;
+
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return catalog.filter((p) => {
@@ -668,6 +746,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
       if (editingId && p.id === editingId) return true;
       if (labelConfirmId && p.id === labelConfirmId) return true;
       if (pendingLabelIds.includes(p.id)) return true;
+      if (listFilter === "pending") return false;
       if (listFilter === "active" && p.archived) return false;
       if (listFilter === "archived" && !p.archived) return false;
       if (kindFilter !== "all" && p.kind !== kindFilter) return false;
@@ -1088,6 +1167,37 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
       )}
       {adding && form}
 
+      {!adding && editingId === null && waitingLabel.length > 0 && (
+        <div className="card" role="group" aria-label="Labels to confirm">
+          <p id={waitingCountId}>
+            {plural(waitingLabel.length, "product", "products")} waiting on label confirm.
+            {waitingPosition > 0 && ` Label ${waitingPosition} of ${waitingLabel.length}.`}
+          </p>
+          <div className="row">
+            <button
+              ref={reviewNextLabelRef}
+              type="button"
+              className="btn btn-primary"
+              aria-describedby={waitingCountId}
+              disabled={labelConfirmId !== null}
+              onClick={reviewNextLabel}
+            >
+              Review next label
+            </button>
+            {listFilter !== "pending" && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={labelConfirmId !== null}
+                onClick={() => setListFilter("pending")}
+              >
+                Show only waiting
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {!adding && catalog.length > 0 && (
         <div className="card catalog-filters">
           <label className="field">
@@ -1112,6 +1222,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                 <option value="active">Active</option>
                 <option value="archived">Archived ({archivedCount})</option>
                 <option value="all">All</option>
+                <option value="pending">Waiting on label confirm ({waitingLabel.length})</option>
               </select>
             </label>
             <label className="field">
@@ -1129,7 +1240,14 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
           </div>
           <p className="hint" role="status">
             Showing {visible.length} of {catalog.length}
-            {listFilter === "active" ? " (active)" : listFilter === "archived" ? " (archived)" : ""}.
+            {listFilter === "active"
+              ? " (active)"
+              : listFilter === "archived"
+                ? " (archived)"
+                : listFilter === "pending"
+                  ? " (waiting on label confirm)"
+                  : ""}
+            .
           </p>
         </div>
       )}
