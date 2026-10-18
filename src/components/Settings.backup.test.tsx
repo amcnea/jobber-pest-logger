@@ -423,3 +423,61 @@ describe("Settings restore banner", () => {
     expect(flash).not.toMatch(BANNED);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Wipe confirm (#171)
+// ---------------------------------------------------------------------------
+
+describe("Settings wipe confirm and set-aside copies", () => {
+  const BANNED =
+    /tamper-proof|immutable|audit-proof|legally valid|compliant|noncompliant|violation|invalid|certified|audit/i;
+  const WIPE =
+    "Wipe ALL Jobber Pest Logger data on this device? Logs, real products, people, and settings will be deleted. Example seeds will be re-added. This cannot be undone.";
+
+  function addAside(n: number) {
+    for (let i = 0; i < n; i++) {
+      const added = storage.addSetAsideCopy(makeLog({ id: `s${i}` }), {
+        setAsideBy: "alice",
+        people: [ALICE],
+        now: NOW,
+      });
+      expect(added.ok).toBe(true);
+    }
+  }
+
+  async function firstConfirmText() {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "Wipe all data on this device…" }));
+    expect(confirm).toHaveBeenCalledTimes(1);
+    return confirm.mock.calls[0]![0] as string;
+  }
+
+  it("no set-aside copies: the confirm is unchanged", async () => {
+    expect(await firstConfirmText()).toBe(WIPE);
+  });
+
+  it("one set-aside copy: singular sentence", async () => {
+    addAside(1);
+    const text = await firstConfirmText();
+    expect(text).toBe(
+      `${WIPE} This also deletes 1 set-aside copy from sync conflicts. Download the backup JSON first if you need it.`,
+    );
+    expect(text).not.toMatch(BANNED);
+  });
+
+  it("several set-aside copies: count and plural sentence", async () => {
+    addAside(3);
+    const text = await firstConfirmText();
+    expect(text).toBe(
+      `${WIPE} This also deletes 3 set-aside copies from sync conflicts. Download the backup JSON first if you need them.`,
+    );
+    expect(text).not.toMatch(BANNED);
+  });
+
+  it("wording helpers avoid banned terms", async () => {
+    const { wipeSetAsideSentence, WIPE_CONFIRM_TEXT } = await import("./Settings");
+    expect(wipeSetAsideSentence(0)).toBe("");
+    for (const s of [WIPE_CONFIRM_TEXT, wipeSetAsideSentence(1), wipeSetAsideSentence(2)]) expect(s).not.toMatch(BANNED);
+  });
+});

@@ -4,7 +4,7 @@ import {
   shopSlugForFilename,
   type ExportProvenance,
 } from "./exportProvenance";
-import { changeHistoryCell, correctedLabel, CORRECTION_CSV_COLUMNS, isCorrectedLog } from "./correctionExport";
+import { changeHistoryCell, changeStatusLabel, CORRECTION_CSV_COLUMNS, hasChangeHistory } from "./correctionExport";
 import type { ApplicationLog } from "./types";
 
 /** Texas TDA CSV columns matching 4 TAC § 7.144(a)/(b). Optional Jobber link is last and labeled not-TDA. */
@@ -88,9 +88,9 @@ function yesBlank(flag: boolean): string {
 }
 
 export function logsToCsv(logs: ApplicationLog[]): string {
-  // Change-history columns are appended only when a corrected log is in the export,
-  // so exports with no corrections are byte-identical to the pre-correction format.
-  const withCorrections = logs.some(isCorrectedLog);
+  // Change-history columns are appended only when a corrected or re-uploaded log is in
+  // the export, so exports with neither are byte-identical to the pre-correction format.
+  const withCorrections = logs.some(hasChangeHistory);
   const columns: readonly string[] = withCorrections
     ? [...TDA_CSV_COLUMNS, ...CORRECTION_CSV_COLUMNS]
     : TDA_CSV_COLUMNS;
@@ -160,7 +160,7 @@ export function logsToCsv(logs: ApplicationLog[]): string {
       log.jobberJobNumber,
       log.jobberAddress,
     ];
-    if (withCorrections) cells.push(correctedLabel(log), changeHistoryCell(log));
+    if (withCorrections) cells.push(changeStatusLabel(log), changeHistoryCell(log));
     return cells.map(csvEscape).join(",");
   });
   return [header, ...rows].join("\r\n") + "\r\n";

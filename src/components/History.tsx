@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { productEpaCaption } from "../catalog";
 import { filterLogsByDateUsed, monthRangeLocal } from "../dates";
-import { correctedLabel, isCorrectedLog } from "../correctionExport";
+import { changeStatusLabel } from "../correctionExport";
 import { isLogReviewed, reviewFlagsForLog } from "../reviewQueue";
 import { groupLogsByServiceAddress, type PropertyBookEntry } from "../storage";
 import type { ApplicationLog, Person, ShopProduct } from "../types";
@@ -283,7 +283,7 @@ export function History({
                       {log.sampleData && <span className="chip sample">example</span>}
                       {log.isTermite && <span className="chip">termite</span>}
                       {reviewed && <span className="chip">Reviewed</span>}
-                      {isCorrectedLog(log) && <span className="chip">{correctedLabel(log)}</span>}
+                      {changeStatusLabel(log) && <span className="chip">{changeStatusLabel(log)}</span>}
                     </div>
                     {reviewed && (
                       <div className="log-meta history-log-line">

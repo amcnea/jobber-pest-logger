@@ -8,13 +8,14 @@ import {
   markLogReviewed,
   parseBackup,
   saveLogs,
+  upsertLog,
   SET_ASIDE_KEY,
 } from "../storage";
 import { makeLog, makeShopProduct } from "../test/fixtures";
 import { MemoryStorage } from "../test/memoryStorage";
 import type { ApplicationLog, Person } from "../types";
 import { keepDeviceCopy, listSyncConflicts, SET_ASIDE_CONFIRM, takeShopCopy } from "./conflicts";
-import { outboxEntriesForShop, REMOTE_COPY_KEPT_ERROR, syncLogToRemote } from "./logOutbox";
+import { LOG_OUTBOX_KEY, outboxEntriesForShop, REMOTE_COPY_KEPT_ERROR, syncLogToRemote } from "./logOutbox";
 import type { RemoteShopStore } from "./RemoteShopStore";
 import { SHOP_SESSION_KEY } from "./session";
 import type { ShopDocument, ShopStoreResult } from "./types";
@@ -314,5 +315,94 @@ describe("wording", () => {
   it("confirm text is exact and plain", () => {
     expect(SET_ASIDE_CONFIRM).toBe("This device's version will be set aside, not uploaded. It stays in the backup.");
     expect(SET_ASIDE_CONFIRM).not.toMatch(BANNED);
+  });
+});
+
+describe("Keep this device's copy — shop no longer has the log (re-upload record)", () => {
+  async function shopMissingSetup() {
+    const v = versions();
+    const fake = await conflictSetup(v.rev1, v.rev2);
+    fake.doc().logs = []; // shop deleted the log after refusing the upload
+    return { v, ...fake };
+  }
+
+  it("requires a People pick and a reason; nothing is saved or uploaded without them", async () => {
+    const { remote, entry, putShop } = await shopMissingSetup();
+    const before = loadLogs();
+    expect(await keepDeviceCopy(remote, SHOP, entry, { changedBy: "", reason: "Shop lost it", people: PEOPLE, now: NOW }))
+      .toEqual({ ok: false, error: "Choose who made the change from People." });
+    expect(await keepDeviceCopy(remote, SHOP, entry, { changedBy: "p-ghost", reason: "Shop lost it", people: PEOPLE, now: NOW }))
+      .toEqual({ ok: false, error: "Choose who made the change from People." });
+    expect(await keepDeviceCopy(remote, SHOP, entry, { changedBy: "p-ana", reason: "   ", people: PEOPLE, now: NOW }))
+      .toEqual({ ok: false, error: "Enter a reason for the change." });
+    expect(loadLogs()).toEqual(before);
+    expect(putShop).not.toHaveBeenCalled();
+  });
+
+  it("uploads this device's copy with who / when / why; no revision bump, not a correction", async () => {
+    const { v, remote, entry, doc } = await shopMissingSetup();
+    const res = await keepDeviceCopy(remote, SHOP, entry, {
+      changedBy: "p-ana",
+      reason: " Shop copy was deleted by mistake ",
+      people: PEOPLE,
+      now: NOW,
+    });
+    expect(res.ok).toBe(true);
+    const [saved] = loadLogs();
+    expect(saved.revision).toBe(v.rev1.revision);
+    expect(saved.history).toEqual(v.rev1.history);
+    expect(saved.reuploads).toEqual([
+      { reuploadedAt: "2026-10-17T19:30:00-05:00", reuploadedBy: "Ana Office", reason: "Shop copy was deleted by mistake" },
+    ]);
+    expect({ ...saved, reuploads: undefined }).toEqual({ ...v.rev1, reuploads: undefined });
+    expect(doc().logs.find((l) => l.id === "L1")?.reuploads).toEqual(saved.reuploads);
+    expect(outboxEntriesForShop(SHOP)).toEqual([]);
+  });
+});
+
+describe("#170 partial failures return the saved logs", () => {
+  it("Keep this device's copy: sync fails after the local save → error plus saved logs", async () => {
+    const v = versions();
+    const { remote, entry, putShop } = await conflictSetup(v.rev1, v.rev2);
+    putShop.mockImplementation(async () => ({ ok: false as const, error: "offline" }));
+    const res = await keepDeviceCopy(remote, SHOP, entry, {
+      changedBy: "p-ana",
+      reason: "Keep the tech's address",
+      people: PEOPLE,
+      now: NOW,
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.logs).toEqual(loadLogs());
+    expect(res.log?.revision).toBe(3);
+    expect(loadLogs()[0].revision).toBe(3);
+
+    // A later History edit from the pre-correction copy cannot overwrite the correction.
+    const stale = upsertLog({ ...v.rev1, jobberJobNumber: "EDIT" });
+    expect(stale).toMatchObject({ saved: false, stale: true });
+    expect(loadLogs()[0]).toEqual(res.log);
+    // Editing the copy App now holds (res.logs) is fine.
+    const fresh = upsertLog({ ...res.logs![0], jobberJobNumber: "EDIT" });
+    expect(fresh.saved).toBe(true);
+    expect(loadLogs()[0].history).toHaveLength(3);
+  });
+
+  it("Take shop copy: upload queue update fails after the local save → error plus saved logs", async () => {
+    const v = versions();
+    const { remote, entry } = await conflictSetup(v.rev1, v.rev2);
+    const realSet = storage.setItem.bind(storage);
+    storage.setItem = (k: string, val: string) => {
+      if (k === LOG_OUTBOX_KEY) throw new Error("QuotaExceededError");
+      realSet(k, val);
+    };
+    const res = await takeShopCopy(remote, SHOP, entry, { setAsideBy: "p-ben", people: PEOPLE, now: NOW });
+    expect(res).toMatchObject({
+      ok: false,
+      error: "Saved the shop copy, but could not update the upload queue.",
+      log: v.rev2,
+    });
+    if (res.ok) return;
+    expect(res.logs).toEqual([v.rev2]);
+    expect(loadLogs()).toEqual([v.rev2]);
   });
 });
