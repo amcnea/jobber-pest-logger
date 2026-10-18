@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import {
   EXAMPLE_EPA_LABEL,
   catalogHasExampleProducts,
@@ -30,6 +30,17 @@ import {
   type StarterProduct,
 } from "../starterCatalog";
 import { highlightSegments } from "../starterCatalog/highlight";
+import {
+  CSV_FIELD_LABELS,
+  CSV_IMPORT_MAX_BYTES,
+  csvTooLargeMessage,
+  parseCatalogCsv,
+} from "../starterCatalog/csvImport";
+import {
+  buildCsvImportPreview,
+  csvCandidateToShopProduct,
+  type CsvImportPreview,
+} from "../starterCatalog/csvImportPreview";
 import type { ShopProduct } from "../types";
 
 /** Render text with query matches wrapped in <mark> (plain React children, no raw HTML). */
@@ -53,6 +64,24 @@ interface DraftErrors {
 
 type ListFilter = "active" | "archived" | "all";
 type KindFilter = "all" | "pesticide" | "device";
+
+function plural(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/** Short preview summary for the CSV import (also announced politely). */
+function csvPreviewSummary(preview: CsvImportPreview, include: boolean[]): string {
+  const toAdd = include.filter(Boolean).length;
+  const dupes = preview.rows.filter((r) => r.duplicate !== null).length;
+  const needLook = preview.rows.filter((r) => r.duplicate !== null || r.problems.length > 0).length;
+  const parts = [plural(preview.rows.length, "row read", "rows read"), `${toAdd} to add`];
+  if (dupes > 0) parts.push(plural(dupes, "possible duplicate", "possible duplicates"));
+  if (needLook > 0) parts.push(`${needLook} ${needLook === 1 ? "needs" : "need"} a look`);
+  if (preview.fileProblems.length > 0) {
+    parts.push(plural(preview.fileProblems.length, "file note", "file notes"));
+  }
+  return `${parts.join(". ")}.`;
+}
 
 function toDraft(product: ShopProduct): ShopProduct {
   return {
@@ -114,6 +143,17 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
     const read = listPendingLabelConfirmIds();
     return !read.ok;
   });
+  /** CSV import preview (nothing is saved until "Add N to shop catalog"). */
+  const [csvPreview, setCsvPreview] = useState<CsvImportPreview | null>(null);
+  const [csvInclude, setCsvInclude] = useState<boolean[]>([]);
+  /** Preview row indexes already saved (after a partial add that stopped on an error). */
+  const [csvAdded, setCsvAdded] = useState<boolean[]>([]);
+  const [csvFileName, setCsvFileName] = useState("");
+  const csvFileRef = useRef<HTMLInputElement>(null);
+  const csvPreviewHeadingRef = useRef<HTMLHeadingElement>(null);
+  /** Bumped on each file pick / cancel so a slow read cannot open a stale preview. */
+  const csvReadTokenRef = useRef(0);
+  const csvIdPrefix = useId();
   /** Ids we asked App to delete; clear pending store only after they leave catalog. */
   const [pendingDeleteIds, setPendingDeleteIds] = useState<string[]>([]);
 
@@ -422,6 +462,108 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
     }
     setPendingDeleteIds((ids) => ids.filter((id) => present.has(id)));
   }, [catalog, pendingDeleteIds]);
+
+  function openCsvPreview(preview: CsvImportPreview, fileName: string) {
+    const include = preview.rows.map((r) => r.includeByDefault);
+    setCsvPreview(preview);
+    setCsvInclude(include);
+    setCsvAdded(preview.rows.map(() => false));
+    setCsvFileName(fileName);
+    setStarterAnnouncement(`Import preview for ${fileName}: ${csvPreviewSummary(preview, include)}`);
+  }
+
+  function closeCsvPreview() {
+    csvReadTokenRef.current += 1;
+    setCsvPreview(null);
+    setCsvInclude([]);
+    setCsvAdded([]);
+    setCsvFileName("");
+  }
+
+  async function onCsvFileChosen(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    const token = ++csvReadTokenRef.current;
+    if (!file) return;
+    if (file.size > CSV_IMPORT_MAX_BYTES) {
+      openCsvPreview({ rows: [], fileProblems: [csvTooLargeMessage()] }, file.name);
+      return;
+    }
+    let text: string;
+    try {
+      text = await file.text();
+    } catch {
+      if (token !== csvReadTokenRef.current) return;
+      setStarterAnnouncement("Needs a look: could not read that file.");
+      return;
+    }
+    if (token !== csvReadTokenRef.current) return;
+    openCsvPreview(buildCsvImportPreview(parseCatalogCsv(text), catalog), file.name);
+  }
+
+  function addCsvRowsToCatalog() {
+    if (!csvPreview || labelConfirmStoreUnavailable) return;
+    const picked = csvPreview.rows
+      .map((row, index) => ({ row, index }))
+      .filter(({ row, index }) => csvInclude[index] && !csvAdded[index] && row.addable);
+    if (picked.length === 0) return;
+    const added = [...csvAdded];
+    const nextPending = [...pendingLabelIdsRef.current];
+    let addedCount = 0;
+    let failure: string | null = null;
+    for (const { row, index } of picked) {
+      const product = csvCandidateToShopProduct(row.candidate, newId());
+      // Persist the label-confirm guard before the catalog row (same order as starter add).
+      if (!addPendingLabelConfirm(product.id)) {
+        setLabelConfirmStoreUnavailable(true);
+        failure = `Needs a look: could not add "${product.name}". Label-confirm storage is unavailable on this device.`;
+        break;
+      }
+      if (!onUpsert(product)) {
+        if (!clearPendingLabelConfirm(product.id)) setLabelConfirmStoreUnavailable(true);
+        failure = `Needs a look: could not add "${product.name}" to the shop catalog.`;
+        break;
+      }
+      if (!nextPending.includes(product.id)) nextPending.push(product.id);
+      added[index] = true;
+      addedCount += 1;
+    }
+    if (addedCount > 0) {
+      pendingLabelIdsRef.current = nextPending;
+      setPendingLabelIds(nextPending);
+      reconcilePendingLabelState();
+      // Show the new archived rows even when the Active filter is on.
+      setListFilter("all");
+    }
+    if (failure) {
+      setCsvAdded(added);
+      setCsvInclude((inc) => inc.map((v, i) => v && !added[i]));
+      setStarterAnnouncement(
+        addedCount > 0 ? `${failure} ${plural(addedCount, "row was", "rows were")} added before it.` : failure,
+      );
+      return;
+    }
+    const total = added.filter(Boolean).length;
+    closeCsvPreview();
+    setStarterAnnouncement(
+      `Added ${total} to the shop catalog as archived. Confirm each label before techs can pick it.`,
+    );
+  }
+
+  const csvToAddCount = csvPreview
+    ? csvPreview.rows.filter((row, i) => csvInclude[i] && !csvAdded[i] && row.addable).length
+    : 0;
+  const csvSummaryId = `${csvIdPrefix}-csv-summary`;
+
+  // Focus the preview heading when a preview opens; return focus to the
+  // (freshly mounted, empty) file picker when it closes.
+  const csvPreviewOpen = csvPreview !== null;
+  const prevCsvPreviewOpenRef = useRef(false);
+  useEffect(() => {
+    const wasOpen = prevCsvPreviewOpenRef.current;
+    prevCsvPreviewOpenRef.current = csvPreviewOpen;
+    if (csvPreviewOpen && !wasOpen) csvPreviewHeadingRef.current?.focus();
+    else if (!csvPreviewOpen && wasOpen) csvFileRef.current?.focus();
+  }, [csvPreviewOpen]);
 
   const form = (adding || editingId) && (
     <form className="card" onSubmit={submit} noValidate>
@@ -791,6 +933,122 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
             )}
           </div>
         </div>
+      )}
+
+      {!adding && editingId === null && (
+        <section className="card catalog-filters" aria-labelledby={`${csvIdPrefix}-csv-title`}>
+          <h3 id={`${csvIdPrefix}-csv-title`}>Import products from CSV</h3>
+          <p className="hint" id={`${csvIdPrefix}-csv-hint`}>
+            Columns: {CSV_FIELD_LABELS.name}, {CSV_FIELD_LABELS.epaRegNo}, {CSV_FIELD_LABELS.is25b},{" "}
+            {CSV_FIELD_LABELS.kind}. You see a preview first; nothing is saved until you add. Rows are
+            added archived, and each label must be confirmed before techs can pick it.
+          </p>
+          {!csvPreview && (
+            <label className="field">
+              Choose a CSV file
+              <input
+                ref={csvFileRef}
+                type="file"
+                accept=".csv,text/csv"
+                aria-describedby={`${csvIdPrefix}-csv-hint`}
+                onChange={(e) => void onCsvFileChosen(e)}
+                disabled={labelConfirmId !== null}
+              />
+            </label>
+          )}
+          {csvPreview && (
+            <div>
+              <h4 ref={csvPreviewHeadingRef} tabIndex={-1}>
+                Preview: {csvFileName}
+              </h4>
+              <p className="hint" id={csvSummaryId}>
+                {csvPreviewSummary(csvPreview, csvInclude.map((v, i) => v && !csvAdded[i]))}
+              </p>
+              {csvPreview.fileProblems.length > 0 && (
+                <ul aria-label="File notes">
+                  {csvPreview.fileProblems.map((msg, i) => (
+                    <li key={i} className="error">
+                      {msg}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {csvPreview.rows.length > 0 && (
+                <ul aria-label="Rows in this file" style={{ listStyle: "none", padding: 0 }}>
+                  {csvPreview.rows.map((row, index) => {
+                    const c = row.candidate;
+                    const nameId = `${csvIdPrefix}-csv-row-${index}`;
+                    const rowDone = csvAdded[index];
+                    return (
+                      <li key={`${row.line}-${index}`} style={{ marginBottom: "0.65rem" }}>
+                        <strong id={nameId}>{c.name || `(no name, line ${row.line})`}</strong>
+                        <div>
+                          <span className="chip">line {row.line}</span>{" "}
+                          <span className="chip">{c.kind}</span>{" "}
+                          <span className="chip">25(b): {c.is25b && c.kind !== "device" ? "yes" : "no"}</span>{" "}
+                          <span className="chip">
+                            {c.epaRegNo === null
+                              ? "no EPA reg #"
+                              : `EPA reg # ${c.epaRegNo}${row.epaFormatOk ? " · format looks OK" : ""}`}
+                          </span>
+                          {rowDone && <span className="chip">added</span>}
+                        </div>
+                        {(row.duplicate !== null || row.problems.length > 0) && (
+                          <ul aria-label={`Notes for ${c.name || `line ${row.line}`}`}>
+                            {row.duplicate !== null && <li className="error">{row.duplicate}</li>}
+                            {row.problems.map((msg, i) => (
+                              <li key={i} className="error">
+                                {msg}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        <label className="toggle">
+                          <input
+                            type="checkbox"
+                            checked={csvInclude[index] === true && !rowDone}
+                            disabled={!row.addable || rowDone}
+                            aria-describedby={nameId}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              setCsvInclude((inc) => inc.map((v, i) => (i === index ? checked : v)));
+                            }}
+                          />
+                          Include in import
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              <div className="sticky-save sticky-actions row">
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  aria-describedby={csvSummaryId}
+                  disabled={csvToAddCount === 0 || labelConfirmStoreUnavailable || labelConfirmId !== null}
+                  onClick={addCsvRowsToCatalog}
+                >
+                  Add {csvToAddCount} to shop catalog
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  aria-label="Cancel CSV import"
+                  onClick={() => {
+                    const anyAdded = csvAdded.some(Boolean);
+                    closeCsvPreview();
+                    setStarterAnnouncement(
+                      anyAdded ? "Import closed. No more rows were added." : "Import canceled. Nothing was added.",
+                    );
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
       )}
 
       {hasExamples && !adding && (

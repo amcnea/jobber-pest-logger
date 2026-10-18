@@ -35,6 +35,14 @@ const HEADER_ALIASES: Record<CsvImportField, string[]> = {
   kind: ["kind", "type", "product type"],
 };
 
+/** Plain column labels for user-facing text (never show the internal field ids). */
+export const CSV_FIELD_LABELS: Record<CsvImportField, string> = {
+  name: "Product name",
+  epaRegNo: "EPA Reg. No.",
+  is25b: "25(b)",
+  kind: "Type",
+};
+
 export const REQUIRED_CSV_FIELDS: CsvImportField[] = ["name"];
 
 function headerKey(raw: string): string {
@@ -273,12 +281,15 @@ function unclosedQuoteMessage(u: CsvUnclosedQuote, more: boolean): string {
 const YES = new Set(["y", "yes", "true", "1", "x", "25b", "25(b)"]);
 const NO = new Set(["n", "no", "false", "0", ""]);
 
+/** Shown when a file is over CSV_IMPORT_MAX_BYTES. */
+export function csvTooLargeMessage(): string {
+  return `Needs a look: file is too large (limit is about ${Math.round(CSV_IMPORT_MAX_BYTES / 1000)} KB).`;
+}
+
 export function parseCatalogCsv(input: string): CsvImportResult {
   const result: CsvImportResult = { rows: [], fileProblems: [], ignoredColumns: [], columnMap: {} };
   if (csvOverByteLimit(input)) {
-    result.fileProblems.push(
-      `Needs a look: file is too large (limit is about ${Math.round(CSV_IMPORT_MAX_BYTES / 1000)} KB).`,
-    );
+    result.fileProblems.push(csvTooLargeMessage());
     return result;
   }
   const text = input.charCodeAt(0) === 0xfeff ? input.slice(1) : input;
@@ -318,7 +329,9 @@ export function parseCatalogCsv(input: string): CsvImportResult {
       return;
     }
     if (seen.has(field)) {
-      result.fileProblems.push(`Needs a look: more than one column maps to ${field}; using the first.`);
+      result.fileProblems.push(
+        `Needs a look: more than one column maps to "${CSV_FIELD_LABELS[field]}"; using the first.`,
+      );
       return;
     }
     seen.add(field);
