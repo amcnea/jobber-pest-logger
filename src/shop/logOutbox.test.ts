@@ -463,8 +463,10 @@ describe("flushLogOutbox", async () => {
 
     const res = await flushLogOutbox(remote, SHOP);
     expect(res).toEqual({ ok: true, flushed: 2, remaining: 0 });
-    expect(putShop).toHaveBeenCalledOnce();
-    const put = putDocs[0];
+    // One log per write (#208 rules limit): "a" first (oldest), then "n".
+    expect(putShop).toHaveBeenCalledTimes(2);
+    expect(putDocs[0].logs.map((l) => l.id)).toEqual(["a", "z"]);
+    const put = putDocs[1];
     expect(put.logs.map((l) => l.id).sort()).toEqual(["a", "n", "z"]);
     expect(put.logs.find((l) => l.id === "a")!.targetPestOrPurpose).toBe("new");
     expect(put.logs.find((l) => l.id === "z")).toEqual(untouched);
@@ -472,7 +474,9 @@ describe("flushLogOutbox", async () => {
     expect(put.logs.indexOf(put.logs.find((l) => l.id === "a")!)).toBeLessThan(
       put.logs.indexOf(put.logs.find((l) => l.id === "z")!),
     );
-    expect({ ...put, logs: [] }).toEqual({ ...shopDoc(), logs: [] });
+    // The second write's CAS base is the first write's committed updatedAt.
+    expect({ ...put, logs: [] }).toEqual({ ...shopDoc(), logs: [], updatedAt: NOW.toISOString() });
+    expect({ ...putDocs[0], logs: [] }).toEqual({ ...shopDoc(), logs: [] });
     expect(outboxEntriesForShop(SHOP)).toEqual([]);
   });
 
@@ -601,7 +605,9 @@ describe("flushLogOutbox", async () => {
       },
     });
     expect(await flushLogOutbox(remote, SHOP)).toEqual({ ok: true, flushed: 2, remaining: 0 });
-    expect(putDocs[1].logs.map((l) => l.id).sort()).toEqual(["a", "b"]);
+    // Retry of "a", then "b" in its own write.
+    expect(putDocs[1].logs.map((l) => l.id)).toEqual(["a"]);
+    expect(putDocs[2].logs.map((l) => l.id).sort()).toEqual(["a", "b"]);
   });
 
   it("skips entries superseded while getShop was awaiting", async () => {
@@ -669,6 +675,56 @@ describe("flushLogOutbox", async () => {
     expect(await flushLogOutbox(remote, SHOP)).toEqual({ ok: true, flushed: 3, remaining: 0 });
     expect(current().logs.map((l) => l.id)).toEqual(["c", "a", "x", "z"]);
     expect(current().logs.find((l) => l.id === "x")!.targetPestOrPurpose).toBe("new");
+  });
+
+  it("a large backlog (40 logs) drains one log per write, newest-first on the remote", async () => {
+    const { remote, putShop, putDocs, current } = fakeRemote({ doc: shopDoc([makeLog("z")]) });
+    const ids = Array.from({ length: 40 }, (_, i) => `n${i}`);
+    for (const id of ids) await enqueueLogOutbox(SHOP, makeLog(id));
+    expect(await flushLogOutbox(remote, SHOP)).toEqual({ ok: true, flushed: 40, remaining: 0 });
+    expect(putShop).toHaveBeenCalledTimes(40);
+    // Every write adds exactly one log to the doc before it.
+    putDocs.forEach((doc, i) => {
+      expect(doc.logs).toHaveLength(i + 2);
+      expect(doc.logs[0].id).toBe(ids[i]);
+      expect(doc.logs.slice(1)).toEqual(i === 0 ? [makeLog("z")] : putDocs[i - 1].logs);
+    });
+    expect(current().logs.map((l) => l.id)).toEqual([...ids].reverse().concat("z"));
+    expect(outboxEntriesForShop(SHOP)).toEqual([]);
+  });
+
+  it("a write the shop refuses doesn't stall the rest; it stays queued with its error", async () => {
+    await enqueueLogOutbox(SHOP, makeLog("a"));
+    await enqueueLogOutbox(SHOP, makeLog("b"));
+    await enqueueLogOutbox(SHOP, makeLog("c"));
+    const ok: PutResult = { ok: true, value: { updatedAt: "x" } };
+    const { remote, putShop, current } = fakeRemote({
+      puts: [ok, { ok: false, error: "permission denied" }, ok],
+    });
+    expect(await flushLogOutbox(remote, SHOP)).toEqual({
+      ok: false,
+      flushed: 2,
+      remaining: 1,
+      error: "permission denied",
+      conflict: undefined,
+    });
+    expect(putShop).toHaveBeenCalledTimes(3);
+    expect(current().logs.map((l) => l.id)).toEqual(["c", "a"]);
+    const left = outboxEntriesForShop(SHOP);
+    expect(left.map((e) => e.log.id)).toEqual(["b"]);
+    expect(left[0].lastError).toBe("permission denied");
+  });
+
+  it("stops (no more puts) when the shop can't be re-read after a conflict, annotating what's left", async () => {
+    await enqueueLogOutbox(SHOP, makeLog("a"));
+    await enqueueLogOutbox(SHOP, makeLog("b"));
+    const { remote, putShop } = fakeRemote({
+      gets: [{ ok: true, value: shopDoc() }, { ok: false, error: "offline" }],
+      puts: [conflict],
+    });
+    expect(await flushLogOutbox(remote, SHOP)).toEqual({ ok: false, flushed: 0, remaining: 2, error: "offline" });
+    expect(putShop).toHaveBeenCalledOnce();
+    expect(outboxEntriesForShop(SHOP).map((e) => e.lastError)).toEqual(["offline", "offline"]);
   });
 
   it("with duplicate legacy rows for one log, the newest payload wins", async () => {
