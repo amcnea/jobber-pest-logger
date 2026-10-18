@@ -45,15 +45,13 @@ export function effectiveImportEpa(candidate: Pick<CsvCandidate, "epaRegNo" | "i
 }
 
 /**
- * Starter-match key for an EPA reg #: trim, lowercase, and drop whitespace only.
- * No other rewriting (dashes, leading zeros, suffixes), so the match is on the FULL
- * reg #: "8033-109-279" never matches "8033-109", and vice versa.
+ * Starter-match key for an EPA reg #: the same normalization as the duplicate check
+ * (normalizeImportEpa: case, whitespace, and unicode dashes read as "-"). Nothing else
+ * is rewritten (no leading-zero or suffix changes), and the lookup is exact, so the
+ * match is on the FULL reg #: "8033-109-279" never matches "8033-109", and vice versa.
  */
 export function starterMatchKey(epa: string | null | undefined): string {
-  return String(epa ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "");
+  return normalizeImportEpa(epa);
 }
 
 let starterByEpa: Map<string, StarterProduct> | null = null;
@@ -71,8 +69,8 @@ function starterEpaMap(): Map<string, StarterProduct> {
 }
 
 /**
- * Texas-common starter row whose reg # equals this candidate's (whole reg #, only
- * whitespace/case ignored), or null. Uses the reg # the row would be saved with, so
+ * Texas-common starter row whose reg # equals this candidate's (whole reg #; case,
+ * whitespace and unicode dashes normalized as in the duplicate check), or null. Uses the reg # the row would be saved with, so
  * 25(b) and device rows never match. Offered only when the starter is the same kind
  * and not 25(b), so swapping the name never changes type or reg # handling.
  */
