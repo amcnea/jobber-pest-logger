@@ -1,0 +1,15 @@
+{
+  "name": "jobber-pest-logger-rules-tests",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Firestore security rules tests (emulator). Run: npm test (needs Java 21+).",
+  "scripts": {
+    "test": "firebase emulators:exec --only firestore --project demo-jpl-rules --config ../firebase.json \"node --test --test-concurrency=1 ./*.test.mjs\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.0",
+    "firebase": "^12.18.0",
+    "firebase-tools": "^14.0.0"
+  }
+}
