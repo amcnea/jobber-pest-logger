@@ -43,6 +43,8 @@ import {
   candidateForImport,
   csvCandidateToShopProduct,
   findShopDuplicate,
+  findShopNameDuplicate,
+  normalizeImportName,
   type CsvImportPreview,
 } from "../starterCatalog/csvImportPreview";
 import type { ShopProduct } from "../types";
@@ -582,6 +584,18 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
       // flag is left as their choice.
       if (row.duplicate === null) {
         const dup = findShopDuplicate(candidate, [...addedProducts, ...catalog]);
+        if (dup) {
+          skipped.set(index, dup);
+          continue;
+        }
+      } else if (
+        candidate !== row.candidate &&
+        normalizeImportName(candidate.name) !== normalizeImportName(row.candidate.name)
+      ) {
+        // #206: the office accepted this row's preview flag, then switched it to the
+        // starter name. That new name was never checked, so check it now (name only;
+        // the flag they accepted still stands) against the shop list plus this run.
+        const dup = findShopNameDuplicate(candidate, [...addedProducts, ...catalog]);
         if (dup) {
           skipped.set(index, dup);
           continue;
