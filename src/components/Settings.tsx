@@ -3,6 +3,7 @@ import { LAWGICAL_DISCLAIMER } from "../disclaimer";
 import { buildExportProvenance, provenanceFileSuffix } from "../exportProvenance";
 import {
   applyBackup,
+  restoreBannerText,
   backupNagMessage,
   downloadBackup,
   IncompleteBackupError,
@@ -316,7 +317,8 @@ export function Settings({
       return;
     }
 
-    const restoreFlash = `Restored backup (v${result.backup.version}) from ${result.backup.exportedAt}. Device data replaced.`;
+    // #163: accurate when restore kept device logs that carry change history.
+    const restoreFlash = restoreBannerText(result.backup, applied.history);
     onRestored(
       {
         logs: result.backup.logs,

@@ -1898,6 +1898,22 @@ export function restoreHistoryMessage(report: RestoreHistoryReport | undefined):
 }
 
 /**
+ * Settings restore banner. "Device data replaced." alone only when no device log was
+ * kept; otherwise it names how many logs kept their change history from this device.
+ */
+export function restoreBannerText(
+  backup: Pick<DeviceBackup, "version" | "exportedAt">,
+  report: RestoreHistoryReport | undefined,
+): string {
+  const head = `Restored backup (v${backup.version}) from ${backup.exportedAt}.`;
+  const n = report ? report.keptDevice.length + report.keptAbsent.length : 0;
+  if (n === 0) return `${head} Device data replaced.`;
+  return `${head} Device data replaced, except ${n} log${n === 1 ? " that" : "s that"} kept ${
+    n === 1 ? "its" : "their"
+  } change history from this device.`;
+}
+
+/**
  * After a restore, which stored logs differ from the backup's copy (device copy kept)
  * or are absent from it (kept for history / review). For callers that only see the
  * parsed backup and the stored result (App after Settings restore).

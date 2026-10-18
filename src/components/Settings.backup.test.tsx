@@ -372,3 +372,47 @@ describe("Settings backup: quarantine (set-aside rows)", () => {
     expect(storage.loadLogsQuarantine()).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Restore banner (#163)
+// ---------------------------------------------------------------------------
+
+describe("Settings restore banner", () => {
+  const BANNED =
+    /tamper-proof|immutable|audit-proof|legally valid|compliant|noncompliant|violation|invalid|certified|audit/i;
+  const REVIEW = { reviewedAt: "2026-10-16T09:00:00-05:00", reviewedBy: "Alice Applicator" };
+
+  async function restoreOver(deviceLogs: ReturnType<typeof makeLog>[]) {
+    seedDevice();
+    const backup = storage.buildBackup(); // LOG_A + LOG_B, unreviewed
+    expect(storage.saveLogs(deviceLogs)).toBe(true);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const { onRestored } = setup();
+    await restoreText(JSON.stringify(backup));
+    await waitFor(() => expect(onRestored).toHaveBeenCalledTimes(1));
+    return onRestored.mock.calls[0]![1] as string;
+  }
+
+  it("says device data replaced when no device log was kept", async () => {
+    const flash = await restoreOver([LOG_A, LOG_B]);
+    expect(flash).toBe("Restored backup (v1.2) from 2026-10-17T19:00:00.000Z. Device data replaced.");
+  });
+
+  it("names the one log that kept its change history from this device", async () => {
+    const flash = await restoreOver([{ ...LOG_A, ...REVIEW }, LOG_B]);
+    expect(flash).toBe(
+      "Restored backup (v1.2) from 2026-10-17T19:00:00.000Z. Device data replaced, except 1 log that kept its change history from this device.",
+    );
+    expect(flash).not.toMatch(BANNED);
+    expect(storage.loadLogs().find((l) => l.id === "log-a")).toMatchObject(REVIEW);
+  });
+
+  it("counts kept logs, including reviewed device logs missing from the backup", async () => {
+    const extra = makeLog({ id: "log-c", dateUsed: "2026-10-03", ...REVIEW });
+    const flash = await restoreOver([{ ...LOG_A, ...REVIEW }, LOG_B, extra]);
+    expect(flash).toBe(
+      "Restored backup (v1.2) from 2026-10-17T19:00:00.000Z. Device data replaced, except 2 logs that kept their change history from this device.",
+    );
+    expect(flash).not.toMatch(BANNED);
+  });
+});
