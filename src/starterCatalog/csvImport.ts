@@ -384,7 +384,7 @@ export function parseCatalogCsv(input: string): CsvImportResult {
   }
   if (header.cells.length > CSV_IMPORT_MAX_COLUMNS) {
     result.fileProblems.push(
-      `Needs a look: this file has ${header.cells.length} columns; the import reads files with up to ${CSV_IMPORT_MAX_COLUMNS} columns.`,
+      `Needs a look: this file has ${header.cells.length} columns; the import reads files with up to ${CSV_IMPORT_MAX_COLUMNS} columns. Nothing was imported.`,
     );
     return result;
   }
