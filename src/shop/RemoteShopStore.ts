@@ -305,7 +305,10 @@ export class RemoteShopStore implements ShopStore {
     const { doc: storedDoc, setAsideOk } = this.stored!;
     const plan = planDedupedWrite(storedDoc.logs, nextLogs, setAsideOk);
     return {
-      cleanup: plan.cleanup ? { ...storedDoc, logs: plan.cleanup } : null,
+      // #221: keptCopyAt is for the rules on this cleanup write only; the next write drops it.
+      cleanup: plan.cleanup
+        ? { ...storedDoc, logs: plan.cleanup, ...(plan.keptCopyAt ? { keptCopyAt: plan.keptCopyAt } : {}) }
+        : null,
       doc: { ...doc, logs: plan.logs },
     };
   }
