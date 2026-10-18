@@ -118,6 +118,344 @@ service cloud.firestore {
         );
     }
 
+
+    // ---- #162: review lock on shared logs -------------------------------------
+    // Logs live in the shop doc's `logs` array. The client (RemoteShopStore.putShop)
+    // rewrites the whole doc; logOutbox / mergeLogIntoSet replaces a log in place or
+    // prepends a new one, and never removes one. Rules can't loop, so a write is checked
+    // on the logs it changed: `changed` = old logs not found unchanged in the new array,
+    // `added` = new logs not found unchanged in the old one. Replacements keep their
+    // place and new logs go to the front, so changed[i] pairs with
+    // added[added.size() - changed.size() + i].
+    //
+    // Once a log is reviewed (reviewedAt and reviewedBy non-blank, as isLogReviewed in
+    // src/reviewQueue.ts) no writer may delete it or overwrite it. It may only be
+    //   - corrected exactly as storage.buildCorrection writes it: revision + 1, history =
+    //     old history + one entry {revision, priorSnapshot (the stored log minus history /
+    //     reuploads / retainUntil), changedAt, changedBy, reason, changes}, with id,
+    //     createdAt, review stamp and re-upload records unchanged; or
+    //   - re-sent at the same revision with nothing changed except a later retainUntil
+    //     hold and/or appended re-upload records (mergeLogIntoSet / buildReupload).
+    // Unreviewed logs are not restricted (as before). Adding a log the shop doesn't have
+    // (including a re-upload of a missing log) is not restricted either.
+    //
+    // A request may evaluate at most 1000 expressions, so these checks are kept short.
+
+    function nonBlank(v) {
+      return v is string && v.trim().size() > 0;
+    }
+
+    function isReviewedLog(log) {
+      return nonBlank(log.get('reviewedAt', null)) && nonBlank(log.get('reviewedBy', null));
+    }
+
+    // Correction as storage.buildCorrection writes it. `revision` = prior revision + 1.
+    // (Any missing or mistyped field is an evaluation error, which denies the write.)
+    function isReviewedCorrection(prev, next, revision) {
+      let prior = prev.get('history', []);
+      let entry = next.history[prior.size()];
+      return !prev.diff(next).affectedKeys().hasAny(['id', 'createdAt', 'reviewedAt', 'reviewedBy', 'reuploads'])
+        // The 2-year hold only moves later (src/retention.ts); YYYY-MM-DD compares as text.
+        && next.get('retainUntil', '') >= prev.get('retainUntil', '')
+        && next.history == prior.concat([entry])
+        && entry.revision == revision
+        && entry.changedAt.trim().size() > 0
+        && entry.changedBy.trim().size() > 0
+        && entry.reason.trim().size() > 0
+        && entry.changes.size() > 0
+        && !entry.priorSnapshot.keys().hasAny(['history', 'reuploads', 'retainUntil'])
+        && prev.diff(entry.priorSnapshot).affectedKeys().hasOnly(['history', 'reuploads', 'retainUntil']);
+    }
+
+    // Same revision: nothing changed but a later hold and/or appended re-upload records.
+    function isReviewedResend(prev, next) {
+      let before = prev.get('reuploads', []);
+      return prev.diff(next).affectedKeys().hasOnly(['retainUntil', 'reuploads'])
+        && next.get('retainUntil', '') >= prev.get('retainUntil', '')
+        && (before.size() == 0 || next.reuploads[0:before.size()] == before);
+    }
+
+    // storage.buildCorrection: priorRevision = revision ?? history.length.
+    function reviewedChangeOk(prev, next) {
+      let revision = prev.get('revision', prev.get('history', []).size()) + 1;
+      return next.get('revision', -1) == revision
+        ? isReviewedCorrection(prev, next, revision)
+        : isReviewedResend(prev, next);
+    }
+
+    // changed[i]: unreviewed → no limit; reviewed → its paired replacement must pass.
+    // #214: the pair must exist (no out-of-range index) and carry the same id.
+    function changedLogOk(changed, added, i) {
+      return !('reviewedAt' in changed[i])
+        || !isReviewedLog(changed[i])
+        || pairedChangeOk(changed[i], added, added.size() - changed.size() + i);
+    }
+
+    function pairedChangeOk(prev, added, k) {
+      return k >= 0 && k < added.size() && added[k].id == prev.id && reviewedChangeOk(prev, added[k]);
+    }
+
+    // Up to 40 changed logs per write (unchanged and new logs don't count; a sync write
+    // or #210 outbox flush changes one log), checked in blocks of 8 so unused slots cost
+    // one comparison per block. The 1000-expression limit is reached first in practice.
+    // Measured in the emulator, per write: on a doc without logIds about 34 changed
+    // unreviewed logs, 3 corrections or 4 re-sends of reviewed logs; on a doc with logIds
+    // (see below) at most 8 changed and 8 added logs (any number on docs of up to 64
+    // logs, within the same expression budget), 2 corrections or 3 re-sends. A bigger
+    // write is denied (fails closed).
+    function changedLogs0to7(changed, added, n) {
+      return (n <= 0 || changedLogOk(changed, added, 0))
+        && (n <= 1 || changedLogOk(changed, added, 1))
+        && (n <= 2 || changedLogOk(changed, added, 2))
+        && (n <= 3 || changedLogOk(changed, added, 3))
+        && (n <= 4 || changedLogOk(changed, added, 4))
+        && (n <= 5 || changedLogOk(changed, added, 5))
+        && (n <= 6 || changedLogOk(changed, added, 6))
+        && (n <= 7 || changedLogOk(changed, added, 7));
+    }
+
+    function changedLogs8to15(changed, added, n) {
+      return (n <= 8 || changedLogOk(changed, added, 8))
+        && (n <= 9 || changedLogOk(changed, added, 9))
+        && (n <= 10 || changedLogOk(changed, added, 10))
+        && (n <= 11 || changedLogOk(changed, added, 11))
+        && (n <= 12 || changedLogOk(changed, added, 12))
+        && (n <= 13 || changedLogOk(changed, added, 13))
+        && (n <= 14 || changedLogOk(changed, added, 14))
+        && (n <= 15 || changedLogOk(changed, added, 15));
+    }
+
+    function changedLogs16to23(changed, added, n) {
+      return (n <= 16 || changedLogOk(changed, added, 16))
+        && (n <= 17 || changedLogOk(changed, added, 17))
+        && (n <= 18 || changedLogOk(changed, added, 18))
+        && (n <= 19 || changedLogOk(changed, added, 19))
+        && (n <= 20 || changedLogOk(changed, added, 20))
+        && (n <= 21 || changedLogOk(changed, added, 21))
+        && (n <= 22 || changedLogOk(changed, added, 22))
+        && (n <= 23 || changedLogOk(changed, added, 23));
+    }
+
+    function changedLogs24to31(changed, added, n) {
+      return (n <= 24 || changedLogOk(changed, added, 24))
+        && (n <= 25 || changedLogOk(changed, added, 25))
+        && (n <= 26 || changedLogOk(changed, added, 26))
+        && (n <= 27 || changedLogOk(changed, added, 27))
+        && (n <= 28 || changedLogOk(changed, added, 28))
+        && (n <= 29 || changedLogOk(changed, added, 29))
+        && (n <= 30 || changedLogOk(changed, added, 30))
+        && (n <= 31 || changedLogOk(changed, added, 31));
+    }
+
+    function changedLogs32to39(changed, added, n) {
+      return (n <= 32 || changedLogOk(changed, added, 32))
+        && (n <= 33 || changedLogOk(changed, added, 33))
+        && (n <= 34 || changedLogOk(changed, added, 34))
+        && (n <= 35 || changedLogOk(changed, added, 35))
+        && (n <= 36 || changedLogOk(changed, added, 36))
+        && (n <= 37 || changedLogOk(changed, added, 37))
+        && (n <= 38 || changedLogOk(changed, added, 38))
+        && (n <= 39 || changedLogOk(changed, added, 39));
+    }
+
+    function changedLogsOk(changed, added) {
+      let n = changed.size();
+      return n <= 40
+        && (n <= 0 || changedLogs0to7(changed, added, n))
+        && (n <= 8 || changedLogs8to15(changed, added, n))
+        && (n <= 16 || changedLogs16to23(changed, added, n))
+        && (n <= 24 || changedLogs24to31(changed, added, n))
+        && (n <= 32 || changedLogs32to39(changed, added, n));
+    }
+
+    // ---- #214: log id index ------------------------------------------------------
+    // Rules can't read every log's id, so on their own they can't stop a new entry that
+    // reuses a stored id (stored [R] → [Fake{id: R}, R]) or two new entries with one id.
+    // The doc may carry `logIds`, one id per log; once a doc has it, every write must keep
+    // it and it is checked so that the ids in `logs` stay unique:
+    //   - logIds is a list of distinct values, one per log; and
+    //   - either the step from the stored logIds is consistent with the logs that changed
+    //     (cheap; up to 8 changed and 8 added logs per write), or every position is checked
+    //     (logIds[i] == logs[i].id) for docs of up to 64 logs (the first write that adds it).
+    // By induction, the ids of `logs` are then exactly the distinct values in logIds.
+    // A doc without logIds (written by clients that don't keep it yet) keeps the checks
+    // above only, so there a new entry can still reuse a stored id. Docs of more than 64
+    // logs can't add the index in one write here (the expression budget); they need a
+    // trusted (server-side) first write of logIds.
+    // Ids of l[0..n-1] for n <= 8 (null above; the caller checks n first).
+    function idList8(l, n) {
+      return n == 0 ? []
+        : n == 1 ? [l[0].id]
+        : n == 2 ? [l[0].id, l[1].id]
+        : n == 3 ? [l[0].id, l[1].id, l[2].id]
+        : n == 4 ? [l[0].id, l[1].id, l[2].id, l[3].id]
+        : n == 5 ? [l[0].id, l[1].id, l[2].id, l[3].id, l[4].id]
+        : n == 6 ? [l[0].id, l[1].id, l[2].id, l[3].id, l[4].id, l[5].id]
+        : n == 7 ? [l[0].id, l[1].id, l[2].id, l[3].id, l[4].id, l[5].id, l[6].id]
+        : n == 8 ? [l[0].id, l[1].id, l[2].id, l[3].id, l[4].id, l[5].id, l[6].id, l[7].id]
+        : null;
+    }
+
+    // Stored ids `prev` match the stored logs (induction). The new ids must include every
+    // added log's id; a new value must belong to an added log; a dropped value to a changed
+    // log; and a changed log's id that stays must belong to an added log (its replacement).
+    function idIndexStep(prev, next, cIds, aIds) {
+      return next.hasAll(aIds)
+        && next.removeAll(prev).hasOnly(aIds)
+        && prev.removeAll(next).hasOnly(cIds)
+        && !next.hasAny(cIds.removeAll(aIds));
+    }
+
+    function idIndexStepOk(changed, added) {
+      return changed.size() <= 8
+        && added.size() <= 8
+        && idIndexStep(resource.data.logIds, request.resource.data.logIds,
+          idList8(changed, changed.size()), idList8(added, added.size()));
+    }
+
+    // Positions 0..7 (n > 0).
+    function idsMatch0(ids, logs, n) {
+      return n >= 8 ? ids[0:8] == [logs[0].id, logs[1].id, logs[2].id, logs[3].id, logs[4].id, logs[5].id, logs[6].id, logs[7].id]
+        : n == 1 ? ids[0:1] == [logs[0].id]
+        : n == 2 ? ids[0:2] == [logs[0].id, logs[1].id]
+        : n == 3 ? ids[0:3] == [logs[0].id, logs[1].id, logs[2].id]
+        : n == 4 ? ids[0:4] == [logs[0].id, logs[1].id, logs[2].id, logs[3].id]
+        : n == 5 ? ids[0:5] == [logs[0].id, logs[1].id, logs[2].id, logs[3].id, logs[4].id]
+        : n == 6 ? ids[0:6] == [logs[0].id, logs[1].id, logs[2].id, logs[3].id, logs[4].id, logs[5].id]
+        : n == 7 ? ids[0:7] == [logs[0].id, logs[1].id, logs[2].id, logs[3].id, logs[4].id, logs[5].id, logs[6].id]
+        : false;
+    }
+
+    // Positions 8..15 (n > 8).
+    function idsMatch8(ids, logs, n) {
+      return n >= 16 ? ids[8:16] == [logs[8].id, logs[9].id, logs[10].id, logs[11].id, logs[12].id, logs[13].id, logs[14].id, logs[15].id]
+        : n == 9 ? ids[8:9] == [logs[8].id]
+        : n == 10 ? ids[8:10] == [logs[8].id, logs[9].id]
+        : n == 11 ? ids[8:11] == [logs[8].id, logs[9].id, logs[10].id]
+        : n == 12 ? ids[8:12] == [logs[8].id, logs[9].id, logs[10].id, logs[11].id]
+        : n == 13 ? ids[8:13] == [logs[8].id, logs[9].id, logs[10].id, logs[11].id, logs[12].id]
+        : n == 14 ? ids[8:14] == [logs[8].id, logs[9].id, logs[10].id, logs[11].id, logs[12].id, logs[13].id]
+        : n == 15 ? ids[8:15] == [logs[8].id, logs[9].id, logs[10].id, logs[11].id, logs[12].id, logs[13].id, logs[14].id]
+        : false;
+    }
+
+    // Positions 16..23 (n > 16).
+    function idsMatch16(ids, logs, n) {
+      return n >= 24 ? ids[16:24] == [logs[16].id, logs[17].id, logs[18].id, logs[19].id, logs[20].id, logs[21].id, logs[22].id, logs[23].id]
+        : n == 17 ? ids[16:17] == [logs[16].id]
+        : n == 18 ? ids[16:18] == [logs[16].id, logs[17].id]
+        : n == 19 ? ids[16:19] == [logs[16].id, logs[17].id, logs[18].id]
+        : n == 20 ? ids[16:20] == [logs[16].id, logs[17].id, logs[18].id, logs[19].id]
+        : n == 21 ? ids[16:21] == [logs[16].id, logs[17].id, logs[18].id, logs[19].id, logs[20].id]
+        : n == 22 ? ids[16:22] == [logs[16].id, logs[17].id, logs[18].id, logs[19].id, logs[20].id, logs[21].id]
+        : n == 23 ? ids[16:23] == [logs[16].id, logs[17].id, logs[18].id, logs[19].id, logs[20].id, logs[21].id, logs[22].id]
+        : false;
+    }
+
+    // Positions 24..31 (n > 24).
+    function idsMatch24(ids, logs, n) {
+      return n >= 32 ? ids[24:32] == [logs[24].id, logs[25].id, logs[26].id, logs[27].id, logs[28].id, logs[29].id, logs[30].id, logs[31].id]
+        : n == 25 ? ids[24:25] == [logs[24].id]
+        : n == 26 ? ids[24:26] == [logs[24].id, logs[25].id]
+        : n == 27 ? ids[24:27] == [logs[24].id, logs[25].id, logs[26].id]
+        : n == 28 ? ids[24:28] == [logs[24].id, logs[25].id, logs[26].id, logs[27].id]
+        : n == 29 ? ids[24:29] == [logs[24].id, logs[25].id, logs[26].id, logs[27].id, logs[28].id]
+        : n == 30 ? ids[24:30] == [logs[24].id, logs[25].id, logs[26].id, logs[27].id, logs[28].id, logs[29].id]
+        : n == 31 ? ids[24:31] == [logs[24].id, logs[25].id, logs[26].id, logs[27].id, logs[28].id, logs[29].id, logs[30].id]
+        : false;
+    }
+
+    // Positions 32..39 (n > 32).
+    function idsMatch32(ids, logs, n) {
+      return n >= 40 ? ids[32:40] == [logs[32].id, logs[33].id, logs[34].id, logs[35].id, logs[36].id, logs[37].id, logs[38].id, logs[39].id]
+        : n == 33 ? ids[32:33] == [logs[32].id]
+        : n == 34 ? ids[32:34] == [logs[32].id, logs[33].id]
+        : n == 35 ? ids[32:35] == [logs[32].id, logs[33].id, logs[34].id]
+        : n == 36 ? ids[32:36] == [logs[32].id, logs[33].id, logs[34].id, logs[35].id]
+        : n == 37 ? ids[32:37] == [logs[32].id, logs[33].id, logs[34].id, logs[35].id, logs[36].id]
+        : n == 38 ? ids[32:38] == [logs[32].id, logs[33].id, logs[34].id, logs[35].id, logs[36].id, logs[37].id]
+        : n == 39 ? ids[32:39] == [logs[32].id, logs[33].id, logs[34].id, logs[35].id, logs[36].id, logs[37].id, logs[38].id]
+        : false;
+    }
+
+    // Positions 40..47 (n > 40).
+    function idsMatch40(ids, logs, n) {
+      return n >= 48 ? ids[40:48] == [logs[40].id, logs[41].id, logs[42].id, logs[43].id, logs[44].id, logs[45].id, logs[46].id, logs[47].id]
+        : n == 41 ? ids[40:41] == [logs[40].id]
+        : n == 42 ? ids[40:42] == [logs[40].id, logs[41].id]
+        : n == 43 ? ids[40:43] == [logs[40].id, logs[41].id, logs[42].id]
+        : n == 44 ? ids[40:44] == [logs[40].id, logs[41].id, logs[42].id, logs[43].id]
+        : n == 45 ? ids[40:45] == [logs[40].id, logs[41].id, logs[42].id, logs[43].id, logs[44].id]
+        : n == 46 ? ids[40:46] == [logs[40].id, logs[41].id, logs[42].id, logs[43].id, logs[44].id, logs[45].id]
+        : n == 47 ? ids[40:47] == [logs[40].id, logs[41].id, logs[42].id, logs[43].id, logs[44].id, logs[45].id, logs[46].id]
+        : false;
+    }
+
+    // Positions 48..55 (n > 48).
+    function idsMatch48(ids, logs, n) {
+      return n >= 56 ? ids[48:56] == [logs[48].id, logs[49].id, logs[50].id, logs[51].id, logs[52].id, logs[53].id, logs[54].id, logs[55].id]
+        : n == 49 ? ids[48:49] == [logs[48].id]
+        : n == 50 ? ids[48:50] == [logs[48].id, logs[49].id]
+        : n == 51 ? ids[48:51] == [logs[48].id, logs[49].id, logs[50].id]
+        : n == 52 ? ids[48:52] == [logs[48].id, logs[49].id, logs[50].id, logs[51].id]
+        : n == 53 ? ids[48:53] == [logs[48].id, logs[49].id, logs[50].id, logs[51].id, logs[52].id]
+        : n == 54 ? ids[48:54] == [logs[48].id, logs[49].id, logs[50].id, logs[51].id, logs[52].id, logs[53].id]
+        : n == 55 ? ids[48:55] == [logs[48].id, logs[49].id, logs[50].id, logs[51].id, logs[52].id, logs[53].id, logs[54].id]
+        : false;
+    }
+
+    // Positions 56..63 (n > 56).
+    function idsMatch56(ids, logs, n) {
+      return n >= 64 ? ids[56:64] == [logs[56].id, logs[57].id, logs[58].id, logs[59].id, logs[60].id, logs[61].id, logs[62].id, logs[63].id]
+        : n == 57 ? ids[56:57] == [logs[56].id]
+        : n == 58 ? ids[56:58] == [logs[56].id, logs[57].id]
+        : n == 59 ? ids[56:59] == [logs[56].id, logs[57].id, logs[58].id]
+        : n == 60 ? ids[56:60] == [logs[56].id, logs[57].id, logs[58].id, logs[59].id]
+        : n == 61 ? ids[56:61] == [logs[56].id, logs[57].id, logs[58].id, logs[59].id, logs[60].id]
+        : n == 62 ? ids[56:62] == [logs[56].id, logs[57].id, logs[58].id, logs[59].id, logs[60].id, logs[61].id]
+        : n == 63 ? ids[56:63] == [logs[56].id, logs[57].id, logs[58].id, logs[59].id, logs[60].id, logs[61].id, logs[62].id]
+        : false;
+    }
+
+    function idIndexFullOk(ids, logs) {
+      let n = logs.size();
+      return n <= 64
+        && (n <= 0 || idsMatch0(ids, logs, n))
+        && (n <= 8 || idsMatch8(ids, logs, n))
+        && (n <= 16 || idsMatch16(ids, logs, n))
+        && (n <= 24 || idsMatch24(ids, logs, n))
+        && (n <= 32 || idsMatch32(ids, logs, n))
+        && (n <= 40 || idsMatch40(ids, logs, n))
+        && (n <= 48 || idsMatch48(ids, logs, n))
+        && (n <= 56 || idsMatch56(ids, logs, n));
+    }
+
+    function idIndexShapeOk(ids, logs) {
+      return ids is list && ids.size() == logs.size() && ids.toSet().size() == ids.size();
+    }
+
+    function logIdIndexOk(changed, added) {
+      return !('logIds' in request.resource.data)
+        ? !('logIds' in resource.data)
+        : idIndexShapeOk(request.resource.data.logIds, request.resource.data.logs)
+          && (('logIds' in resource.data) && idIndexStepOk(changed, added)
+            || idIndexFullOk(request.resource.data.logIds, request.resource.data.logs));
+    }
+
+    function logsWriteOk(changed, added) {
+      return changedLogsOk(changed, added) && logIdIndexOk(changed, added);
+    }
+
+    // Fast path: the write leaves `logs` (and `logIds`) exactly as they were (membership, PIN changes).
+    function reviewedLogsLocked() {
+      return (request.resource.data.logs == resource.data.logs
+          && request.resource.data.get('logIds', null) == resource.data.get('logIds', null))
+        || logsWriteOk(
+          resource.data.logs.removeAll(request.resource.data.logs),
+          request.resource.data.logs.removeAll(resource.data.logs)
+        );
+    }
+
     match /shops/{shopId} {
       // First-office create: creator must be signed in and set themselves as owner + office.
       allow create: if signedIn()
@@ -127,7 +465,11 @@ service cloud.firestore {
           'version', 'updatedAt', 'logs', 'catalog', 'people', 'settings',
           'auth', 'ownerUid', 'members'
         ])
-        && request.resource.data.members[request.auth.uid] == 'office';
+        && request.resource.data.members[request.auth.uid] == 'office'
+        // #214: a logIds index, if present, must match the logs.
+        && (!('logIds' in request.resource.data)
+          || (idIndexShapeOk(request.resource.data.logIds, request.resource.data.logs)
+            && idIndexFullOk(request.resource.data.logIds, request.resource.data.logs)));
 
       // Authenticated get only (no public / unauthenticated read). List denied.
       allow get: if signedIn() && isValidShopId(shopId);
@@ -135,6 +477,8 @@ service cloud.firestore {
 
       allow update: if signedIn()
         && isValidShopId(shopId)
+        // #162: applies to every writer (office, tech, join, bootstrap).
+        && reviewedLogsLocked()
         && (
           // Office/owner: full document updates (PIN change, migrate, etc.).
           (isOffice() && ownerUidUnchanged() && pinsStayHidden())

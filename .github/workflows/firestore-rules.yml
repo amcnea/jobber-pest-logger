@@ -1,0 +1,54 @@
+name: Firestore rules
+
+on:
+  pull_request:
+    paths:
+      - firestore.rules
+      - firebase.json
+      - rules-tests/**
+      - .github/workflows/firestore-rules.yml
+  push:
+    branches:
+      - main
+    paths:
+      - firestore.rules
+      - firebase.json
+      - rules-tests/**
+      - .github/workflows/firestore-rules.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firestore-rules-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rules:
+    name: Firestore rules (emulator)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rules-tests
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: rules-tests/package-lock.json
+
+      - name: Setup Java (Firestore emulator)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Rules tests (Firestore emulator)
+        run: npm test
