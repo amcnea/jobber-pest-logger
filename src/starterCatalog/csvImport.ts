@@ -181,13 +181,15 @@ function tokenizeFrom(
       if (resumeAt < 0 && (c === "\n" || c === "\r")) {
         resumeAt = i + (c === "\r" && text[i + 1] === "\n" ? 2 : 1);
       }
-      if (c === "\n") line++;
       if (c === "\r" && text[i + 1] === "\n") {
         field += "\n";
         line++;
         i += 2;
         continue;
       }
+      // LF and a bare CR (old Mac line ending) each end a line, matching how
+      // line breaks outside quotes are counted (#157).
+      if (c === "\n" || c === "\r") line++;
       field += c;
       i++;
       continue;
