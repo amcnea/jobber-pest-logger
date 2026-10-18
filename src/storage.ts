@@ -15,6 +15,7 @@ import type {
   ShopProduct,
   ShopSettings,
 } from "./types";
+import { deleteBlockedReason, isWithinRetention } from "./retention";
 
 const LOGS_KEY = "jobber-pest-logger:logs:v1";
 const CATALOG_KEY = "jobber-pest-logger:catalog:v1";
@@ -427,8 +428,20 @@ export function loadLogsQuarantine(): unknown[] {
  */
 export function saveLogs(
   logs: ApplicationLog[],
-  options?: { skipQuarantine?: boolean },
+  options?: { skipQuarantine?: boolean; allowRetainedRemoval?: boolean },
 ): boolean {
+  // 2-year guard (4 TAC § 7.144 record keeping): no save may drop a stored real log
+  // less than 2 years past its application date. Only wipeAllDeviceData opts out.
+  if (!options?.allowRetainedRemoval) {
+    const dropped = retainedLogsDroppedBy(logs);
+    if (dropped.length > 0) {
+      console.error(
+        "jobber-pest-logger: could not save logs",
+        new Error(`refused: would remove ${dropped.length} log(s) less than 2 years old`),
+      );
+      return false;
+    }
+  }
   if (
     !options?.skipQuarantine &&
     !quarantineRawFailuresBeforeWrite(LOGS_KEY, LOGS_QUARANTINE_KEY, normalizeLog)
@@ -451,6 +464,24 @@ export function saveLogs(
 /** Shown when upsertLog refuses a copy opened before newer history was saved. */
 export const STALE_EDIT_MSG =
   "This log changed on this device after you opened it. Open it again from History.";
+
+/** Stored (readable) logs under the 2-year guard that a save of `next` would remove. */
+function retainedLogsDroppedBy(next: ApplicationLog[]): ApplicationLog[] {
+  let parsed: unknown;
+  try {
+    const raw = localStorage.getItem(LOGS_KEY);
+    if (!raw) return [];
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const keep = new Set(next.map((l) => l.id));
+  const now = new Date();
+  return parsed
+    .map(normalizeLog)
+    .filter((l): l is ApplicationLog => l !== null && !keep.has(l.id) && isWithinRetention(l, now));
+}
 
 /**
  * Create or replace a log. A stored log that is reviewed is locked: this refuses to
@@ -478,8 +509,18 @@ export function upsertLog(log: ApplicationLog): {
   return { logs: saved ? next : logs, saved };
 }
 
-export function deleteLog(id: string): { logs: ApplicationLog[]; saved: boolean } {
+/**
+ * Delete one log. Refused (`blocked` = reason, nothing written) while the log is less
+ * than 2 years past its application date; example-only demo logs are not held.
+ */
+export function deleteLog(
+  id: string,
+  now: Date = new Date(),
+): { logs: ApplicationLog[]; saved: boolean; blocked?: string } {
   const current = loadLogs();
+  const target = current.find((l) => l.id === id);
+  const blocked = target ? deleteBlockedReason(target, now) : null;
+  if (blocked) return { logs: current, saved: false, blocked };
   const next = current.filter((l) => l.id !== id);
   const saved = saveLogs(next);
   return { logs: saved ? next : current, saved };
@@ -986,6 +1027,12 @@ export function clearExampleDemoData(): {
   let strippedLogs = 0;
   const nextLogs: ApplicationLog[] = [];
   for (const log of currentLogs) {
+    // Reviewed logs and logs with change history are records: never removed or
+    // stripped here, even if they used example seeds.
+    if (isLogReviewed(log) || carriesHistoryOrReview(log)) {
+      nextLogs.push(log);
+      continue;
+    }
     const hadExamples = log.sampleData === true || logHasExampleProducts(log.products);
     const kept = log.products.filter(
       (p) =>
@@ -1574,7 +1621,9 @@ export function wipeAllDeviceData(): {
     localStorage.removeItem(A2HS_TIP_KEY);
     // skipQuarantine: wiping those rows on purpose must not copy them into quarantine first.
     const catalogOk = saveCatalog(seed, { skipQuarantine: true });
-    const logsOk = saveLogs([], { skipQuarantine: true });
+    // Wipe is a device reset: the only save allowed to drop logs under 2 years (the
+    // confirm warns with the count first).
+    const logsOk = saveLogs([], { skipQuarantine: true, allowRetainedRemoval: true });
     const peopleOk = savePeople([], { skipQuarantine: true });
     const settingsOk = saveSettings(clearedSettings);
     if (!(catalogOk && logsOk && peopleOk && settingsOk)) {
@@ -1834,6 +1883,8 @@ export interface RestoreHistoryReport {
   diverged: string[];
   /** Device logs absent from the backup kept because they carry history or a review stamp. */
   keptAbsent: string[];
+  /** Device logs absent from the backup kept because they are less than 2 years old (no history). */
+  keptRecent?: string[];
 }
 
 function sameCorrectionEntry(a: CorrectionEntry, b: CorrectionEntry): boolean {
@@ -1968,9 +2019,15 @@ export function mergeRestoredLogs(
     if (!isHistoryPrefix(bh, lh) && !isHistoryPrefix(lh, bh)) report.diverged.push(local.id);
     return local;
   });
+  const now = new Date();
   for (const local of device) {
-    if (!backupIds.has(local.id) && carriesHistoryOrReview(local)) {
+    if (backupIds.has(local.id)) continue;
+    if (carriesHistoryOrReview(local)) {
       report.keptAbsent.push(local.id);
+      logs.push(local);
+    } else if (isWithinRetention(local, now)) {
+      // 2-year guard: a restore never removes a real log less than 2 years old.
+      (report.keptRecent ??= []).push(local.id);
       logs.push(local);
     }
   }
@@ -1995,10 +2052,20 @@ export function restoreBannerText(
 ): string {
   const head = `Restored backup (v${backup.version}) from ${backup.exportedAt}.`;
   const n = report ? report.keptDevice.length + report.keptAbsent.length : 0;
-  if (n === 0) return `${head} Device data replaced.`;
-  return `${head} Device data replaced, except ${n} log${n === 1 ? " that" : "s that"} kept ${
-    n === 1 ? "its" : "their"
-  } change history from this device.`;
+  const main =
+    n === 0
+      ? `${head} Device data replaced.`
+      : `${head} Device data replaced, except ${n} log${n === 1 ? " that" : "s that"} kept ${
+          n === 1 ? "its" : "their"
+        } change history from this device.`;
+  return [main, restoreRecentSentence(report?.keptRecent?.length ?? 0)].filter(Boolean).join(" ");
+}
+
+/** 2-year guard: device logs the backup lacks that stayed because they are under 2 years old. */
+export function restoreRecentSentence(m: number): string {
+  if (m <= 0) return "";
+  if (m === 1) return "1 log that the backup doesn't have is less than 2 years old, so it stayed on this device.";
+  return `${m} logs that the backup doesn't have are less than 2 years old, so they stayed on this device.`;
 }
 
 /**

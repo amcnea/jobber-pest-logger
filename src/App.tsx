@@ -358,6 +358,10 @@ export default function App() {
     // Confirm lives in History (includes date + address in the prompt).
     const result = deleteLog(id);
     setLogs(result.logs);
+    if (result.blocked) {
+      setStorageError(result.blocked);
+      return;
+    }
     setStorageError(result.saved ? null : "Could not update saved logs on this device.");
   }
 

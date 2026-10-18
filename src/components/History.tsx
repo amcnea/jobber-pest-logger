@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { productEpaCaption } from "../catalog";
 import { filterLogsByDateUsed, monthRangeLocal } from "../dates";
 import { changeStatusLabel } from "../correctionExport";
+import { deleteBlockedReason } from "../retention";
 import { isLogReviewed, reviewFlagsForLog } from "../reviewQueue";
 import { groupLogsByServiceAddress, type PropertyBookEntry } from "../storage";
 import type { ApplicationLog, Person, ShopProduct } from "../types";
@@ -310,12 +311,17 @@ export function History({
                           Correct this log
                         </button>
                       )}
-                      <button type="button" className="btn btn-ghost" onClick={() => handleDelete(log)}>
-                        Delete
-                      </button>
+                      {!deleteBlockedReason(log, clock) && (
+                        <button type="button" className="btn btn-ghost" onClick={() => handleDelete(log)}>
+                          Delete
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
+                {canEditDelete && deleteBlockedReason(log, clock) && (
+                  <p className="hint">{deleteBlockedReason(log, clock)}</p>
+                )}
                 {canEditDelete && reviewed && <p className="hint">{REVIEWED_LOCK_NOTE}</p>}
                 {reviewEnabled && !reviewed && onMarkReviewed && (
                   <MarkReviewed

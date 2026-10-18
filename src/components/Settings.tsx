@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { LAWGICAL_DISCLAIMER } from "../disclaimer";
 import { buildExportProvenance, provenanceFileSuffix } from "../exportProvenance";
+import { countWithinRetention, wipeRetentionWarning } from "../retention";
 import {
   applyBackup,
   countSetAsideRows,
@@ -79,7 +80,7 @@ export function wipeSetAsideSentence(n: number): string {
 }
 
 export const RESTORE_CONFIRM_TEXT =
-  "Restoring replaces this device's logs with the backup, except logs that have change history or a review the backup doesn't. Those stay on this device.";
+  "Restoring replaces this device's logs with the backup, except logs that have change history or a review the backup doesn't, and logs less than 2 years old that the backup doesn't have. Those stay on this device.";
 
 export function Settings({
   settings,
@@ -932,7 +933,14 @@ export function Settings({
             if (authenticated && role === "tech") return;
             if (
               !confirm(
-                [WIPE_CONFIRM_TEXT, wipeSetAsideSentence(countSetAsideRows())].filter(Boolean).join(" "),
+                [
+                  WIPE_CONFIRM_TEXT,
+                  // Wipe stays allowed (device reset), but warns about logs under 2 years.
+                  wipeRetentionWarning(countWithinRetention(loadLogs())),
+                  wipeSetAsideSentence(countSetAsideRows()),
+                ]
+                  .filter(Boolean)
+                  .join(" "),
               )
             ) {
               return;

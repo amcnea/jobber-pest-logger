@@ -97,8 +97,22 @@ export const PRODUCT_FIELD_LABELS: Readonly<Record<string, string>> = {
   deviceCount: "Device counts",
 };
 export const DEVICE_NAME_LABEL = "Devices used";
-/** Product-line keys with no export column: shown as "<product name>: <key>". */
-const PRODUCT_KEYS_WITHOUT_COLUMN = new Set(["method", "catalogId"]);
+/** Product-line keys with no export column (Lawgical, #175). */
+export const PRODUCT_EXTRA_LABELS: Readonly<Record<string, string>> = {
+  method: "Application method",
+  catalogId: "Shop catalog entry",
+};
+
+/** A second (third, …) personnel row in one role: "{Role} N: {field}" (form labels). */
+export const PERSONNEL_ROLE_TITLES: Readonly<Record<string, string>> = {
+  applying: "Applying",
+  supervising: "Supervising",
+  receiving_training: "Receiving training",
+};
+export const PERSONNEL_FIELD_TITLES: Readonly<Record<string, string>> = {
+  name: "Name",
+  licenseNumber: "License number",
+};
 
 type Version = Pick<LogSnapshot, "products"> | undefined;
 
@@ -126,14 +140,18 @@ export function fieldLabel(path: string, after?: Version, before?: Version): str
   if (person && PERSONNEL_FIELD_LABELS[`${person[1]}.${person[2]}`]) {
     return PERSONNEL_FIELD_LABELS[`${person[1]}.${person[2]}`];
   }
+  const extraPerson = /^personnel\[([a-z_]+)#(\d+)\]\.(\w+)$/.exec(path);
+  if (extraPerson && PERSONNEL_ROLE_TITLES[extraPerson[1]] && PERSONNEL_FIELD_TITLES[extraPerson[3]]) {
+    return `${PERSONNEL_ROLE_TITLES[extraPerson[1]]} ${extraPerson[2]}: ${PERSONNEL_FIELD_TITLES[extraPerson[3]]}`;
+  }
   const product = /^products\[(.+)\]\.(\w+)$/.exec(path);
-  if (product && (PRODUCT_FIELD_LABELS[product[2]] || PRODUCT_KEYS_WITHOUT_COLUMN.has(product[2]))) {
+  if (product && (PRODUCT_FIELD_LABELS[product[2]] || PRODUCT_EXTRA_LABELS[product[2]])) {
     const heading = productHeading(product[1], after, before);
     if (heading.text) {
       const column =
         product[2] === "name" && heading.line?.method === "device"
           ? DEVICE_NAME_LABEL
-          : (PRODUCT_FIELD_LABELS[product[2]] ?? product[2]);
+          : (PRODUCT_FIELD_LABELS[product[2]] ?? PRODUCT_EXTRA_LABELS[product[2]]);
       return `${heading.text}: ${column}`;
     }
   }
