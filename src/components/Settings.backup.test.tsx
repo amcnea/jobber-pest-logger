@@ -258,7 +258,9 @@ describe("Settings backup: restore from file", () => {
     const { onRestored } = setup();
     await restoreText(JSON.stringify(backup));
     await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
-    expect(confirm.mock.calls[0]![0]).toMatch(/^Restore this backup\?/);
+    expect(confirm.mock.calls[0]![0]).toBe(
+      "Restoring replaces this device's logs with the backup, except logs that have change history or a review the backup doesn't. Those stay on this device.",
+    );
     expect(onRestored).not.toHaveBeenCalled();
     expect(storage.loadLogs()).toHaveLength(2);
   });
@@ -392,6 +394,11 @@ describe("Settings restore banner", () => {
     await waitFor(() => expect(onRestored).toHaveBeenCalledTimes(1));
     return onRestored.mock.calls[0]![1] as string;
   }
+
+  it("restore confirm text avoids banned terms", async () => {
+    const { RESTORE_CONFIRM_TEXT } = await import("./Settings");
+    expect(RESTORE_CONFIRM_TEXT).not.toMatch(BANNED);
+  });
 
   it("says device data replaced when no device log was kept", async () => {
     const flash = await restoreOver([LOG_A, LOG_B]);

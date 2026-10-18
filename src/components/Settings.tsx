@@ -65,6 +65,9 @@ interface Props {
   onWipeAll: () => { ok: boolean; summary: string };
 }
 
+export const RESTORE_CONFIRM_TEXT =
+  "Restoring replaces this device's logs with the backup, except logs that have change history or a review the backup doesn't. Those stay on this device.";
+
 export function Settings({
   settings,
   lastBackupAt,
@@ -300,7 +303,7 @@ export function Settings({
     }
 
     const confirmed = confirm(
-      "Restore this backup? It replaces all logs, catalog, people, settings, and any set-aside rows currently saved on this device.",
+      RESTORE_CONFIRM_TEXT,
     );
     if (!confirmed) return;
 
