@@ -81,7 +81,7 @@ describe("CSV change history", () => {
     expect(last).toContain("101 Main St");
     expect(last.endsWith(
       ",Corrected (rev 1),Rev 1 · 2026-10-17T18:05:00-05:00 · Ana Office · Reason: Wrong house number · " +
-        "customerBillingName: Pat Customer → (blank); serviceAddress: 100 Main St → 101 Main St",
+        "Customer billing name: Pat Customer → (blank); Service address: 100 Main St → 101 Main St",
     )).toBe(true);
   });
 
@@ -97,7 +97,7 @@ describe("CSV change history", () => {
     expect(correctedLabel(twice.log)).toBe("Corrected (rev 2)");
     const cell = changeHistoryCell(twice.log);
     expect(cell.indexOf("Rev 1 ·")).toBeLessThan(cell.indexOf(" | Rev 2 · 2026-10-17T18:30:00-05:00"));
-    expect(cell).toContain("targetPestOrPurpose: Ants → Fire ants");
+    expect(cell).toContain("Target pest or purpose: Ants → Fire ants");
   });
 
   it("does not export set-aside device copies", () => {
@@ -135,8 +135,127 @@ describe("PDF change history", () => {
     const after = flat.slice(titleIdx);
     expect(after).toContain("Change history (original values kept):");
     expect(after).toContain("  Rev 1 — 2026-10-17T18:05:00-05:00 — Ana Office — Reason: Wrong house number");
-    expect(after).toContain("    customerBillingName: Pat Customer -> (blank)");
-    expect(after).toContain("    serviceAddress: 100 Main St -> 101 Main St");
+    expect(after).toContain("    Customer billing name: Pat Customer -> (blank)");
+    expect(after).toContain("    Service address: 100 Main St -> 101 Main St");
     expect(flat.join("\n")).not.toContain("→");
+  });
+});
+
+const {
+  DEVICE_NAME_LABEL,
+  fieldLabel,
+  LOG_FIELD_LABELS,
+  PERSONNEL_FIELD_LABELS,
+  PRODUCT_FIELD_LABELS,
+  REUPLOADED_LABEL,
+  changeStatusLabel,
+  TERMITE_FIELD_LABELS,
+} = await import("./correctionExport");
+const { TDA_CSV_COLUMNS } = await import("./csv");
+const { buildReupload } = await import("./storage");
+const { makeApplied } = await import("./test/fixtures");
+
+describe("readable change-history labels", () => {
+  it("every label is an existing CSV export column label", () => {
+    const columns = new Set<string>(TDA_CSV_COLUMNS);
+    for (const label of [
+      ...Object.values(LOG_FIELD_LABELS),
+      ...Object.values(TERMITE_FIELD_LABELS),
+      ...Object.values(PERSONNEL_FIELD_LABELS),
+      ...Object.values(PRODUCT_FIELD_LABELS),
+      DEVICE_NAME_LABEL,
+    ]) {
+      expect(columns.has(label), label).toBe(true);
+    }
+  });
+
+  const v = {
+    products: [
+      makeApplied({ lineId: "a", name: "Talstar P" }),
+      makeApplied({ lineId: "b", name: "  " }),
+      makeApplied({ lineId: "c", name: "Glue board", method: "device", epaRegNo: null, rtuAmount: "", deviceCount: "3" }),
+    ],
+  };
+
+  it("maps top-level, termite and personnel paths", () => {
+    expect(fieldLabel("serviceAddress")).toBe("Service address");
+    expect(fieldLabel("termite.tankCount")).toBe("Pretreat tank count");
+    expect(fieldLabel("personnel[applying].licenseNumber")).toBe("Person applying — license number");
+  });
+
+  it("product lines read '<product name>: <column>', 'Product N' when the name is blank", () => {
+    expect(fieldLabel("products[a].rtuAmount", v)).toBe("Talstar P: RTU total amount (AI % unchanged)");
+    expect(fieldLabel("products[a].name", v)).toBe("Talstar P: Pesticide names");
+    expect(fieldLabel("products[b].mixingRate", v)).toBe("Product 2: Mixing rate");
+    expect(fieldLabel("products[c].name", v)).toBe("Glue board: Devices used");
+    expect(fieldLabel("products[c].deviceCount", v)).toBe("Glue board: Device counts");
+  });
+
+  it("a removed line takes its name from the version before the change", () => {
+    expect(fieldLabel("products[a].rtuAmount", { products: [] }, v)).toBe("Talstar P: RTU total amount (AI % unchanged)");
+  });
+
+  it("unknown fields fall back to the raw path", () => {
+    expect(fieldLabel("somethingNew")).toBe("somethingNew");
+    expect(fieldLabel("products[zz].rtuAmount", v)).toBe("products[zz].rtuAmount");
+    // Line keys with no export column keep the key but name the product, not the line id.
+    expect(fieldLabel("products[a].method", v)).toBe("Talstar P: method");
+    expect(fieldLabel("products[b].catalogId", v)).toBe("Product 2: catalogId");
+    expect(fieldLabel("personnel[applying#2].name")).toBe("personnel[applying#2].name");
+  });
+
+  it("CSV history cell uses product names from the corrected log", () => {
+    const base = makeLog({ id: "p1", products: [makeApplied({ lineId: "a", name: "Talstar P", rtuAmount: "16" })] });
+    const built = buildCorrection(base, { ...base, products: [{ ...base.products[0], rtuAmount: "12" }] }, {
+      changedBy: "p-ana",
+      reason: "Measured again",
+      people: PEOPLE,
+      now: NOW,
+    });
+    if (!built.ok) throw new Error(built.error);
+    expect(changeHistoryCell(built.log)).toBe(
+      "Rev 1 · 2026-10-17T18:05:00-05:00 · Ana Office · Reason: Measured again · Talstar P: RTU total amount (AI % unchanged): 16 → 12",
+    );
+  });
+});
+
+describe("re-upload record in exports", () => {
+  function reup(log: ApplicationLog, at = NOW) {
+    const res = buildReupload(log, { reuploadedBy: "p-ana", reason: "Shop copy was deleted", people: PEOPLE, now: at });
+    if (!res.ok) throw new Error(res.error);
+    return res.log;
+  }
+
+  it("CSV: status 'Re-uploaded' and a history cell; uncorrected rows keep main's cells", () => {
+    const log = reup(makeLog({ id: "r1", dateUsed: "2026-09-10" }));
+    const [header, ...body] = rows(logsToCsv([...uncorrectedExportLogs(), log]));
+    const [goldenHeader, ...goldenBody] = rows(GOLDEN_CSV);
+    expect(header).toBe(`${goldenHeader},${CORRECTION_CSV_COLUMNS.join(",")}`);
+    goldenBody.forEach((row, i) => expect(body[i]).toBe(`${row},,`));
+    expect(body.at(-1)!.endsWith(",Re-uploaded,Re-uploaded · 2026-10-17T18:05:00-05:00 · Ana Office · Reason: Shop copy was deleted")).toBe(true);
+  });
+
+  it("corrections and re-uploads list oldest first; status shows both", () => {
+    const corr = corrected(); // corrected at 18:05
+    const log = reup(corr, new Date(2026, 9, 17, 18, 0)); // re-uploaded earlier, at 18:00
+    expect(changeStatusLabel(log)).toBe("Corrected (rev 1); Re-uploaded");
+    const cell = changeHistoryCell(log);
+    expect(cell.startsWith("Re-uploaded · 2026-10-17T18:00:00-05:00 · Ana Office · Reason: Shop copy was deleted | Rev 1 ·")).toBe(true);
+  });
+
+  it("PDF: title mark and history line", () => {
+    const log = reup(makeLog({ id: "r1", dateUsed: "2026-09-10" }));
+    downloadPdf([log], "Acme Pest", PROVENANCE);
+    const flat = FakeJsPDF.instances[0].texts.map((t) => (Array.isArray(t.text) ? t.text.join("") : t.text));
+    expect(flat).toContain("Log 1 — 2026-09-10  [Re-uploaded]");
+    expect(flat).toContain("Change history (original values kept):");
+    expect(flat).toContain("  Re-uploaded — 2026-10-17T18:05:00-05:00 — Ana Office — Reason: Shop copy was deleted");
+  });
+
+  it("new wording avoids banned terms", () => {
+    const log = reup(corrected());
+    for (const s of [REUPLOADED_LABEL, changeStatusLabel(log), changeHistoryCell(log), ...changeHistoryPdfLines(log)]) {
+      expect(s).not.toMatch(BANNED);
+    }
   });
 });

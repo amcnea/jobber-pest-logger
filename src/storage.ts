@@ -10,6 +10,7 @@ import type {
   LogSnapshot,
   Person,
   PersonnelRole,
+  ReuploadRecord,
   SetAsideCopy,
   ShopProduct,
   ShopSettings,
@@ -363,6 +364,18 @@ function normalizeCorrectionEntry(value: unknown): CorrectionEntry | null {
   });
 }
 
+/** Validate one stored re-upload record. Returned record is frozen. */
+function normalizeReuploadRecord(value: unknown): ReuploadRecord | null {
+  if (!isRecord(value)) return null;
+  if (!isTimestamp(value.reuploadedAt) || !isNonBlankString(value.reuploadedBy)) return null;
+  if (!isNonBlankString(value.reason)) return null;
+  return deepFreeze({
+    reuploadedAt: value.reuploadedAt.trim(),
+    reuploadedBy: value.reuploadedBy.trim(),
+    reason: value.reason.trim(),
+  });
+}
+
 /**
  * Normalize a stored / pulled / restored log. Legacy logs without the correction model
  * come back with revision 0 and history []. A malformed history entry rejects the whole
@@ -377,9 +390,17 @@ export function normalizeLog(value: unknown): ApplicationLog | null {
     if (entries.some((e) => e === null)) return null;
     history = entries as CorrectionEntry[];
   }
+  let reuploads: ReuploadRecord[] = [];
+  if (value.reuploads !== undefined && value.reuploads !== null) {
+    if (!Array.isArray(value.reuploads)) return null;
+    const records = value.reuploads.map(normalizeReuploadRecord);
+    if (records.some((r) => r === null)) return null;
+    reuploads = records as ReuploadRecord[];
+  }
   const base = normalizeLogBase(value, history.length);
   if (!base) return null;
-  return { ...base, history };
+  // `reuploads` stays absent on logs never re-uploaded, so their stored / exported shape is unchanged.
+  return reuploads.length > 0 ? { ...base, history, reuploads } : { ...base, history };
 }
 
 export function loadLogs(): ApplicationLog[] {
@@ -427,6 +448,10 @@ export function saveLogs(
   }
 }
 
+/** Shown when upsertLog refuses a copy opened before newer history was saved. */
+export const STALE_EDIT_MSG =
+  "This log changed on this device after you opened it. Open it again from History.";
+
 /**
  * Create or replace a log. A stored log that is reviewed is locked: this refuses to
  * overwrite it in place (`locked: true`, nothing written). Corrections go through
@@ -436,11 +461,17 @@ export function upsertLog(log: ApplicationLog): {
   logs: ApplicationLog[];
   saved: boolean;
   locked?: boolean;
+  stale?: boolean;
 } {
   const logs = loadLogs();
   const idx = logs.findIndex((l) => l.id === log.id);
   if (idx !== -1 && isLogReviewed(logs[idx])) {
     return { logs, saved: false, locked: true };
+  }
+  // An edit opened from an older copy must not drop change history or re-upload
+  // records saved since (e.g. a sync-conflict correction). Nothing is written.
+  if (idx !== -1 && dropsSavedRecords(logs[idx], log)) {
+    return { logs, saved: false, stale: true };
   }
   const next = idx === -1 ? [log, ...logs] : logs.map((l) => (l.id === log.id ? log : l));
   const saved = saveLogs(next);
@@ -508,6 +539,7 @@ const DIFF_EXCLUDED = new Set([
   "history",
   "reviewedAt",
   "reviewedBy",
+  "reuploads",
 ]);
 
 type DiffValue = FieldChange["old"];
@@ -611,7 +643,8 @@ export function buildCorrection(
     return { ok: false, error: "The changed log does not match the saved log." };
   }
 
-  const { history: priorHistory = [], ...currentBase } = current;
+  // Re-upload records are not part of a snapshot; they stay on the log as they are.
+  const { history: priorHistory = [], reuploads: currentReuploads, ...currentBase } = current;
   const priorRevision = current.revision ?? priorHistory.length;
   // Detach from the caller's object, then pin bookkeeping fields to the saved values.
   const candidate = {
@@ -639,7 +672,12 @@ export function buildCorrection(
   });
   return {
     ok: true,
-    log: { ...normalizedNext, revision, history: [...priorHistory, entry] },
+    log: {
+      ...normalizedNext,
+      revision,
+      history: [...priorHistory, entry],
+      ...(currentReuploads && currentReuploads.length > 0 ? { reuploads: currentReuploads } : {}),
+    },
   };
 }
 
@@ -682,6 +720,11 @@ export function normalizeSetAsideCopy(value: unknown): SetAsideCopy | null {
 /** Raw stored set-aside rows, exactly as saved (valid or not). Never rewritten on read. */
 function readSetAsideRaw(): unknown[] {
   return readStoredArray(SET_ASIDE_KEY) ?? [];
+}
+
+/** Stored set-aside rows (readable or not) — what a wipe would delete. */
+export function countSetAsideRows(): number {
+  return readSetAsideRaw().length;
 }
 
 /** Readable set-aside copies, oldest first. Unreadable raw rows stay stored (and in backups). */
@@ -1541,6 +1584,9 @@ export function wipeAllDeviceData(): {
     localStorage.removeItem(LOGS_QUARANTINE_KEY);
     localStorage.removeItem(CATALOG_QUARANTINE_KEY);
     localStorage.removeItem(PEOPLE_QUARANTINE_KEY);
+    // #171: set-aside device copies hold full customer records; wipe clears them too
+    // (the wipe confirm says so when any exist).
+    localStorage.removeItem(SET_ASIDE_KEY);
     return {
       saved: true,
       catalog: seed,
@@ -1811,13 +1857,53 @@ function logRevision(log: ApplicationLog): number {
 }
 
 function carriesHistoryOrReview(log: ApplicationLog): boolean {
-  return logRevision(log) > 0 || (log.history?.length ?? 0) > 0 || isLogReviewed(log);
+  return (
+    logRevision(log) > 0 ||
+    (log.history?.length ?? 0) > 0 ||
+    isLogReviewed(log) ||
+    (log.reuploads?.length ?? 0) > 0
+  );
+}
+
+/** True when saving `incoming` over `stored` would lose history entries or re-upload records. */
+function dropsSavedRecords(stored: ApplicationLog, incoming: ApplicationLog): boolean {
+  if (logRevision(incoming) < logRevision(stored)) return true;
+  if (!isHistoryPrefix(stored.history ?? [], incoming.history ?? [])) return true;
+  return !reuploadsCovered(stored, incoming);
+}
+
+/**
+ * Pure: append a re-upload record (sync conflict, shop no longer has the log). Not a
+ * correction: revision, history and field values are unchanged. `reuploadedBy` is a
+ * roster person id; the stored value is that person's name.
+ */
+export function buildReupload(
+  log: ApplicationLog,
+  options: { reuploadedBy: string; reason: string; people: Person[]; now?: Date },
+): { ok: true; log: ApplicationLog } | { ok: false; error: string } {
+  const reuploadedBy = rosterName(options.people, options.reuploadedBy);
+  if (!reuploadedBy) return { ok: false, error: "Choose who made the change from People." };
+  const reason = String(options.reason ?? "").trim();
+  if (!reason) return { ok: false, error: "Enter a reason for the change." };
+  const record: ReuploadRecord = deepFreeze({
+    reuploadedAt: localIsoWithOffset(options.now ?? new Date()),
+    reuploadedBy,
+    reason,
+  });
+  return { ok: true, log: { ...log, reuploads: [...(log.reuploads ?? []), record] } };
+}
+
+/** True when every re-upload record on `from` is also on `to` (same fields). */
+export function reuploadsCovered(from: ApplicationLog, to: ApplicationLog): boolean {
+  const target = new Set((to.reuploads ?? []).map((r) => stableStringify(r)));
+  return (from.reuploads ?? []).every((r) => target.has(stableStringify(r)));
 }
 
 /**
  * Lawgical records rule — a restore never drops correction history. For a log id on
  * both the device and in the backup:
  *   1. reviewed device copy vs unreviewed backup copy → keep device (never unlock);
+ *      the device copy has a re-upload record the backup lacks → keep device;
  *   2. device history is an exact prefix of the backup's AND the backup's revision is
  *      higher (backup extends the device) → take backup;
  *   3. device is ahead (higher revision, or the backup's history is a strict prefix of
@@ -1826,6 +1912,8 @@ function carriesHistoryOrReview(log: ApplicationLog): boolean {
  */
 export function shouldKeepDeviceLog(device: ApplicationLog, backup: ApplicationLog): boolean {
   if (isLogReviewed(device) && !isLogReviewed(backup)) return true;
+  // Never drop a re-upload record: keep the device copy when the backup lacks one.
+  if (!reuploadsCovered(device, backup)) return true;
   const dh = device.history ?? [];
   const bh = backup.history ?? [];
   if (isHistoryPrefix(dh, bh) && logRevision(backup) > logRevision(device)) return false;

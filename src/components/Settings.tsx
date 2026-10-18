@@ -3,6 +3,7 @@ import { LAWGICAL_DISCLAIMER } from "../disclaimer";
 import { buildExportProvenance, provenanceFileSuffix } from "../exportProvenance";
 import {
   applyBackup,
+  countSetAsideRows,
   restoreBannerText,
   backupNagMessage,
   downloadBackup,
@@ -63,6 +64,18 @@ interface Props {
   onBackupStampChange: (iso: string | null) => void;
   onClearExamples: () => { ok: boolean; summary: string };
   onWipeAll: () => { ok: boolean; summary: string };
+}
+
+export const WIPE_CONFIRM_TEXT =
+  "Wipe ALL Jobber Pest Logger data on this device? Logs, real products, people, and settings will be deleted. Example seeds will be re-added. This cannot be undone.";
+
+/** #171: extra wipe-confirm sentence when set-aside copies exist (Lawgical wording). */
+export function wipeSetAsideSentence(n: number): string {
+  if (n <= 0) return "";
+  if (n === 1) {
+    return "This also deletes 1 set-aside copy from sync conflicts. Download the backup JSON first if you need it.";
+  }
+  return `This also deletes ${n} set-aside copies from sync conflicts. Download the backup JSON first if you need them.`;
 }
 
 export const RESTORE_CONFIRM_TEXT =
@@ -919,7 +932,7 @@ export function Settings({
             if (authenticated && role === "tech") return;
             if (
               !confirm(
-                "Wipe ALL Jobber Pest Logger data on this device? Logs, real products, people, and settings will be deleted. Example seeds will be re-added. This cannot be undone.",
+                [WIPE_CONFIRM_TEXT, wipeSetAsideSentence(countSetAsideRows())].filter(Boolean).join(" "),
               )
             ) {
               return;
