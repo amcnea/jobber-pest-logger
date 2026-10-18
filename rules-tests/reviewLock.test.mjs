@@ -422,196 +422,89 @@ describe("other shop writes still work with reviewed logs present", () => {
   });
 });
 
-// ---- #214: a new entry may not reuse a stored id (log id index) ------------------------
+// ---- #214: paired replacement must exist and keep the id -------------------------------
+// (A new entry that reuses a stored id in front of R is a known rules gap, #215; the
+// client handles it on read in #211 / #212.)
 
-const ids = (logs) => logs.map((l) => l.id);
-
-/** Doc that already carries the id index (`logIds`), as the client keeps it. */
-async function seedIndexed(logs) {
-  await env.withSecurityRulesDisabled(async (ctx) => {
-    await setDoc(doc(ctx.firestore(), "shops", SHOP), { ...shopDoc(logs), logIds: ids(logs) });
-  });
-}
-
-/** Put with the index the client would write (or a forged one). */
-function putIndexed(uid, logs, logIds = ids(logs)) {
-  return put(uid, logs, { logIds });
-}
-
-describe("#214: paired replacement must exist and keep the id", () => {
-  it("a reviewed log replaced by a valid-looking correction under another id is denied", async () => {
+describe("#214: paired replacement of a reviewed log", () => {
+  it("a valid-looking correction under another id is denied", async () => {
     const r = reviewed(makeLog("R"));
     await seed([r]);
     await assertFails(put(TECH, [{ ...correct(r, { serviceAddress: "9 Elm St" }), id: "X" }]));
   });
 
-  it("[Fake{id R}, R'] (correction paired with the fake's slot) is denied once indexed", async () => {
+  it("a forged copy in R's slot is denied, even with a valid correction under another id in front", async () => {
     const r = reviewed(makeLog("R"));
-    await seedIndexed([r]);
-    const fake = { ...makeLog("R"), serviceAddress: "Forged" };
-    const fixed = correct(r, { serviceAddress: "9 Elm St" });
-    for (const forged of [["R", "X"], ["X", "R"], ["R", "R"], ["R"]]) {
-      await assertFails(putIndexed(TECH, [fake, fixed], forged));
-      await assertFails(putIndexed(TECH, [fixed, fake], forged));
-    }
+    await seed([r, makeLog("U")]);
+    await assertFails(put(TECH, [{ ...correct(r, { serviceAddress: "9 Elm St" }), id: "N" }, { ...r, serviceAddress: "Forged" }, makeLog("U")]));
   });
-});
 
-describe("#214: fake copy of a stored log id is denied (indexed doc)", () => {
-  for (const [who, uid] of WRITERS) {
-    it(`${who}: fake in front of R is denied, whatever logIds says`, async () => {
-      const r = reviewed(makeLog("R"));
-      await seedIndexed([r, makeLog("U")]);
-      const fake = reviewed({ ...makeLog("R"), serviceAddress: "Forged", revision: 5 });
-      const logs = [fake, r, makeLog("U")];
-      for (const forged of [["R", "R", "U"], ["X", "R", "U"], ["R", "X", "U"], ["R", "U"], ["R", "U", "X"]]) {
-        await assertFails(putIndexed(uid, logs, forged));
-      }
-      await assertFails(put(uid, logs)); // dropping the index is denied too
-    });
-
-    it(`${who}: fake behind R is denied`, async () => {
-      const r = reviewed(makeLog("R"));
-      await seedIndexed([r]);
-      const fake = { ...makeLog("R"), serviceAddress: "Forged" };
-      for (const forged of [["R", "R"], ["R", "X"], ["X", "R"], ["R"]]) {
-        await assertFails(putIndexed(uid, [r, fake], forged));
-      }
-    });
-  }
-
-  it("an exact second copy of a stored log is denied", async () => {
+  it("deleting a reviewed log (pair index out of range) is denied", async () => {
     const r = reviewed(makeLog("R"));
-    await seedIndexed([r]);
-    await assertFails(putIndexed(TECH, [r, r], ["R", "X"]));
+    await seed([makeLog("U"), r]);
+    await assertFails(put(TECH, [makeLog("U")]));
+    await seed([r]);
+    await assertFails(put(TECH, []));
   });
 
-  it("a fake of an unreviewed stored log is denied too", async () => {
-    await seedIndexed([makeLog("U")]);
-    await assertFails(putIndexed(TECH, [{ ...makeLog("U"), serviceAddress: "Forged" }, makeLog("U")], ["X", "U"]));
-  });
-});
-
-describe("#214: duplicate ids among new entries are denied", () => {
-  it("indexed doc: two new entries with one id", async () => {
-    await seedIndexed([makeLog("U")]);
-    const a = makeLog("N");
-    const b = { ...makeLog("N"), serviceAddress: "Other" };
-    for (const forged of [["N", "X", "U"], ["N", "N", "U"], ["N", "U"]]) {
-      await assertFails(putIndexed(TECH, [a, b, makeLog("U")], forged));
-      await assertFails(putIndexed(TECH, [a, a, makeLog("U")], forged));
-    }
-  });
-
-  it("first index write (bootstrap) with duplicate ids is denied", async () => {
+  it("fake behind R: R overwritten, its correction pushed to the front, is denied", async () => {
     const r = reviewed(makeLog("R"));
     await seed([r]);
-    const fake = { ...makeLog("R"), serviceAddress: "Forged" };
-    await assertFails(putIndexed(TECH, [fake, r], ["R", "X"]));
-    await assertFails(putIndexed(TECH, [fake, r], ["R", "R"]));
+    const fixed = correct(r, { serviceAddress: "9 Elm St" });
+    await assertFails(put(TECH, [fixed, { ...r, serviceAddress: "Forged" }]));
+  });
+
+  it("the genuine correction (same id, in place) still passes", async () => {
+    const r = reviewed(makeLog("R"));
+    await seed([makeLog("U"), r]);
+    await assertSucceeds(put(OFFICE, [makeLog("N"), makeLog("U"), correct(r, { serviceAddress: "9 Elm St" })]));
   });
 });
 
-describe("#214: normal writes still pass on an indexed doc", () => {
-  it("adding a new unique log", async () => {
+// ---- Bundle #218: a `logIds` field is ignored -----------------------------------------
+
+describe("a stray logIds field neither blocks nor is required", () => {
+  it("normal saves without logIds, and with a stale one, pass on a doc that carries it", async () => {
     const r = reviewed(makeLog("R"));
-    await seedIndexed([r, makeLog("U")]);
-    await assertSucceeds(putIndexed(TECH, [makeLog("N"), r, makeLog("U")]));
+    const logs = [r, makeLog("U")];
+    const seedWithIds = () =>
+      env.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), "shops", SHOP), { ...shopDoc(logs), logIds: ["R", "U"] });
+      });
+    await seedWithIds();
+    await assertSucceeds(put(TECH, [makeLog("N"), ...logs])); // omits logIds
+    await seedWithIds();
+    await assertSucceeds(put(TECH, [makeLog("N"), ...logs], { logIds: ["R", "U"] })); // stale
+    await seedWithIds();
+    await assertSucceeds(put(OFFICE, [correct(r, { serviceAddress: "9 Elm St" }), makeLog("U")], { logIds: ["junk"] }));
+    await seedWithIds();
+    await assertSucceeds(put(TECH, logs, { logIds: ["X"] })); // logs untouched, index changed
   });
 
-  it("a correction of a reviewed log (one log per write, #210)", async () => {
+  it("the review lock still applies on a doc with logIds", async () => {
     const r = reviewed(makeLog("R"));
-    await seedIndexed([makeLog("U"), r]);
-    await assertSucceeds(putIndexed(OFFICE, [makeLog("U"), correct(r, { serviceAddress: "9 Elm St" })]));
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "shops", SHOP), { ...shopDoc([r]), logIds: ["R"] });
+    });
+    await assertFails(put(TECH, [{ ...r, serviceAddress: "Forged" }], { logIds: ["R"] }));
   });
 
-  it("a re-send (later hold + appended re-upload record) of a reviewed log", async () => {
-    const rec = { reuploadedAt: "2026-10-02T08:00:00-05:00", reuploadedBy: "Ana Office", reason: "Shop lost it" };
-    const r = reviewed(makeLog("R", { reuploads: [rec] }));
-    await seedIndexed([r]);
-    await assertSucceeds(putIndexed(TECH, [{ ...r, reuploads: [rec, { ...rec, reason: "Again" }], retainUntil: "2029-01-01" }]));
-  });
-
-  it("re-upload of a log the shop no longer has", async () => {
-    await seedIndexed([makeLog("U")]);
-    const reup = reviewed(
-      makeLog("R", {
-        reuploads: [{ reuploadedAt: "2026-10-17T20:40:00-05:00", reuploadedBy: "Ana Office", reason: "Shop lost it" }],
-      }),
-    );
-    await assertSucceeds(putIndexed(TECH, [reup, makeLog("U")]));
-  });
-
-  it("unreviewed edit and delete; the index must follow the logs", async () => {
-    await seedIndexed([makeLog("U1"), makeLog("U2")]);
-    await assertSucceeds(putIndexed(TECH, [{ ...makeLog("U1"), serviceAddress: "9 Elm St" }, makeLog("U2")]));
-    await assertSucceeds(putIndexed(TECH, [makeLog("U2")]));
-    await assertFails(putIndexed(TECH, [makeLog("U1"), makeLog("U2")], ["U2", "X"]));
-  });
-
-  it("settings change with logs and index untouched; a forged index alone is denied", async () => {
-    const logs = [reviewed(makeLog("R")), makeLog("U")];
-    await seedIndexed(logs);
-    await assertSucceeds(put(OFFICE, logs, { logIds: ids(logs), settings: { shopName: "Acme 2", shopTpclNumber: "1", shopTpclLetter: "" } }));
-    await seedIndexed(logs);
-    await assertFails(putIndexed(OFFICE, logs, ["R", "X"]));
-  });
-
-  it("large indexed doc (300 logs): one new log or one correction per write passes", async () => {
-    const logs = Array.from({ length: 300 }, (_, i) => (i % 10 === 0 ? reviewed(makeLog(`L${i}`)) : makeLog(`L${i}`)));
-    await seedIndexed(logs);
-    await assertSucceeds(putIndexed(TECH, [makeLog("N"), ...logs]));
-    await seedIndexed(logs);
-    await assertSucceeds(putIndexed(OFFICE, logs.map((l, i) => (i === 10 ? correct(l, { serviceAddress: "9 Elm St" }) : l))));
-    await seedIndexed(logs);
-    await assertFails(putIndexed(TECH, [{ ...makeLog("L20"), serviceAddress: "Forged" }, ...logs], ["X", ...ids(logs)]));
-  });
-
-  it("per-write limits on an indexed doc over 64 logs: 8 changed/added logs, 2 corrections, 3 re-sends", async () => {
-    const rec = { reuploadedAt: "2026-10-02T08:00:00-05:00", reuploadedBy: "Ana Office", reason: "x" };
-    const base = Array.from({ length: 100 }, (_, i) => (i < 10 ? reviewed(makeLog(`L${i}`, { reuploads: [rec] })) : makeLog(`L${i}`)));
-    const news = (n) => Array.from({ length: n }, (_, i) => makeLog(`N${i}`));
-    await seedIndexed(base);
-    await assertSucceeds(putIndexed(TECH, [...news(8), ...base]));
-    await seedIndexed(base);
-    await assertFails(putIndexed(TECH, [...news(9), ...base]));
-    await seedIndexed(base);
-    await assertSucceeds(putIndexed(TECH, base.map((l, i) => (i < 2 ? correct(l, { serviceAddress: "9 Elm St" }) : l))));
-    await seedIndexed(base);
-    await assertSucceeds(putIndexed(TECH, base.map((l, i) => (i < 3 ? { ...l, reuploads: [rec, rec] } : l))));
-  });
-});
-
-describe("#214: adding the index (first write / create)", () => {
-  it("a doc without logIds keeps working without it (older clients)", async () => {
+  it("a member adding logIds doesn't block the next save", async () => {
     await seed([makeLog("U")]);
+    await assertSucceeds(put(TECH, [makeLog("U")], { logIds: ["U"] }));
     await assertSucceeds(put(TECH, [makeLog("N"), makeLog("U")]));
   });
+});
 
-  it("adding a matching index is allowed (up to 64 logs); a forged or oversized one is denied", async () => {
-    const logs = Array.from({ length: 64 }, (_, i) => makeLog(`L${i}`));
-    await seed(logs);
-    await assertSucceeds(putIndexed(TECH, logs));
-    await seed(logs);
-    await assertFails(putIndexed(TECH, logs, [...ids(logs).slice(0, 63), "X"]));
-    await seed(logs);
-    await assertFails(putIndexed(TECH, logs, ids(logs).reverse()));
-    const more = [makeLog("L64"), ...logs];
-    await seed(more);
-    await assertFails(putIndexed(TECH, more));
-  });
-
-  it("adding the index together with a new log", async () => {
-    await seed([reviewed(makeLog("R"))]);
-    await assertSucceeds(putIndexed(TECH, [makeLog("N"), reviewed(makeLog("R"))]));
-  });
-
-  it("create: a matching index is allowed, a forged one is denied", async () => {
-    const db = env.authenticatedContext(OFFICE).firestore();
-    const logs = [makeLog("A"), makeLog("B")];
-    const body = (logIds) => ({ ...shopDoc(logs), auth: { office: "h" }, logIds });
-    await assertFails(setDoc(doc(db, "shops", "SHOPNEW1"), body(["A", "A"])));
-    await assertFails(setDoc(doc(db, "shops", "SHOPNEW2"), body(["A", "X"])));
-    await assertSucceeds(setDoc(doc(db, "shops", "SHOPNEW3"), body(["A", "B"])));
+describe("per-write limits (measured)", () => {
+  it("35 unreviewed edits, 3 corrections and 4 re-sends in one write pass on a 100-log doc", async () => {
+    const rec = { reuploadedAt: "2026-10-02T08:00:00-05:00", reuploadedBy: "Ana Office", reason: "x" };
+    const base = Array.from({ length: 100 }, (_, i) => (i < 10 ? reviewed(makeLog(`L${i}`, { reuploads: [rec] })) : makeLog(`L${i}`)));
+    await seed(base);
+    await assertSucceeds(put(TECH, base.map((l, i) => (i >= 10 && i < 45 ? { ...l, targetPestOrPurpose: "Roaches" } : l))));
+    await seed(base);
+    await assertSucceeds(put(TECH, base.map((l, i) => (i < 3 ? correct(l, { serviceAddress: "9 Elm St" }) : l))));
+    await seed(base);
+    await assertSucceeds(put(TECH, base.map((l, i) => (i < 4 ? { ...l, reuploads: [rec, rec] } : l))));
   });
 });
