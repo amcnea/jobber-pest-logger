@@ -1272,6 +1272,7 @@ describe("buildBackup", () => {
       people: [person()],
       settings: SETTINGS,
       quarantine: { logs: [], catalog: [], people: [] },
+      setAside: [],
     });
   });
 
@@ -1397,6 +1398,7 @@ describe("parseBackup", () => {
         people: [person()],
         settings: SETTINGS,
         quarantine: { logs: [], catalog: [], people: [] },
+        setAside: [],
       },
     });
   });
@@ -1420,7 +1422,7 @@ describe("parseBackup", () => {
     expect(res.backup.exportedAt).toBe("2026-09-25T12:00:00.000Z");
     expect(res.backup.meta).toBeUndefined();
     expect(Object.keys(res.backup).sort()).toEqual(
-      ["catalog", "exportedAt", "logs", "people", "quarantine", "settings", "version"].sort(),
+      ["catalog", "exportedAt", "logs", "people", "quarantine", "setAside", "settings", "version"].sort(),
     );
   });
 

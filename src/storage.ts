@@ -10,6 +10,7 @@ import type {
   LogSnapshot,
   Person,
   PersonnelRole,
+  SetAsideCopy,
   ShopProduct,
   ShopSettings,
 } from "./types";
@@ -584,12 +585,30 @@ export function applyCorrection(
   const logs = loadLogs();
   const current = logs.find((l) => l.id === logId);
   if (!current) return { ok: false, error: "Log not found on this device.", logs };
+  const built = buildCorrection(current, nextLog, options);
+  if (!built.ok) return { ok: false, error: built.error, logs };
+  const next = logs.map((l) => (l.id === logId ? built.log : l));
+  if (!saveLogs(next)) return { ok: false, error: "Could not save on this device.", logs };
+  return { ok: true, log: built.log, logs: next };
+}
+
+/**
+ * Pure core of applyCorrection: correct `current` to `nextLog`'s values. Same validation
+ * (reason, roster changedBy, id match, readable, at least one changed field); returns the
+ * corrected log (revision current+1, appended frozen history entry, review stamp kept)
+ * without saving. Used for "Keep this device's copy" on top of the shop copy.
+ */
+export function buildCorrection(
+  current: ApplicationLog,
+  nextLog: ApplicationLog,
+  options: { changedBy: string; reason: string; people: Person[]; now?: Date },
+): { ok: true; log: ApplicationLog } | { ok: false; error: string } {
   const reason = String(options.reason ?? "").trim();
-  if (!reason) return { ok: false, error: "Enter a reason for the change.", logs };
+  if (!reason) return { ok: false, error: "Enter a reason for the change." };
   const changedBy = rosterName(options.people, options.changedBy);
-  if (!changedBy) return { ok: false, error: "Choose who made the change from People.", logs };
-  if (!nextLog || nextLog.id !== logId) {
-    return { ok: false, error: "The changed log does not match the saved log.", logs };
+  if (!changedBy) return { ok: false, error: "Choose who made the change from People." };
+  if (!nextLog || nextLog.id !== current.id) {
+    return { ok: false, error: "The changed log does not match the saved log." };
   }
 
   const { history: priorHistory = [], ...currentBase } = current;
@@ -604,10 +623,10 @@ export function applyCorrection(
     reviewedBy: current.reviewedBy,
   };
   const normalizedNext = normalizeLogBase(candidate, priorRevision);
-  if (!normalizedNext) return { ok: false, error: "The changed log could not be read.", logs };
+  if (!normalizedNext) return { ok: false, error: "The changed log could not be read." };
 
   const changes = diffLogs(currentBase, normalizedNext);
-  if (changes.length === 0) return { ok: false, error: "No fields changed.", logs };
+  if (changes.length === 0) return { ok: false, error: "No fields changed." };
 
   const revision = priorRevision + 1;
   const entry: CorrectionEntry = deepFreeze({
@@ -618,14 +637,104 @@ export function applyCorrection(
     reason,
     changes,
   });
-  const corrected: ApplicationLog = {
-    ...normalizedNext,
-    revision,
-    history: [...priorHistory, entry],
+  return {
+    ok: true,
+    log: { ...normalizedNext, revision, history: [...priorHistory, entry] },
   };
-  const next = logs.map((l) => (l.id === logId ? corrected : l));
-  if (!saveLogs(next)) return { ok: false, error: "Could not save on this device.", logs };
-  return { ok: true, log: corrected, logs: next };
+}
+
+/**
+ * Put a log on this device by id, bypassing the reviewed lock. Only for sync-conflict
+ * resolution, where the incoming copy is the shop's (or a correction on top of it).
+ */
+export function saveResolvedLog(log: ApplicationLog): { logs: ApplicationLog[]; saved: boolean } {
+  const logs = loadLogs();
+  const idx = logs.findIndex((l) => l.id === log.id);
+  const next = idx === -1 ? [log, ...logs] : logs.map((l) => (l.id === log.id ? log : l));
+  const saved = saveLogs(next);
+  return { logs: saved ? next : logs, saved };
+}
+
+// ---------------------------------------------------------------------------
+// Set-aside copies (sync conflict "Take shop copy")
+// ---------------------------------------------------------------------------
+
+export const SET_ASIDE_KEY = "jobber-pest-logger:set-aside:v1";
+
+/** Validate one stored set-aside entry. Returned entry is deep-frozen. */
+export function normalizeSetAsideCopy(value: unknown): SetAsideCopy | null {
+  if (!isRecord(value)) return null;
+  if (!isNonBlankString(value.id) || !isNonBlankString(value.logId)) return null;
+  if (!isTimestamp(value.setAsideAt) || !isNonBlankString(value.setAsideBy)) return null;
+  if (typeof value.shopId !== "string") return null;
+  const deviceCopy = normalizeLog(value.deviceCopy);
+  if (!deviceCopy || deviceCopy.id !== value.logId) return null;
+  return deepFreeze({
+    id: value.id,
+    logId: value.logId,
+    deviceCopy,
+    setAsideAt: value.setAsideAt.trim(),
+    setAsideBy: value.setAsideBy.trim(),
+    shopId: value.shopId,
+  });
+}
+
+/** Raw stored set-aside rows, exactly as saved (valid or not). Never rewritten on read. */
+function readSetAsideRaw(): unknown[] {
+  return readStoredArray(SET_ASIDE_KEY) ?? [];
+}
+
+/** Readable set-aside copies, oldest first. Unreadable raw rows stay stored (and in backups). */
+export function loadSetAsideCopies(): SetAsideCopy[] {
+  return readSetAsideRaw()
+    .map(normalizeSetAsideCopy)
+    .filter((c): c is SetAsideCopy => c !== null);
+}
+
+/**
+ * Append a device copy to the set-aside store. `setAsideBy` is a roster person id.
+ * Append-only: existing rows (even unreadable ones) are kept as they are.
+ */
+export function addSetAsideCopy(
+  deviceCopy: ApplicationLog,
+  options: { setAsideBy: string; people: Person[]; shopId?: string; now?: Date },
+): { ok: true; entry: SetAsideCopy } | { ok: false; error: string } {
+  const setAsideBy = rosterName(options.people, options.setAsideBy);
+  if (!setAsideBy) return { ok: false, error: "Choose who is setting this copy aside from People." };
+  const entry = normalizeSetAsideCopy({
+    id: newId(),
+    logId: deviceCopy?.id,
+    deviceCopy: deviceCopy ? jsonClone(deviceCopy) : null,
+    setAsideAt: localIsoWithOffset(options.now ?? new Date()),
+    setAsideBy,
+    shopId: String(options.shopId ?? "").trim(),
+  });
+  if (!entry) return { ok: false, error: "This device's copy could not be read." };
+  const before = readSetAsideRaw();
+  try {
+    localStorage.setItem(SET_ASIDE_KEY, JSON.stringify([...before, entry]));
+  } catch (err) {
+    console.error("jobber-pest-logger: could not save set-aside copy", err);
+    return { ok: false, error: "Could not save on this device." };
+  }
+  const stored = new Set(readSetAsideRaw().map(quarantineIdentity));
+  if (!stored.has(quarantineIdentity(entry))) {
+    return { ok: false, error: "Could not save on this device." };
+  }
+  return { ok: true, entry };
+}
+
+/** Union of two raw set-aside arrays; identical rows collapse, nothing is dropped. */
+export function mergeSetAsideRows(device: unknown[], incoming: unknown[]): unknown[] {
+  const seen = new Set(device.map(quarantineIdentity));
+  const out = device.slice();
+  for (const row of incoming) {
+    const identity = quarantineIdentity(row);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    out.push(row);
+  }
+  return out;
 }
 
 /** Normalize service address for grouping: trim, collapse whitespace, case-fold. */
@@ -1075,6 +1184,11 @@ export interface DeviceBackup {
    * unknown/extra keys and rebuilds the backup from known fields on restore.
    */
   meta?: Record<string, unknown>;
+  /**
+   * Set-aside device copies (sync conflicts), raw as stored. Always written by this
+   * app; older backups may omit it (parsed as []). Restore merges, never drops.
+   */
+  setAside?: unknown[];
 }
 
 /** Current device quarantine payload for backups and the Settings notice. */
@@ -1258,6 +1372,7 @@ export function buildBackup(): DeviceBackup {
     people,
     settings,
     quarantine: loadBackupQuarantine(),
+    setAside: readSetAsideRaw(),
   };
 }
 
@@ -1355,6 +1470,7 @@ export function wipeAllDeviceData(): {
     LOGS_QUARANTINE_KEY,
     CATALOG_QUARANTINE_KEY,
     PEOPLE_QUARANTINE_KEY,
+    SET_ASIDE_KEY,
   ] as const;
   const snapshot: Record<string, string | null> = {};
   try {
@@ -1503,6 +1619,7 @@ export function downloadBackup(
         people: sections.people,
         settings: sections.settings,
         quarantine: deviceQuarantine,
+        setAside: readSetAsideRaw(),
       }
     : buildBackup();
   const backup: DeviceBackup = meta ? { ...built, meta: meta.provenance } : built;
@@ -1636,6 +1753,14 @@ export function parseBackup(raw: unknown): RestoreResult {
     return { ok: false, error: quarantineResult.error };
   }
 
+  let setAside: unknown[] = [];
+  if (raw.setAside !== undefined && raw.setAside !== null) {
+    if (!Array.isArray(raw.setAside)) {
+      return { ok: false, error: "Backup set-aside copies must be an array." };
+    }
+    setAside = raw.setAside as unknown[];
+  }
+
   return {
     ok: true,
     backup: {
@@ -1646,6 +1771,7 @@ export function parseBackup(raw: unknown): RestoreResult {
       people,
       settings,
       quarantine: quarantineResult.quarantine,
+      setAside,
     },
   };
 }
@@ -1804,6 +1930,7 @@ const RESTORE_STORAGE_LABELS: Record<string, string> = {
   [LOGS_QUARANTINE_KEY]: "set-aside logs",
   [CATALOG_QUARANTINE_KEY]: "set-aside catalog",
   [PEOPLE_QUARANTINE_KEY]: "set-aside people",
+  [SET_ASIDE_KEY]: "set-aside device copies",
 };
 
 function restoreFailureMessage(unrestoredKeys: readonly string[]): string {
@@ -1917,6 +2044,17 @@ export function applyBackup(backup: DeviceBackup): ApplyBackupResult {
 
   if (!writeBackupQuarantine(quarantine)) {
     return applyBackupFailed(rollback());
+  }
+
+  // Set-aside copies: union of this device's and the backup's rows (never drop either).
+  const setAside = mergeSetAsideRows(readSetAsideRaw(), backup.setAside ?? []);
+  if (setAside.length > 0) {
+    try {
+      localStorage.setItem(SET_ASIDE_KEY, JSON.stringify(setAside));
+    } catch (err) {
+      console.error("jobber-pest-logger: could not restore set-aside copies", err);
+      return applyBackupFailed(rollback());
+    }
   }
   return { ok: true, history: merged.report };
 }

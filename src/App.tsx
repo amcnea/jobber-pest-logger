@@ -6,6 +6,7 @@ import { ShopPilotCard } from "./components/ShopPilotCard";
 import { History } from "./components/History";
 import { NewLogForm } from "./components/NewLogForm";
 import { ReviewQueue } from "./components/ReviewQueue";
+import { SyncConflicts } from "./components/SyncConflicts";
 import { People } from "./components/People";
 import { Products } from "./components/Products";
 import { Settings } from "./components/Settings";
@@ -602,6 +603,28 @@ export default function App() {
                 </p>
               ) : null}
             </div>
+          );
+        })()}
+      {!shopLocked &&
+        allowOfficeSurfaces &&
+        outboxTick >= 0 &&
+        (() => {
+          const info = resolveShopStore();
+          if (info.mode !== "shared" || !info.shopId || !(info.store instanceof RemoteShopStore)) {
+            return null;
+          }
+          return (
+            <SyncConflicts
+              shopId={info.shopId}
+              remote={info.store}
+              people={people}
+              refreshKey={outboxTick}
+              onResolved={(next) => {
+                setLogs(next);
+                setOutboxMessage(null);
+                refreshOutboxBanner();
+              }}
+            />
           );
         })()}
       {!shopLocked && (
