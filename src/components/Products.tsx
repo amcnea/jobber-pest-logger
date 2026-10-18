@@ -40,6 +40,7 @@ import {
 } from "../starterCatalog/csvImport";
 import {
   buildCsvImportPreview,
+  candidateForImport,
   csvCandidateToShopProduct,
   findShopDuplicate,
   type CsvImportPreview,
@@ -80,6 +81,12 @@ function csvPreviewSummary(preview: CsvImportPreview, include: boolean[]): strin
   const parts = [plural(preview.rows.length, "row read", "rows read"), `${toAdd} to add`];
   if (dupes > 0) parts.push(plural(dupes, "possible duplicate", "possible duplicates"));
   if (needLook > 0) parts.push(`${needLook} ${needLook === 1 ? "needs" : "need"} a look`);
+  const starterMatches = preview.rows.filter((r) => r.starterMatch !== null).length;
+  if (starterMatches > 0) {
+    parts.push(
+      plural(starterMatches, "row with the same reg # as a starter", "rows with the same reg # as a starter"),
+    );
+  }
   if (preview.columns.length > 0) {
     parts.push(`Columns used: ${preview.columns.map((c) => c.label).join(", ")}`);
   }
@@ -163,6 +170,8 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   const [csvInclude, setCsvInclude] = useState<boolean[]>([]);
   /** Preview row indexes already saved (after a partial add that stopped on an error). */
   const [csvAdded, setCsvAdded] = useState<boolean[]>([]);
+  /** Per-row opt-in to save the matching starter's name instead of the file's (never default). */
+  const [csvUseStarterName, setCsvUseStarterName] = useState<boolean[]>([]);
   const [csvFileName, setCsvFileName] = useState("");
   const csvFileRef = useRef<HTMLInputElement>(null);
   const csvPreviewHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -483,6 +492,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
     setCsvPreview(preview);
     setCsvInclude(include);
     setCsvAdded(preview.rows.map(() => false));
+    setCsvUseStarterName(preview.rows.map(() => false));
     setCsvFileName(fileName);
     setStarterAnnouncement(`Import preview for ${fileName}: ${csvPreviewSummary(preview, include)}`);
   }
@@ -492,6 +502,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
     setCsvPreview(null);
     setCsvInclude([]);
     setCsvAdded([]);
+    setCsvUseStarterName([]);
     setCsvFileName("");
     if (csvFileRef.current) csvFileRef.current.value = "";
   }
@@ -563,18 +574,20 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
     /** #178: rows that became duplicates after the preview was built. */
     const skipped = new Map<number, string>();
     for (const { row, index } of picked) {
+      // The file's name unless the office ticked "Use starter name" for this row.
+      const candidate = candidateForImport(row, csvUseStarterName[index] === true);
       // #178: the preview's flags can be stale (the shop list may have changed while it
       // was open). Re-check rows the preview did not flag against the current shop list
       // plus rows already added in this run. A row the office ticked despite a preview
       // flag is left as their choice.
       if (row.duplicate === null) {
-        const dup = findShopDuplicate(row.candidate, [...addedProducts, ...catalog]);
+        const dup = findShopDuplicate(candidate, [...addedProducts, ...catalog]);
         if (dup) {
           skipped.set(index, dup);
           continue;
         }
       }
-      const product = csvCandidateToShopProduct(row.candidate, newId());
+      const product = csvCandidateToShopProduct(candidate, newId());
       // Persist the label-confirm guard before the catalog row (same order as starter add).
       if (!addPendingLabelConfirm(product.id)) {
         setLabelConfirmStoreUnavailable(true);
@@ -1120,10 +1133,14 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                   {csvPreview.rows.map((row, index) => {
                     const c = row.candidate;
                     const nameId = `${csvIdPrefix}-csv-row-${index}`;
+                    const starterNoteId = `${csvIdPrefix}-csv-row-${index}-starter`;
                     const rowDone = csvAdded[index];
+                    const useStarter = row.starterMatch !== null && csvUseStarterName[index] === true;
+                    const shownName = useStarter && row.starterMatch ? row.starterMatch.name : c.name;
                     return (
                       <li key={`${row.line}-${index}`} style={{ marginBottom: "0.65rem" }}>
-                        <strong id={nameId}>{c.name || `(no name, line ${row.line})`}</strong>
+                        <strong id={nameId}>{shownName || `(no name, line ${row.line})`}</strong>
+                        {useStarter && <div className="hint">Name in file: {c.name}</div>}
                         <div>
                           <span className="chip">line {row.line}</span>{" "}
                           <span className="chip">{c.kind}</span>{" "}
@@ -1135,6 +1152,11 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                           </span>
                           {rowDone && <span className="chip">added</span>}
                         </div>
+                        {row.starterMatch !== null && (
+                          <p className="hint" id={starterNoteId}>
+                            Same reg # as starter: {row.starterMatch.name}
+                          </p>
+                        )}
                         {(row.duplicate !== null || row.problems.length > 0) && (
                           <ul aria-label={`Notes for ${c.name || `line ${row.line}`}`}>
                             {row.duplicate !== null && <li className="error">{row.duplicate}</li>}
@@ -1158,6 +1180,21 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                           />
                           Include in import
                         </label>
+                        {row.starterMatch !== null && row.starterMatch.name !== c.name.trim() && (
+                          <label className="toggle">
+                            <input
+                              type="checkbox"
+                              checked={useStarter}
+                              disabled={!row.addable || rowDone}
+                              aria-describedby={`${nameId} ${starterNoteId}`}
+                              onChange={(e) => {
+                                const checked = e.target.checked;
+                                setCsvUseStarterName((use) => use.map((v, i) => (i === index ? checked : v)));
+                              }}
+                            />
+                            Use starter name
+                          </label>
+                        )}
                       </li>
                     );
                   })}

@@ -7,6 +7,8 @@
  * name are left out of the import by default. EPA reg # checks are format-only.
  */
 import type { ShopProduct } from "../types";
+import { TEXAS_COMMON_STARTER } from "./texasCommon";
+import type { StarterProduct } from "./types";
 import {
   CSV_FIELD_LABELS,
   CSV_UNUSED_COLUMN_NOTES_MAX,
@@ -42,6 +44,44 @@ export function effectiveImportEpa(candidate: Pick<CsvCandidate, "epaRegNo" | "i
   return epa === "" ? null : epa;
 }
 
+/**
+ * Starter-match key for an EPA reg #: the same normalization as the duplicate check
+ * (normalizeImportEpa: case, whitespace, and unicode dashes read as "-"). Nothing else
+ * is rewritten (no leading-zero or suffix changes), and the lookup is exact, so the
+ * match is on the FULL reg #: "8033-109-279" never matches "8033-109", and vice versa.
+ */
+export function starterMatchKey(epa: string | null | undefined): string {
+  return normalizeImportEpa(epa);
+}
+
+let starterByEpa: Map<string, StarterProduct> | null = null;
+
+/** Map of starter reg # key -> first starter row with it. Built once, on first use. */
+function starterEpaMap(): Map<string, StarterProduct> {
+  if (starterByEpa) return starterByEpa;
+  const map = new Map<string, StarterProduct>();
+  for (const starter of TEXAS_COMMON_STARTER) {
+    const key = starterMatchKey(starter.epaRegNo);
+    if (key && !map.has(key)) map.set(key, starter);
+  }
+  starterByEpa = map;
+  return map;
+}
+
+/**
+ * Texas-common starter row whose reg # equals this candidate's (whole reg #; case,
+ * whitespace and unicode dashes normalized as in the duplicate check), or null. Uses the reg # the row would be saved with, so
+ * 25(b) and device rows never match. Offered only when the starter is the same kind
+ * and not 25(b), so swapping the name never changes type or reg # handling.
+ */
+export function findStarterRegMatch(candidate: CsvCandidate): StarterProduct | null {
+  const key = starterMatchKey(effectiveImportEpa(candidate));
+  if (!key) return null;
+  const starter = starterEpaMap().get(key);
+  if (!starter || starter.kind !== candidate.kind || starter.is25b) return null;
+  return starter;
+}
+
 export interface CsvPreviewRow {
   line: number;
   candidate: CsvCandidate;
@@ -55,6 +95,11 @@ export interface CsvPreviewRow {
   addable: boolean;
   /** Included in the import unless the user changes it. */
   includeByDefault: boolean;
+  /**
+   * Starter row with the same full reg #, if any. Informational: the file's name is
+   * kept unless the office opts in per row ("Use starter name").
+   */
+  starterMatch: { id: string; name: string } | null;
 }
 
 export interface CsvImportPreview {
@@ -142,6 +187,10 @@ export function buildCsvImportPreview(result: CsvImportResult, catalog: ShopProd
       epaFormatOk: candidate.epaRegNo !== null && epaRegNoFormatOk(candidate.epaRegNo),
       addable,
       includeByDefault: addable && duplicate === null,
+      starterMatch: (() => {
+        const starter = findStarterRegMatch(candidate);
+        return starter ? { id: starter.id, name: starter.name } : null;
+      })(),
     };
   });
   return {
@@ -154,6 +203,16 @@ export function buildCsvImportPreview(result: CsvImportResult, catalog: ShopProd
         ? CSV_UNUSED_COLUMN_NOTES_MAX + 1
         : result.ignoredColumns.length,
   };
+}
+
+/**
+ * Candidate to save for a preview row: the file's own row, or, only when the office
+ * ticked "Use starter name" for that row, the same row with the starter's name.
+ * Reg #, 25(b), type, archived and isExample are never changed here.
+ */
+export function candidateForImport(row: Pick<CsvPreviewRow, "candidate" | "starterMatch">, useStarterName: boolean): CsvCandidate {
+  if (!useStarterName || !row.starterMatch) return row.candidate;
+  return { ...row.candidate, name: row.starterMatch.name };
 }
 
 /** Shop row to save for an included preview row: always archived, never an example. */
