@@ -38,8 +38,13 @@ import type { RemoteShopStore } from "./RemoteShopStore";
 export const SET_ASIDE_CONFIRM =
   "This device's version will be set aside, not uploaded. It stays in the backup.";
 
+/** Shown after "Keep this device's copy" when the shop no longer had the log (Lawgical, #175). */
+export const REUPLOAD_DONE_MSG =
+  "The shop no longer had this log, so this device's copy was uploaded as is. Re-upload recorded.";
+
 export type ConflictResult =
-  | { ok: true; logs: ApplicationLog[]; log: ApplicationLog }
+  /** `reuploaded`: the shop no longer had the log; uploaded as is with a re-upload record. */
+  | { ok: true; logs: ApplicationLog[]; log: ApplicationLog; reuploaded?: boolean }
   /** `logs` / `log` are set when the device copy was already saved before the failure. */
   | { ok: false; error: string; logs?: ApplicationLog[]; log?: ApplicationLog };
 
@@ -131,5 +136,7 @@ export async function keepDeviceCopy(
   if (!saved.saved) return { ok: false, error: "Could not save on this device." };
   const sync = await syncLogToRemote(remote, shopId, resolved);
   if (!sync.ok) return { ok: false, error: sync.error, logs: saved.logs, log: resolved };
-  return { ok: true, logs: saved.logs, log: resolved };
+  return shop.log
+    ? { ok: true, logs: saved.logs, log: resolved }
+    : { ok: true, logs: saved.logs, log: resolved, reuploaded: true };
 }

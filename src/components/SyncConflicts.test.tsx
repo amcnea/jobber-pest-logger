@@ -16,6 +16,7 @@ vi.mock("../shop/conflicts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../shop/conflicts")>();
   return {
     SET_ASIDE_CONFIRM: actual.SET_ASIDE_CONFIRM,
+    REUPLOAD_DONE_MSG: actual.REUPLOAD_DONE_MSG,
     listSyncConflicts: () => conflicts,
     takeShopCopy: (...args: unknown[]) => takeShopCopy(...args),
     keepDeviceCopy: (...args: unknown[]) => keepDeviceCopy(...args),
@@ -91,9 +92,11 @@ describe("SyncConflicts", () => {
     const { container } = renderIt();
     await userEvent.click(screen.getByRole("button", { name: "Keep this device's copy" }));
     expect(
-      screen.getByText("Saved as a correction on top of the shop copy, with change history."),
+      screen.getByText(
+        "Uploads this device's copy to the shop. If the shop still has this log, it's saved as a correction with change history.",
+      ),
     ).toBeInTheDocument();
-    const save = screen.getByRole("button", { name: "Save as a correction" });
+    const save = screen.getByRole("button", { name: "Save this device's copy" });
     expect(save).toBeDisabled();
     await userEvent.selectOptions(screen.getByLabelText("Changed by"), "p-ana");
     expect(save).toBeDisabled();
@@ -113,7 +116,7 @@ describe("SyncConflicts", () => {
     await userEvent.click(screen.getByRole("button", { name: "Keep this device's copy" }));
     await userEvent.selectOptions(screen.getByLabelText("Changed by"), "p-ana");
     await userEvent.type(screen.getByLabelText("Reason"), "x");
-    await userEvent.click(screen.getByRole("button", { name: "Save as a correction" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save this device's copy" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("No fields changed.");
   });
 });
@@ -127,7 +130,7 @@ describe("SyncConflicts — partial failure (#170)", () => {
     await userEvent.click(within(row).getByRole("button", { name: "Keep this device's copy" }));
     await userEvent.selectOptions(within(row).getByLabelText("Changed by"), "p-ana");
     await userEvent.type(within(row).getByLabelText("Reason"), "Keep tech copy");
-    await userEvent.click(within(row).getByRole("button", { name: "Save as a correction" }));
+    await userEvent.click(within(row).getByRole("button", { name: "Save this device's copy" }));
     expect(onResolved).toHaveBeenCalledWith(saved, "offline");
     expect(within(row).getByRole("alert")).toHaveTextContent("offline");
   });
@@ -139,7 +142,39 @@ describe("SyncConflicts — partial failure (#170)", () => {
     await userEvent.click(within(row).getByRole("button", { name: "Keep this device's copy" }));
     await userEvent.selectOptions(within(row).getByLabelText("Changed by"), "p-ana");
     await userEvent.type(within(row).getByLabelText("Reason"), "x");
-    await userEvent.click(within(row).getByRole("button", { name: "Save as a correction" }));
+    await userEvent.click(within(row).getByRole("button", { name: "Save this device's copy" }));
     expect(onResolved).not.toHaveBeenCalled();
+  });
+});
+
+describe("SyncConflicts — shop no longer had the log (#175)", () => {
+  it("after saving, shows the re-upload message", async () => {
+    keepDeviceCopy.mockImplementation(async () => {
+      conflicts = [];
+      return { ok: true, logs: [entry.log], log: entry.log, reuploaded: true };
+    });
+    const { onResolved, rerender } = renderIt();
+    const row = screen.getByLabelText("Conflict L1");
+    await userEvent.click(within(row).getByRole("button", { name: "Keep this device's copy" }));
+    await userEvent.selectOptions(within(row).getByLabelText("Changed by"), "p-ana");
+    await userEvent.type(within(row).getByLabelText("Reason"), "Shop lost it");
+    await userEvent.click(within(row).getByRole("button", { name: "Save this device's copy" }));
+    expect(onResolved).toHaveBeenCalledWith([entry.log]);
+    rerender(<SyncConflicts shopId="SHOP1" remote={remote} people={PEOPLE} refreshKey={1} onResolved={onResolved} />);
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent(
+      "The shop no longer had this log, so this device's copy was uploaded as is. Re-upload recorded.",
+    );
+    expect(status.textContent ?? "").not.toMatch(BANNED);
+  });
+
+  it("a correction on the shop copy shows no re-upload message", async () => {
+    renderIt();
+    const row = screen.getByLabelText("Conflict L1");
+    await userEvent.click(within(row).getByRole("button", { name: "Keep this device's copy" }));
+    await userEvent.selectOptions(within(row).getByLabelText("Changed by"), "p-ana");
+    await userEvent.type(within(row).getByLabelText("Reason"), "x");
+    await userEvent.click(within(row).getByRole("button", { name: "Save this device's copy" }));
+    expect(screen.queryByRole("status")).toBeNull();
   });
 });

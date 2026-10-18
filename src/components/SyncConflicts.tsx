@@ -2,10 +2,15 @@ import { useMemo, useState } from "react";
 import {
   keepDeviceCopy,
   listSyncConflicts,
+  REUPLOAD_DONE_MSG,
   SET_ASIDE_CONFIRM,
   takeShopCopy,
 } from "../shop/conflicts";
 import type { LogOutboxEntry } from "../shop/logOutbox";
+
+/** "Keep this device's copy" hint (Lawgical, #175). */
+export const KEEP_DEVICE_HINT =
+  "Uploads this device's copy to the shop. If the shop still has this log, it's saved as a correction with change history.";
 import type { RemoteShopStore } from "../shop/RemoteShopStore";
 import type { ApplicationLog, Person } from "../types";
 
@@ -55,6 +60,7 @@ function ConflictRow({
   remote,
   people,
   onResolved,
+  onNote,
 }: {
   entry: LogOutboxEntry;
   shopId: string;
@@ -62,6 +68,7 @@ function ConflictRow({
   people: Person[];
   /** `error` is set when the device copy was saved but a later step failed. */
   onResolved: (logs: ApplicationLog[], error?: string) => void;
+  onNote: (text: string) => void;
 }) {
   const [mode, setMode] = useState<Mode | null>(null);
   const [personId, setPersonId] = useState("");
@@ -77,6 +84,7 @@ function ConflictRow({
       const res = await action();
       if (res.ok) {
         setMode(null);
+        if (res.reuploaded) onNote(REUPLOAD_DONE_MSG);
         onResolved(res.logs);
       } else {
         setError(res.error);
@@ -127,7 +135,7 @@ function ConflictRow({
       )}
       {mode?.kind === "keep" && (
         <div>
-          <p className="hint">Saved as a correction on top of the shop copy, with change history.</p>
+          <p className="hint">{KEEP_DEVICE_HINT}</p>
           <PersonSelect label="Changed by" people={people} value={personId} onChange={setPersonId} />
           <label className="field">
             Reason
@@ -140,7 +148,7 @@ function ConflictRow({
               disabled={!personId || !reason.trim() || busy}
               onClick={submitKeep}
             >
-              Save as a correction
+              Save this device's copy
             </button>
             <button type="button" className="btn btn-ghost" onClick={() => setMode(null)}>
               Cancel
@@ -165,10 +173,16 @@ export function SyncConflicts({ shopId, remote, people, refreshKey, onResolved }
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [shopId, refreshKey],
   );
-  if (conflicts.length === 0) return null;
+  const [note, setNote] = useState<string | null>(null);
+  if (conflicts.length === 0 && !note) return null;
   return (
     <section className="card" aria-label="Sync conflicts">
       <h3>Sync conflicts</h3>
+      {note && (
+        <p className="hint" role="status">
+          {note}
+        </p>
+      )}
       <ul className="review-queue">
         {conflicts.map((entry) => (
           <ConflictRow
@@ -178,6 +192,7 @@ export function SyncConflicts({ shopId, remote, people, refreshKey, onResolved }
             remote={remote}
             people={people}
             onResolved={onResolved}
+            onNote={setNote}
           />
         ))}
       </ul>

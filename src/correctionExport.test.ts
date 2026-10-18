@@ -195,13 +195,21 @@ describe("readable change-history labels", () => {
     expect(fieldLabel("products[a].rtuAmount", { products: [] }, v)).toBe("Talstar P: RTU total amount (AI % unchanged)");
   });
 
+  it("#175: method / catalogId and extra personnel rows get readable labels", () => {
+    expect(fieldLabel("products[a].method", v)).toBe("Talstar P: Application method");
+    expect(fieldLabel("products[b].catalogId", v)).toBe("Product 2: Shop catalog entry");
+    expect(fieldLabel("personnel[applying#2].name")).toBe("Applying 2: Name");
+    expect(fieldLabel("personnel[supervising#3].licenseNumber")).toBe("Supervising 3: License number");
+    expect(fieldLabel("personnel[receiving_training#2].name")).toBe("Receiving training 2: Name");
+    for (const s of ["Application method", "Shop catalog entry", "Applying 2: Name"]) expect(s).not.toMatch(BANNED);
+  });
+
   it("unknown fields fall back to the raw path", () => {
     expect(fieldLabel("somethingNew")).toBe("somethingNew");
     expect(fieldLabel("products[zz].rtuAmount", v)).toBe("products[zz].rtuAmount");
-    // Line keys with no export column keep the key but name the product, not the line id.
-    expect(fieldLabel("products[a].method", v)).toBe("Talstar P: method");
-    expect(fieldLabel("products[b].catalogId", v)).toBe("Product 2: catalogId");
-    expect(fieldLabel("personnel[applying#2].name")).toBe("personnel[applying#2].name");
+    expect(fieldLabel("products[zz].method", v)).toBe("products[zz].method");
+    expect(fieldLabel("personnel[owner#2].name")).toBe("personnel[owner#2].name");
+    expect(fieldLabel("personnel[applying#2].email")).toBe("personnel[applying#2].email");
   });
 
   it("CSV history cell uses product names from the corrected log", () => {

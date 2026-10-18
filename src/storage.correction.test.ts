@@ -613,7 +613,8 @@ describe("restore — keep device copy vs take backup copy", () => {
 
 describe("restore — whole-set replace keeps history-bearing device logs", () => {
   it("device logs absent from the backup are kept when corrected or reviewed; plain ones are replaced", () => {
-    seed(makeLog({ id: "corrected" }), makeLog({ id: "reviewed" }), makeLog({ id: "plain" }));
+    // "plain" was applied more than 2 years ago, so the 2-year guard does not hold it.
+    seed(makeLog({ id: "corrected" }), makeLog({ id: "reviewed" }), makeLog({ id: "plain", dateUsed: "2020-01-01" }));
     correct("corrected", { serviceAddress: "101 Main St" }, "fix");
     markLogReviewed("reviewed", { reviewedBy: "p-ana", people: PEOPLE, catalog: CATALOG, now: NOW });
     const res = restore([makeLog({ id: "fromBackup" })]);

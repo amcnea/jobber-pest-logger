@@ -1,0 +1,85 @@
+/**
+ * 2-year record keeping guard (4 TAC § 7.144 record keeping: application records are
+ * kept for 2 years). A log may be deleted in the app only on or after the 2-year
+ * anniversary of its application date, using device-local calendar dates.
+ *
+ * Leap day: an application on Feb 29 reaches 2 years on Mar 1 (the later of the two
+ * choices), so a record is never deletable before 2 full years have passed.
+ *
+ * Example-only logs (every product an example seed, i.e. demo data) are not real
+ * application records and are not held by this guard.
+ */
+import { inferIsExample, logHasExampleProducts } from "./catalog";
+import { localDateYmd, parseLocalYmd } from "./dates";
+import type { ApplicationLog } from "./types";
+
+export const RETENTION_YEARS = 2;
+
+/** YYYY-MM-DD two years after `ymd` (Feb 29 → Mar 1), or null if `ymd` is not a valid date. */
+export function retentionEndYmd(ymd: string): string | null {
+  const start = parseLocalYmd(ymd);
+  if (!start) return null;
+  const y = start.getFullYear() + RETENTION_YEARS;
+  const m = start.getMonth();
+  const d = start.getDate();
+  const end = new Date(y, m, d, 12, 0, 0, 0);
+  // Feb 29 into a non-leap year rolls to Mar 1 (Date does this; keep it explicit).
+  if (end.getMonth() !== m) return localDateYmd(new Date(y, m + 1, 1, 12));
+  return localDateYmd(end);
+}
+
+/** Application date: dateUsed, else the local date of createdAt; null when neither is readable. */
+export function applicationDateYmd(log: Pick<ApplicationLog, "dateUsed" | "createdAt">): string | null {
+  if (parseLocalYmd(log.dateUsed ?? "")) return log.dateUsed.trim();
+  const created = Date.parse(log.createdAt ?? "");
+  return Number.isNaN(created) ? null : localDateYmd(new Date(created));
+}
+
+/** Every product is an example seed (or a sample log with no products): demo data. */
+export function isExampleOnlyLog(log: Pick<ApplicationLog, "sampleData" | "products">): boolean {
+  const hadExamples = log.sampleData === true || logHasExampleProducts(log.products);
+  return (
+    hadExamples &&
+    log.products.every((p) => inferIsExample({ isExample: p.isExample, catalogId: p.catalogId, epaRegNo: p.epaRegNo }))
+  );
+}
+
+/** Date (YYYY-MM-DD) from which the log may be deleted, or null when it has no readable date. */
+export function deletableFromYmd(log: Pick<ApplicationLog, "dateUsed" | "createdAt">): string | null {
+  const applied = applicationDateYmd(log);
+  return applied ? retentionEndYmd(applied) : null;
+}
+
+/**
+ * True while the log must be kept: a real (not example-only) log less than 2 years past
+ * its application date. A log with no readable date is kept (fail closed).
+ */
+export function isWithinRetention(log: ApplicationLog, now: Date = new Date()): boolean {
+  if (isExampleOnlyLog(log)) return false;
+  const from = deletableFromYmd(log);
+  if (!from) return true;
+  return localDateYmd(now) < from;
+}
+
+export function countWithinRetention(logs: ApplicationLog[], now: Date = new Date()): number {
+  return logs.filter((l) => isWithinRetention(l, now)).length;
+}
+
+/** Short reason shown instead of Delete, or null when the log may be deleted. */
+export function deleteBlockedReason(log: ApplicationLog, now: Date = new Date()): string | null {
+  if (!isWithinRetention(log, now)) return null;
+  const from = deletableFromYmd(log);
+  if (!from) {
+    return "Can't delete. This log has no readable application date, and Texas requires keeping records for 2 years from that date.";
+  }
+  return `Can't delete yet. Texas requires keeping this record for 2 years from the application date. You can delete it on or after ${from}.`;
+}
+
+/** Wipe-confirm warning when real logs under 2 years old exist; "" when none. */
+export function wipeRetentionWarning(n: number): string {
+  if (n <= 0) return "";
+  if (n === 1) {
+    return "1 log is less than 2 years old. Texas requires the shop to keep this record for 2 years. Download the backup JSON or export first.";
+  }
+  return `${n} logs are less than 2 years old. Texas requires the shop to keep these records for 2 years. Download the backup JSON or export first.`;
+}
