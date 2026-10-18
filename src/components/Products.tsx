@@ -478,10 +478,15 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
     setCsvInclude([]);
     setCsvAdded([]);
     setCsvFileName("");
+    if (csvFileRef.current) csvFileRef.current.value = "";
   }
 
   async function onCsvFileChosen(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
+    const input = e.target;
+    const file = input.files?.[0];
+    // #177: clear right away so picking the same file again still fires change
+    // (after an oversize file, a failed read, a preview, or a Cancel).
+    input.value = "";
     const token = ++csvReadTokenRef.current;
     if (!file) return;
     if (file.size > CSV_IMPORT_MAX_BYTES) {
