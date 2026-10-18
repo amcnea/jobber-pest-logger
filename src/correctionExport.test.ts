@@ -177,6 +177,17 @@ describe("readable change-history labels", () => {
     ],
   };
 
+  it("ignores inherited keys like constructor / toString (#188)", () => {
+    for (const key of ["constructor", "toString", "hasOwnProperty", "__proto__", "valueOf"]) {
+      expect(fieldLabel(key)).toBe(key);
+      expect(fieldLabel(`termite.${key}`)).toBe(`termite.${key}`);
+      expect(fieldLabel(`personnel[applying].${key}`)).toBe(`personnel[applying].${key}`);
+      expect(fieldLabel(`personnel[${key}#2].name`)).toBe(`personnel[${key}#2].name`);
+      expect(fieldLabel(`personnel[applying#2].${key}`)).toBe(`personnel[applying#2].${key}`);
+      expect(fieldLabel(`products[a].${key}`, v)).toBe(`products[a].${key}`);
+    }
+  });
+
   it("maps top-level, termite and personnel paths", () => {
     expect(fieldLabel("serviceAddress")).toBe("Service address");
     expect(fieldLabel("termite.tankCount")).toBe("Pretreat tank count");

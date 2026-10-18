@@ -201,8 +201,10 @@ describe("SyncConflicts — re-upload note is cleared (#183)", () => {
     await userEvent.selectOptions(within(row).getByLabelText("Changed by"), "p-ana");
     await userEvent.type(within(row).getByLabelText("Reason"), "Shop lost it");
     await userEvent.click(within(row).getByRole("button", { name: "Save this device's copy" }));
-    const rerender = (refreshKey: number, noteResetKey = 0) =>
-      utils.rerender(<SyncConflicts {...props} refreshKey={refreshKey} noteResetKey={noteResetKey} />);
+    const rerender = (refreshKey: number, noteResetKey = 0, shopId = "SHOP1") =>
+      utils.rerender(
+        <SyncConflicts {...props} shopId={shopId} refreshKey={refreshKey} noteResetKey={noteResetKey} />,
+      );
     rerender(1);
     return { ...utils, rerender };
   }
@@ -224,6 +226,17 @@ describe("SyncConflicts — re-upload note is cleared (#183)", () => {
     expect(screen.getByRole("status")).toHaveTextContent(/Re-upload recorded\./);
     conflicts = [other];
     rerender(2);
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("clears when the shop changes (#187)", async () => {
+    const { rerender } = await reuploadL1();
+    expect(screen.getByRole("status")).toBeInTheDocument();
+    conflicts = [];
+    rerender(1, 0, "SHOP2");
+    expect(screen.queryByRole("status")).toBeNull();
+    // Back to the first shop: the old note doesn't come back.
+    rerender(1, 0, "SHOP1");
     expect(screen.queryByRole("status")).toBeNull();
   });
 

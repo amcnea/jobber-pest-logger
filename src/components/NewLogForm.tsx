@@ -720,7 +720,7 @@ export function NewLogForm({
         </section>
       )}
 
-      <p className="hint">Records are kept 2 years. This app does not run a retention engine.</p>
+      <p className="hint">Texas requires keeping this record at your business for 2 years. This app blocks deleting it for that long, but download the backup and exports for your premises copy.</p>
       <div className="sticky-save">
         <button className="btn btn-primary" type="submit">
           {correction ? "Save correction" : isEditing ? "Save changes" : "Save application log"}
