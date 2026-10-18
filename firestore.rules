@@ -118,6 +118,351 @@ service cloud.firestore {
         );
     }
 
+
+    // ---- #162: review lock on shared logs -------------------------------------
+    // Logs live in the shop doc's `logs` array. The client (RemoteShopStore.putShop)
+    // rewrites the whole doc; logOutbox / mergeLogIntoSet replaces a log in place or
+    // prepends a new one, and the #211 cleanup only removes duplicate copies. Rules can't
+    // loop, so a write is checked on the logs it changed: `changed` = old logs not found
+    // unchanged in the new array, `added` = new logs not found unchanged in the old one.
+    // Replacements keep their place and new logs go to the front (pairing below).
+    //
+    // Once a log is reviewed (reviewedAt and reviewedBy non-blank, as isLogReviewed in
+    // src/reviewQueue.ts) no writer may delete it or overwrite it. It may only be
+    //   - corrected exactly as storage.buildCorrection writes it: revision + 1, history =
+    //     old history + one entry {revision, priorSnapshot (the stored log minus history /
+    //     reuploads / retainUntil), changedAt, changedBy, reason, changes}, with id,
+    //     createdAt, review stamp and re-upload records unchanged; or
+    //   - re-sent at the same revision with nothing changed except a later retainUntil
+    //     hold and/or appended re-upload records (mergeLogIntoSet / buildReupload).
+    // Unreviewed logs are not restricted (as before). Adding a log the shop doesn't have
+    // (including a re-upload of a missing log) is not restricted either.
+    //
+    // A request may evaluate at most 1000 expressions, so these checks are kept short.
+
+    function nonBlank(v) {
+      return v is string && v.trim().size() > 0;
+    }
+
+    function isReviewedLog(log) {
+      return nonBlank(log.get('reviewedAt', null)) && nonBlank(log.get('reviewedBy', null));
+    }
+
+    // Correction as storage.buildCorrection writes it. `revision` = prior revision + 1.
+    // (Any missing or mistyped field is an evaluation error, which denies the write.)
+    function isReviewedCorrection(prev, next, revision) {
+      let prior = prev.get('history', []);
+      let entry = next.history[prior.size()];
+      return !prev.diff(next).affectedKeys().hasAny(['id', 'createdAt', 'reviewedAt', 'reviewedBy', 'reuploads'])
+        // The 2-year hold only moves later (src/retention.ts); YYYY-MM-DD compares as text.
+        && next.get('retainUntil', '') >= prev.get('retainUntil', '')
+        && next.history == prior.concat([entry])
+        && entry.revision == revision
+        && entry.changedAt.trim().size() > 0
+        && entry.changedBy.trim().size() > 0
+        && entry.reason.trim().size() > 0
+        && entry.changes.size() > 0
+        && !entry.priorSnapshot.keys().hasAny(['history', 'reuploads', 'retainUntil'])
+        && prev.diff(entry.priorSnapshot).affectedKeys().hasOnly(['history', 'reuploads', 'retainUntil']);
+    }
+
+    // Same revision: nothing changed but a later hold and/or appended re-upload records.
+    function isReviewedResend(prev, next) {
+      let before = prev.get('reuploads', []);
+      return prev.diff(next).affectedKeys().hasOnly(['retainUntil', 'reuploads'])
+        && next.get('retainUntil', '') >= prev.get('retainUntil', '')
+        && (before.size() == 0 || next.reuploads[0:before.size()] == before);
+    }
+
+    // storage.buildCorrection: priorRevision = revision ?? history.length.
+    function reviewedChangeOk(prev, next) {
+      let revision = prev.get('revision', prev.get('history', []).size()) + 1;
+      return next.get('revision', -1) == revision
+        ? isReviewedCorrection(prev, next, revision)
+        : isReviewedResend(prev, next);
+    }
+
+    // ---- Pairing a changed log with its replacement (#214, Bundle #219) ----------
+    // p = new size - stored size picks the shape. No client write touching a reviewed log
+    // both deletes and adds (the #210 flush and sync replace or prepend; the #211 cleanup
+    // only deletes), so:
+    //   grow   (p >= 0): p logs prepended, none deleted. added.size() must be
+    //          changed.size() + p and every changed log, reviewed or not, must pair with
+    //          the same-id entry added[p + i]. A write that hides a deletion behind an
+    //          insert misaligns and is denied. A reviewed log's pair must pass, and none
+    //          of the p prepended entries may carry its id (checked up to p = 8).
+    //   shrink (p < 0): d = -p logs deleted, nothing new. Each replacement added[j] must
+    //          carry the id of changed[j + t], t <= d. A reviewed changed[i] needs exactly
+    //          one same-id entry in added[i - d .. i], and it must pass. With
+    //          replacements, at most 8 replaced and 3 deleted logs per write; pure
+    //          deletions of unreviewed logs are not limited this way.
+    // Either way a reviewed log with no valid replacement (deleted or overwritten) fails,
+    // and a second copy of a reviewed log next to its correction has no pair and fails.
+    // A write that drops an exact duplicate copy (#211) and prepends in the same write is
+    // denied; the #211 cleanup is a separate delete-only write.
+    //
+    // Up to 40 changed logs per write (unchanged and new logs don't count; a sync write
+    // or #210 outbox flush changes one log), in blocks of 8. The 1000-expression limit is
+    // reached first in practice: measured in the emulator on a 100-log doc, about 29
+    // changed unreviewed logs (32 deleted ones), or 3 corrections / 5 re-sends of reviewed
+    // logs, or 1 correction plus 21 unreviewed edits, in one write. A bigger write is
+    // denied (fails closed).
+    //
+    // Known gap (#215): rules can't read every log's id, so a new entry that reuses the
+    // id of a stored log that the write leaves unchanged (stored [R] -> [Fake{id: R}, R]
+    // or [R, Fake{id: R}]) is not caught here. The client handles it on read (#211
+    // de-duplication, #212 office note) until logs move to per-log docs.
+
+    // Grow slot i (tail = added minus the p prepended entries): a reviewed changed[i] must
+    // pass against tail[i] (a correction or re-send can't change the id) and its id may
+    // not be among the prepended entries (added[0] inline, added[1..7] here); any other
+    // changed[i] needs tail[i] with the same id. Inlined to fit the expression budget.
+    function notPrepended(added, p, id) {
+      return p <= 8 && (p <= 1 || (added[1].id != id && (p <= 2 || (added[2].id != id && (p <= 3 || (added[3].id != id && (p <= 4 || (added[4].id != id && (p <= 5 || (added[5].id != id && (p <= 6 || (added[6].id != id && (p <= 7 || (added[7].id != id && true))))))))))))));
+    }
+
+    function growFull0(changed, tail, added, p) {
+      return (('reviewedAt' in changed[0] && isReviewedLog(changed[0])) ? reviewedChangeOk(changed[0], tail[0]) && (p == 0 || (added[0].id != changed[0].id && (p == 1 || notPrepended(added, p, changed[0].id)))) : changed[0].id == tail[0].id)
+        && (('reviewedAt' in changed[1] && isReviewedLog(changed[1])) ? reviewedChangeOk(changed[1], tail[1]) && (p == 0 || (added[0].id != changed[1].id && (p == 1 || notPrepended(added, p, changed[1].id)))) : changed[1].id == tail[1].id)
+        && (('reviewedAt' in changed[2] && isReviewedLog(changed[2])) ? reviewedChangeOk(changed[2], tail[2]) && (p == 0 || (added[0].id != changed[2].id && (p == 1 || notPrepended(added, p, changed[2].id)))) : changed[2].id == tail[2].id)
+        && (('reviewedAt' in changed[3] && isReviewedLog(changed[3])) ? reviewedChangeOk(changed[3], tail[3]) && (p == 0 || (added[0].id != changed[3].id && (p == 1 || notPrepended(added, p, changed[3].id)))) : changed[3].id == tail[3].id)
+        && (('reviewedAt' in changed[4] && isReviewedLog(changed[4])) ? reviewedChangeOk(changed[4], tail[4]) && (p == 0 || (added[0].id != changed[4].id && (p == 1 || notPrepended(added, p, changed[4].id)))) : changed[4].id == tail[4].id)
+        && (('reviewedAt' in changed[5] && isReviewedLog(changed[5])) ? reviewedChangeOk(changed[5], tail[5]) && (p == 0 || (added[0].id != changed[5].id && (p == 1 || notPrepended(added, p, changed[5].id)))) : changed[5].id == tail[5].id)
+        && (('reviewedAt' in changed[6] && isReviewedLog(changed[6])) ? reviewedChangeOk(changed[6], tail[6]) && (p == 0 || (added[0].id != changed[6].id && (p == 1 || notPrepended(added, p, changed[6].id)))) : changed[6].id == tail[6].id)
+        && (('reviewedAt' in changed[7] && isReviewedLog(changed[7])) ? reviewedChangeOk(changed[7], tail[7]) && (p == 0 || (added[0].id != changed[7].id && (p == 1 || notPrepended(added, p, changed[7].id)))) : changed[7].id == tail[7].id);
+    }
+
+    function growPart0(changed, tail, added, n, p) {
+      return (('reviewedAt' in changed[0] && isReviewedLog(changed[0])) ? reviewedChangeOk(changed[0], tail[0]) && (p == 0 || (added[0].id != changed[0].id && (p == 1 || notPrepended(added, p, changed[0].id)))) : changed[0].id == tail[0].id)
+        && (n <= 1 || ((('reviewedAt' in changed[1] && isReviewedLog(changed[1])) ? reviewedChangeOk(changed[1], tail[1]) && (p == 0 || (added[0].id != changed[1].id && (p == 1 || notPrepended(added, p, changed[1].id)))) : changed[1].id == tail[1].id)
+        && (n <= 2 || ((('reviewedAt' in changed[2] && isReviewedLog(changed[2])) ? reviewedChangeOk(changed[2], tail[2]) && (p == 0 || (added[0].id != changed[2].id && (p == 1 || notPrepended(added, p, changed[2].id)))) : changed[2].id == tail[2].id)
+        && (n <= 3 || ((('reviewedAt' in changed[3] && isReviewedLog(changed[3])) ? reviewedChangeOk(changed[3], tail[3]) && (p == 0 || (added[0].id != changed[3].id && (p == 1 || notPrepended(added, p, changed[3].id)))) : changed[3].id == tail[3].id)
+        && (n <= 4 || ((('reviewedAt' in changed[4] && isReviewedLog(changed[4])) ? reviewedChangeOk(changed[4], tail[4]) && (p == 0 || (added[0].id != changed[4].id && (p == 1 || notPrepended(added, p, changed[4].id)))) : changed[4].id == tail[4].id)
+        && (n <= 5 || ((('reviewedAt' in changed[5] && isReviewedLog(changed[5])) ? reviewedChangeOk(changed[5], tail[5]) && (p == 0 || (added[0].id != changed[5].id && (p == 1 || notPrepended(added, p, changed[5].id)))) : changed[5].id == tail[5].id)
+        && (n <= 6 || ((('reviewedAt' in changed[6] && isReviewedLog(changed[6])) ? reviewedChangeOk(changed[6], tail[6]) && (p == 0 || (added[0].id != changed[6].id && (p == 1 || notPrepended(added, p, changed[6].id)))) : changed[6].id == tail[6].id)
+        && (n <= 7 || ((('reviewedAt' in changed[7] && isReviewedLog(changed[7])) ? reviewedChangeOk(changed[7], tail[7]) && (p == 0 || (added[0].id != changed[7].id && (p == 1 || notPrepended(added, p, changed[7].id)))) : changed[7].id == tail[7].id)
+        && true))))))))))))));
+    }
+
+    function growFull8(changed, tail, added, p) {
+      return (('reviewedAt' in changed[8] && isReviewedLog(changed[8])) ? reviewedChangeOk(changed[8], tail[8]) && (p == 0 || (added[0].id != changed[8].id && (p == 1 || notPrepended(added, p, changed[8].id)))) : changed[8].id == tail[8].id)
+        && (('reviewedAt' in changed[9] && isReviewedLog(changed[9])) ? reviewedChangeOk(changed[9], tail[9]) && (p == 0 || (added[0].id != changed[9].id && (p == 1 || notPrepended(added, p, changed[9].id)))) : changed[9].id == tail[9].id)
+        && (('reviewedAt' in changed[10] && isReviewedLog(changed[10])) ? reviewedChangeOk(changed[10], tail[10]) && (p == 0 || (added[0].id != changed[10].id && (p == 1 || notPrepended(added, p, changed[10].id)))) : changed[10].id == tail[10].id)
+        && (('reviewedAt' in changed[11] && isReviewedLog(changed[11])) ? reviewedChangeOk(changed[11], tail[11]) && (p == 0 || (added[0].id != changed[11].id && (p == 1 || notPrepended(added, p, changed[11].id)))) : changed[11].id == tail[11].id)
+        && (('reviewedAt' in changed[12] && isReviewedLog(changed[12])) ? reviewedChangeOk(changed[12], tail[12]) && (p == 0 || (added[0].id != changed[12].id && (p == 1 || notPrepended(added, p, changed[12].id)))) : changed[12].id == tail[12].id)
+        && (('reviewedAt' in changed[13] && isReviewedLog(changed[13])) ? reviewedChangeOk(changed[13], tail[13]) && (p == 0 || (added[0].id != changed[13].id && (p == 1 || notPrepended(added, p, changed[13].id)))) : changed[13].id == tail[13].id)
+        && (('reviewedAt' in changed[14] && isReviewedLog(changed[14])) ? reviewedChangeOk(changed[14], tail[14]) && (p == 0 || (added[0].id != changed[14].id && (p == 1 || notPrepended(added, p, changed[14].id)))) : changed[14].id == tail[14].id)
+        && (('reviewedAt' in changed[15] && isReviewedLog(changed[15])) ? reviewedChangeOk(changed[15], tail[15]) && (p == 0 || (added[0].id != changed[15].id && (p == 1 || notPrepended(added, p, changed[15].id)))) : changed[15].id == tail[15].id);
+    }
+
+    function growPart8(changed, tail, added, n, p) {
+      return (('reviewedAt' in changed[8] && isReviewedLog(changed[8])) ? reviewedChangeOk(changed[8], tail[8]) && (p == 0 || (added[0].id != changed[8].id && (p == 1 || notPrepended(added, p, changed[8].id)))) : changed[8].id == tail[8].id)
+        && (n <= 9 || ((('reviewedAt' in changed[9] && isReviewedLog(changed[9])) ? reviewedChangeOk(changed[9], tail[9]) && (p == 0 || (added[0].id != changed[9].id && (p == 1 || notPrepended(added, p, changed[9].id)))) : changed[9].id == tail[9].id)
+        && (n <= 10 || ((('reviewedAt' in changed[10] && isReviewedLog(changed[10])) ? reviewedChangeOk(changed[10], tail[10]) && (p == 0 || (added[0].id != changed[10].id && (p == 1 || notPrepended(added, p, changed[10].id)))) : changed[10].id == tail[10].id)
+        && (n <= 11 || ((('reviewedAt' in changed[11] && isReviewedLog(changed[11])) ? reviewedChangeOk(changed[11], tail[11]) && (p == 0 || (added[0].id != changed[11].id && (p == 1 || notPrepended(added, p, changed[11].id)))) : changed[11].id == tail[11].id)
+        && (n <= 12 || ((('reviewedAt' in changed[12] && isReviewedLog(changed[12])) ? reviewedChangeOk(changed[12], tail[12]) && (p == 0 || (added[0].id != changed[12].id && (p == 1 || notPrepended(added, p, changed[12].id)))) : changed[12].id == tail[12].id)
+        && (n <= 13 || ((('reviewedAt' in changed[13] && isReviewedLog(changed[13])) ? reviewedChangeOk(changed[13], tail[13]) && (p == 0 || (added[0].id != changed[13].id && (p == 1 || notPrepended(added, p, changed[13].id)))) : changed[13].id == tail[13].id)
+        && (n <= 14 || ((('reviewedAt' in changed[14] && isReviewedLog(changed[14])) ? reviewedChangeOk(changed[14], tail[14]) && (p == 0 || (added[0].id != changed[14].id && (p == 1 || notPrepended(added, p, changed[14].id)))) : changed[14].id == tail[14].id)
+        && (n <= 15 || ((('reviewedAt' in changed[15] && isReviewedLog(changed[15])) ? reviewedChangeOk(changed[15], tail[15]) && (p == 0 || (added[0].id != changed[15].id && (p == 1 || notPrepended(added, p, changed[15].id)))) : changed[15].id == tail[15].id)
+        && true))))))))))))));
+    }
+
+    function growFull16(changed, tail, added, p) {
+      return (('reviewedAt' in changed[16] && isReviewedLog(changed[16])) ? reviewedChangeOk(changed[16], tail[16]) && (p == 0 || (added[0].id != changed[16].id && (p == 1 || notPrepended(added, p, changed[16].id)))) : changed[16].id == tail[16].id)
+        && (('reviewedAt' in changed[17] && isReviewedLog(changed[17])) ? reviewedChangeOk(changed[17], tail[17]) && (p == 0 || (added[0].id != changed[17].id && (p == 1 || notPrepended(added, p, changed[17].id)))) : changed[17].id == tail[17].id)
+        && (('reviewedAt' in changed[18] && isReviewedLog(changed[18])) ? reviewedChangeOk(changed[18], tail[18]) && (p == 0 || (added[0].id != changed[18].id && (p == 1 || notPrepended(added, p, changed[18].id)))) : changed[18].id == tail[18].id)
+        && (('reviewedAt' in changed[19] && isReviewedLog(changed[19])) ? reviewedChangeOk(changed[19], tail[19]) && (p == 0 || (added[0].id != changed[19].id && (p == 1 || notPrepended(added, p, changed[19].id)))) : changed[19].id == tail[19].id)
+        && (('reviewedAt' in changed[20] && isReviewedLog(changed[20])) ? reviewedChangeOk(changed[20], tail[20]) && (p == 0 || (added[0].id != changed[20].id && (p == 1 || notPrepended(added, p, changed[20].id)))) : changed[20].id == tail[20].id)
+        && (('reviewedAt' in changed[21] && isReviewedLog(changed[21])) ? reviewedChangeOk(changed[21], tail[21]) && (p == 0 || (added[0].id != changed[21].id && (p == 1 || notPrepended(added, p, changed[21].id)))) : changed[21].id == tail[21].id)
+        && (('reviewedAt' in changed[22] && isReviewedLog(changed[22])) ? reviewedChangeOk(changed[22], tail[22]) && (p == 0 || (added[0].id != changed[22].id && (p == 1 || notPrepended(added, p, changed[22].id)))) : changed[22].id == tail[22].id)
+        && (('reviewedAt' in changed[23] && isReviewedLog(changed[23])) ? reviewedChangeOk(changed[23], tail[23]) && (p == 0 || (added[0].id != changed[23].id && (p == 1 || notPrepended(added, p, changed[23].id)))) : changed[23].id == tail[23].id);
+    }
+
+    function growPart16(changed, tail, added, n, p) {
+      return (('reviewedAt' in changed[16] && isReviewedLog(changed[16])) ? reviewedChangeOk(changed[16], tail[16]) && (p == 0 || (added[0].id != changed[16].id && (p == 1 || notPrepended(added, p, changed[16].id)))) : changed[16].id == tail[16].id)
+        && (n <= 17 || ((('reviewedAt' in changed[17] && isReviewedLog(changed[17])) ? reviewedChangeOk(changed[17], tail[17]) && (p == 0 || (added[0].id != changed[17].id && (p == 1 || notPrepended(added, p, changed[17].id)))) : changed[17].id == tail[17].id)
+        && (n <= 18 || ((('reviewedAt' in changed[18] && isReviewedLog(changed[18])) ? reviewedChangeOk(changed[18], tail[18]) && (p == 0 || (added[0].id != changed[18].id && (p == 1 || notPrepended(added, p, changed[18].id)))) : changed[18].id == tail[18].id)
+        && (n <= 19 || ((('reviewedAt' in changed[19] && isReviewedLog(changed[19])) ? reviewedChangeOk(changed[19], tail[19]) && (p == 0 || (added[0].id != changed[19].id && (p == 1 || notPrepended(added, p, changed[19].id)))) : changed[19].id == tail[19].id)
+        && (n <= 20 || ((('reviewedAt' in changed[20] && isReviewedLog(changed[20])) ? reviewedChangeOk(changed[20], tail[20]) && (p == 0 || (added[0].id != changed[20].id && (p == 1 || notPrepended(added, p, changed[20].id)))) : changed[20].id == tail[20].id)
+        && (n <= 21 || ((('reviewedAt' in changed[21] && isReviewedLog(changed[21])) ? reviewedChangeOk(changed[21], tail[21]) && (p == 0 || (added[0].id != changed[21].id && (p == 1 || notPrepended(added, p, changed[21].id)))) : changed[21].id == tail[21].id)
+        && (n <= 22 || ((('reviewedAt' in changed[22] && isReviewedLog(changed[22])) ? reviewedChangeOk(changed[22], tail[22]) && (p == 0 || (added[0].id != changed[22].id && (p == 1 || notPrepended(added, p, changed[22].id)))) : changed[22].id == tail[22].id)
+        && (n <= 23 || ((('reviewedAt' in changed[23] && isReviewedLog(changed[23])) ? reviewedChangeOk(changed[23], tail[23]) && (p == 0 || (added[0].id != changed[23].id && (p == 1 || notPrepended(added, p, changed[23].id)))) : changed[23].id == tail[23].id)
+        && true))))))))))))));
+    }
+
+    function growFull24(changed, tail, added, p) {
+      return (('reviewedAt' in changed[24] && isReviewedLog(changed[24])) ? reviewedChangeOk(changed[24], tail[24]) && (p == 0 || (added[0].id != changed[24].id && (p == 1 || notPrepended(added, p, changed[24].id)))) : changed[24].id == tail[24].id)
+        && (('reviewedAt' in changed[25] && isReviewedLog(changed[25])) ? reviewedChangeOk(changed[25], tail[25]) && (p == 0 || (added[0].id != changed[25].id && (p == 1 || notPrepended(added, p, changed[25].id)))) : changed[25].id == tail[25].id)
+        && (('reviewedAt' in changed[26] && isReviewedLog(changed[26])) ? reviewedChangeOk(changed[26], tail[26]) && (p == 0 || (added[0].id != changed[26].id && (p == 1 || notPrepended(added, p, changed[26].id)))) : changed[26].id == tail[26].id)
+        && (('reviewedAt' in changed[27] && isReviewedLog(changed[27])) ? reviewedChangeOk(changed[27], tail[27]) && (p == 0 || (added[0].id != changed[27].id && (p == 1 || notPrepended(added, p, changed[27].id)))) : changed[27].id == tail[27].id)
+        && (('reviewedAt' in changed[28] && isReviewedLog(changed[28])) ? reviewedChangeOk(changed[28], tail[28]) && (p == 0 || (added[0].id != changed[28].id && (p == 1 || notPrepended(added, p, changed[28].id)))) : changed[28].id == tail[28].id)
+        && (('reviewedAt' in changed[29] && isReviewedLog(changed[29])) ? reviewedChangeOk(changed[29], tail[29]) && (p == 0 || (added[0].id != changed[29].id && (p == 1 || notPrepended(added, p, changed[29].id)))) : changed[29].id == tail[29].id)
+        && (('reviewedAt' in changed[30] && isReviewedLog(changed[30])) ? reviewedChangeOk(changed[30], tail[30]) && (p == 0 || (added[0].id != changed[30].id && (p == 1 || notPrepended(added, p, changed[30].id)))) : changed[30].id == tail[30].id)
+        && (('reviewedAt' in changed[31] && isReviewedLog(changed[31])) ? reviewedChangeOk(changed[31], tail[31]) && (p == 0 || (added[0].id != changed[31].id && (p == 1 || notPrepended(added, p, changed[31].id)))) : changed[31].id == tail[31].id);
+    }
+
+    function growPart24(changed, tail, added, n, p) {
+      return (('reviewedAt' in changed[24] && isReviewedLog(changed[24])) ? reviewedChangeOk(changed[24], tail[24]) && (p == 0 || (added[0].id != changed[24].id && (p == 1 || notPrepended(added, p, changed[24].id)))) : changed[24].id == tail[24].id)
+        && (n <= 25 || ((('reviewedAt' in changed[25] && isReviewedLog(changed[25])) ? reviewedChangeOk(changed[25], tail[25]) && (p == 0 || (added[0].id != changed[25].id && (p == 1 || notPrepended(added, p, changed[25].id)))) : changed[25].id == tail[25].id)
+        && (n <= 26 || ((('reviewedAt' in changed[26] && isReviewedLog(changed[26])) ? reviewedChangeOk(changed[26], tail[26]) && (p == 0 || (added[0].id != changed[26].id && (p == 1 || notPrepended(added, p, changed[26].id)))) : changed[26].id == tail[26].id)
+        && (n <= 27 || ((('reviewedAt' in changed[27] && isReviewedLog(changed[27])) ? reviewedChangeOk(changed[27], tail[27]) && (p == 0 || (added[0].id != changed[27].id && (p == 1 || notPrepended(added, p, changed[27].id)))) : changed[27].id == tail[27].id)
+        && (n <= 28 || ((('reviewedAt' in changed[28] && isReviewedLog(changed[28])) ? reviewedChangeOk(changed[28], tail[28]) && (p == 0 || (added[0].id != changed[28].id && (p == 1 || notPrepended(added, p, changed[28].id)))) : changed[28].id == tail[28].id)
+        && (n <= 29 || ((('reviewedAt' in changed[29] && isReviewedLog(changed[29])) ? reviewedChangeOk(changed[29], tail[29]) && (p == 0 || (added[0].id != changed[29].id && (p == 1 || notPrepended(added, p, changed[29].id)))) : changed[29].id == tail[29].id)
+        && (n <= 30 || ((('reviewedAt' in changed[30] && isReviewedLog(changed[30])) ? reviewedChangeOk(changed[30], tail[30]) && (p == 0 || (added[0].id != changed[30].id && (p == 1 || notPrepended(added, p, changed[30].id)))) : changed[30].id == tail[30].id)
+        && (n <= 31 || ((('reviewedAt' in changed[31] && isReviewedLog(changed[31])) ? reviewedChangeOk(changed[31], tail[31]) && (p == 0 || (added[0].id != changed[31].id && (p == 1 || notPrepended(added, p, changed[31].id)))) : changed[31].id == tail[31].id)
+        && true))))))))))))));
+    }
+
+    function growFull32(changed, tail, added, p) {
+      return (('reviewedAt' in changed[32] && isReviewedLog(changed[32])) ? reviewedChangeOk(changed[32], tail[32]) && (p == 0 || (added[0].id != changed[32].id && (p == 1 || notPrepended(added, p, changed[32].id)))) : changed[32].id == tail[32].id)
+        && (('reviewedAt' in changed[33] && isReviewedLog(changed[33])) ? reviewedChangeOk(changed[33], tail[33]) && (p == 0 || (added[0].id != changed[33].id && (p == 1 || notPrepended(added, p, changed[33].id)))) : changed[33].id == tail[33].id)
+        && (('reviewedAt' in changed[34] && isReviewedLog(changed[34])) ? reviewedChangeOk(changed[34], tail[34]) && (p == 0 || (added[0].id != changed[34].id && (p == 1 || notPrepended(added, p, changed[34].id)))) : changed[34].id == tail[34].id)
+        && (('reviewedAt' in changed[35] && isReviewedLog(changed[35])) ? reviewedChangeOk(changed[35], tail[35]) && (p == 0 || (added[0].id != changed[35].id && (p == 1 || notPrepended(added, p, changed[35].id)))) : changed[35].id == tail[35].id)
+        && (('reviewedAt' in changed[36] && isReviewedLog(changed[36])) ? reviewedChangeOk(changed[36], tail[36]) && (p == 0 || (added[0].id != changed[36].id && (p == 1 || notPrepended(added, p, changed[36].id)))) : changed[36].id == tail[36].id)
+        && (('reviewedAt' in changed[37] && isReviewedLog(changed[37])) ? reviewedChangeOk(changed[37], tail[37]) && (p == 0 || (added[0].id != changed[37].id && (p == 1 || notPrepended(added, p, changed[37].id)))) : changed[37].id == tail[37].id)
+        && (('reviewedAt' in changed[38] && isReviewedLog(changed[38])) ? reviewedChangeOk(changed[38], tail[38]) && (p == 0 || (added[0].id != changed[38].id && (p == 1 || notPrepended(added, p, changed[38].id)))) : changed[38].id == tail[38].id)
+        && (('reviewedAt' in changed[39] && isReviewedLog(changed[39])) ? reviewedChangeOk(changed[39], tail[39]) && (p == 0 || (added[0].id != changed[39].id && (p == 1 || notPrepended(added, p, changed[39].id)))) : changed[39].id == tail[39].id);
+    }
+
+    function growPart32(changed, tail, added, n, p) {
+      return (('reviewedAt' in changed[32] && isReviewedLog(changed[32])) ? reviewedChangeOk(changed[32], tail[32]) && (p == 0 || (added[0].id != changed[32].id && (p == 1 || notPrepended(added, p, changed[32].id)))) : changed[32].id == tail[32].id)
+        && (n <= 33 || ((('reviewedAt' in changed[33] && isReviewedLog(changed[33])) ? reviewedChangeOk(changed[33], tail[33]) && (p == 0 || (added[0].id != changed[33].id && (p == 1 || notPrepended(added, p, changed[33].id)))) : changed[33].id == tail[33].id)
+        && (n <= 34 || ((('reviewedAt' in changed[34] && isReviewedLog(changed[34])) ? reviewedChangeOk(changed[34], tail[34]) && (p == 0 || (added[0].id != changed[34].id && (p == 1 || notPrepended(added, p, changed[34].id)))) : changed[34].id == tail[34].id)
+        && (n <= 35 || ((('reviewedAt' in changed[35] && isReviewedLog(changed[35])) ? reviewedChangeOk(changed[35], tail[35]) && (p == 0 || (added[0].id != changed[35].id && (p == 1 || notPrepended(added, p, changed[35].id)))) : changed[35].id == tail[35].id)
+        && (n <= 36 || ((('reviewedAt' in changed[36] && isReviewedLog(changed[36])) ? reviewedChangeOk(changed[36], tail[36]) && (p == 0 || (added[0].id != changed[36].id && (p == 1 || notPrepended(added, p, changed[36].id)))) : changed[36].id == tail[36].id)
+        && (n <= 37 || ((('reviewedAt' in changed[37] && isReviewedLog(changed[37])) ? reviewedChangeOk(changed[37], tail[37]) && (p == 0 || (added[0].id != changed[37].id && (p == 1 || notPrepended(added, p, changed[37].id)))) : changed[37].id == tail[37].id)
+        && (n <= 38 || ((('reviewedAt' in changed[38] && isReviewedLog(changed[38])) ? reviewedChangeOk(changed[38], tail[38]) && (p == 0 || (added[0].id != changed[38].id && (p == 1 || notPrepended(added, p, changed[38].id)))) : changed[38].id == tail[38].id)
+        && (n <= 39 || ((('reviewedAt' in changed[39] && isReviewedLog(changed[39])) ? reviewedChangeOk(changed[39], tail[39]) && (p == 0 || (added[0].id != changed[39].id && (p == 1 || notPrepended(added, p, changed[39].id)))) : changed[39].id == tail[39].id)
+        && true))))))))))))));
+    }
+
+    // tail = added without the p prepended entries, so changed[i] pairs with tail[i].
+    // Full blocks of 8 skip the per-slot bound check (expression budget).
+    function growLogsOk(changed, tail, added, p) {
+      let n = changed.size();
+      return n <= 40
+        && (n <= 0 || (n >= 8 ? growFull0(changed, tail, added, p) && (n <= 8 || (n >= 16 ? growFull8(changed, tail, added, p) && (n <= 16 || (n >= 24 ? growFull16(changed, tail, added, p) && (n <= 24 || (n >= 32 ? growFull24(changed, tail, added, p) && (n <= 32 || (n >= 40 ? growFull32(changed, tail, added, p) && true : growPart32(changed, tail, added, n, p))) : growPart24(changed, tail, added, n, p))) : growPart16(changed, tail, added, n, p))) : growPart8(changed, tail, added, n, p))) : growPart0(changed, tail, added, n, p)));
+    }
+
+    // Shrink: a reviewed changed[i] needs exactly one same-id entry in added[i - d .. i]
+    // (d <= 3), and it must pass.
+    function shrinkLogOk(changed, added, i, d) {
+      return !('reviewedAt' in changed[i])
+        || !isReviewedLog(changed[i])
+        || reviewedWindowOk(changed[i], added, i, d);
+    }
+
+    function reviewedWindowOk(c, added, i, d) {
+      return d <= 3
+        && (d >= 0 && i - 0 >= 0 && i - 0 < added.size() && added[i - 0].id == c.id ? 1 : 0) + (d >= 1 && i - 1 >= 0 && i - 1 < added.size() && added[i - 1].id == c.id ? 1 : 0) + (d >= 2 && i - 2 >= 0 && i - 2 < added.size() && added[i - 2].id == c.id ? 1 : 0) + (d >= 3 && i - 3 >= 0 && i - 3 < added.size() && added[i - 3].id == c.id ? 1 : 0) == 1
+        && (!(d >= 0 && i - 0 >= 0 && i - 0 < added.size() && added[i - 0].id == c.id) || reviewedChangeOk(c, added[i - 0]))
+        && (!(d >= 1 && i - 1 >= 0 && i - 1 < added.size() && added[i - 1].id == c.id) || reviewedChangeOk(c, added[i - 1]))
+        && (!(d >= 2 && i - 2 >= 0 && i - 2 < added.size() && added[i - 2].id == c.id) || reviewedChangeOk(c, added[i - 2]))
+        && (!(d >= 3 && i - 3 >= 0 && i - 3 < added.size() && added[i - 3].id == c.id) || reviewedChangeOk(c, added[i - 3]));
+    }
+
+    function shrinkLogsOk0(changed, added, n, d) {
+      return (n <= 0 || shrinkLogOk(changed, added, 0, d))
+        && (n <= 1 || shrinkLogOk(changed, added, 1, d))
+        && (n <= 2 || shrinkLogOk(changed, added, 2, d))
+        && (n <= 3 || shrinkLogOk(changed, added, 3, d))
+        && (n <= 4 || shrinkLogOk(changed, added, 4, d))
+        && (n <= 5 || shrinkLogOk(changed, added, 5, d))
+        && (n <= 6 || shrinkLogOk(changed, added, 6, d))
+        && (n <= 7 || shrinkLogOk(changed, added, 7, d));
+    }
+
+    function shrinkLogsOk8(changed, added, n, d) {
+      return (n <= 8 || shrinkLogOk(changed, added, 8, d))
+        && (n <= 9 || shrinkLogOk(changed, added, 9, d))
+        && (n <= 10 || shrinkLogOk(changed, added, 10, d))
+        && (n <= 11 || shrinkLogOk(changed, added, 11, d))
+        && (n <= 12 || shrinkLogOk(changed, added, 12, d))
+        && (n <= 13 || shrinkLogOk(changed, added, 13, d))
+        && (n <= 14 || shrinkLogOk(changed, added, 14, d))
+        && (n <= 15 || shrinkLogOk(changed, added, 15, d));
+    }
+
+    function shrinkLogsOk16(changed, added, n, d) {
+      return (n <= 16 || shrinkLogOk(changed, added, 16, d))
+        && (n <= 17 || shrinkLogOk(changed, added, 17, d))
+        && (n <= 18 || shrinkLogOk(changed, added, 18, d))
+        && (n <= 19 || shrinkLogOk(changed, added, 19, d))
+        && (n <= 20 || shrinkLogOk(changed, added, 20, d))
+        && (n <= 21 || shrinkLogOk(changed, added, 21, d))
+        && (n <= 22 || shrinkLogOk(changed, added, 22, d))
+        && (n <= 23 || shrinkLogOk(changed, added, 23, d));
+    }
+
+    function shrinkLogsOk24(changed, added, n, d) {
+      return (n <= 24 || shrinkLogOk(changed, added, 24, d))
+        && (n <= 25 || shrinkLogOk(changed, added, 25, d))
+        && (n <= 26 || shrinkLogOk(changed, added, 26, d))
+        && (n <= 27 || shrinkLogOk(changed, added, 27, d))
+        && (n <= 28 || shrinkLogOk(changed, added, 28, d))
+        && (n <= 29 || shrinkLogOk(changed, added, 29, d))
+        && (n <= 30 || shrinkLogOk(changed, added, 30, d))
+        && (n <= 31 || shrinkLogOk(changed, added, 31, d));
+    }
+
+    function shrinkLogsOk32(changed, added, n, d) {
+      return (n <= 32 || shrinkLogOk(changed, added, 32, d))
+        && (n <= 33 || shrinkLogOk(changed, added, 33, d))
+        && (n <= 34 || shrinkLogOk(changed, added, 34, d))
+        && (n <= 35 || shrinkLogOk(changed, added, 35, d))
+        && (n <= 36 || shrinkLogOk(changed, added, 36, d))
+        && (n <= 37 || shrinkLogOk(changed, added, 37, d))
+        && (n <= 38 || shrinkLogOk(changed, added, 38, d))
+        && (n <= 39 || shrinkLogOk(changed, added, 39, d));
+    }
+
+    function shrinkLogsOk(changed, added, d) {
+      let n = changed.size();
+      return n <= 40
+        && (n <= 0 || shrinkLogsOk0(changed, added, n, d))
+        && (n <= 8 || shrinkLogsOk8(changed, added, n, d))
+        && (n <= 16 || shrinkLogsOk16(changed, added, n, d))
+        && (n <= 24 || shrinkLogsOk24(changed, added, n, d))
+        && (n <= 32 || shrinkLogsOk32(changed, added, n, d));
+    }
+
+    // added[j] is the replacement of a same-id changed[j + t], t <= d.
+    function pairsBack(changed, added, j, d) {
+      return (d >= 0 && j + 0 < changed.size() && changed[j + 0].id == added[j].id) || (d >= 1 && j + 1 < changed.size() && changed[j + 1].id == added[j].id) || (d >= 2 && j + 2 < changed.size() && changed[j + 2].id == added[j].id) || (d >= 3 && j + 3 < changed.size() && changed[j + 3].id == added[j].id);
+    }
+
+    function shrinkPairsOk(changed, added, d) {
+      return added.size() == 0
+        || (added.size() <= 8 && d <= 3
+          && (added.size() <= 0 || pairsBack(changed, added, 0, d))
+        && (added.size() <= 1 || pairsBack(changed, added, 1, d))
+        && (added.size() <= 2 || pairsBack(changed, added, 2, d))
+        && (added.size() <= 3 || pairsBack(changed, added, 3, d))
+        && (added.size() <= 4 || pairsBack(changed, added, 4, d))
+        && (added.size() <= 5 || pairsBack(changed, added, 5, d))
+        && (added.size() <= 6 || pairsBack(changed, added, 6, d))
+        && (added.size() <= 7 || pairsBack(changed, added, 7, d)));
+    }
+
+    // p = new size - stored size. p >= 0: grow (p prepended); p < 0: shrink (-p deleted).
+    function logsChangeOk(changed, added, p) {
+      return p >= 0
+        ? added.size() == changed.size() + p
+          && (changed.size() == 0
+            || growLogsOk(changed, added[p:added.size()], added, p))
+        : shrinkPairsOk(changed, added, -p)
+          && shrinkLogsOk(changed, added, -p);
+    }
+
+    // Fast path: the write leaves `logs` exactly as it was (membership, PIN changes).
+    // A doc with no `logs` field reads as [] (#220), so join / PIN setup still work.
+    function reviewedLogsLocked() {
+      let before = resource.data.get('logs', []);
+      let after = request.resource.data.get('logs', []);
+      return after == before
+        || logsChangeOk(before.removeAll(after), after.removeAll(before), after.size() - before.size());
+    }
+
     match /shops/{shopId} {
       // First-office create: creator must be signed in and set themselves as owner + office.
       allow create: if signedIn()
@@ -135,6 +480,8 @@ service cloud.firestore {
 
       allow update: if signedIn()
         && isValidShopId(shopId)
+        // #162: applies to every writer (office, tech, join, bootstrap).
+        && reviewedLogsLocked()
         && (
           // Office/owner: full document updates (PIN change, migrate, etc.).
           (isOffice() && ownerUidUnchanged() && pinsStayHidden())
