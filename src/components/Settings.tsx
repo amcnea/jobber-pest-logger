@@ -74,9 +74,9 @@ export const WIPE_CONFIRM_TEXT =
 export function wipeSetAsideSentence(n: number): string {
   if (n <= 0) return "";
   if (n === 1) {
-    return "This also deletes 1 set-aside copy from sync conflicts. Download the backup JSON first if you need it.";
+    return "This also deletes 1 set-aside copy of a log. Download the backup JSON first if you need it.";
   }
-  return `This also deletes ${n} set-aside copies from sync conflicts. Download the backup JSON first if you need them.`;
+  return `This also deletes ${n} set-aside copies of logs. Download the backup JSON first if you need them.`;
 }
 
 export const RESTORE_CONFIRM_TEXT =
