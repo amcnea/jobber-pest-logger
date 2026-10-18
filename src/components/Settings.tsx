@@ -370,7 +370,7 @@ export function Settings({
         <strong>Premises keep-alive:</strong> Cloud sync is <strong>not</strong> the Texas § 7.144
         two-year on-premises retention path. Keep Export (CSV/PDF) and Settings → Download backup
         JSON visible on this device; the Lawgical disclaimer below still applies. This app blocks
-        deleting a log until 2 years after its application date. It isn't your premises copy: keep
+        deleting a log until 2 years after the latest date saved for it. It isn't your premises copy: keep
         the records at your business for 2 years by downloading the backup JSON and exports
         regularly. Wipe ALL data still removes everything on this device.
       </p>
