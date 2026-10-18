@@ -87,7 +87,7 @@ function csvPreviewSummary(preview: CsvImportPreview, include: boolean[]): strin
     parts.push(plural(preview.unusedColumns, "column not used", "columns not used"));
   }
   // Unused-column notes are counted above; count the other file notes here.
-  const otherNotes = preview.fileProblems.length - preview.unusedColumns;
+  const otherNotes = preview.fileProblems.length - preview.unusedColumnNotes;
   if (otherNotes > 0) {
     parts.push(plural(otherNotes, "file note", "file notes"));
   }
@@ -506,7 +506,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
     if (!file) return;
     if (file.size > CSV_IMPORT_MAX_BYTES) {
       openCsvPreview(
-        { rows: [], fileProblems: [csvTooLargeMessage()], columns: [], unusedColumns: 0 },
+        { rows: [], fileProblems: [csvTooLargeMessage()], columns: [], unusedColumns: 0, unusedColumnNotes: 0 },
         file.name,
       );
       return;

@@ -10,6 +10,10 @@ import type { ProductKind, ShopProduct } from "../types";
 
 export const CSV_IMPORT_MAX_BYTES = 1_000_000;
 export const CSV_IMPORT_MAX_ROWS = 2000;
+/** Header columns above this reject the file (a shop list needs a handful). */
+export const CSV_IMPORT_MAX_COLUMNS = 1000;
+/** At most this many per-column "isn't used" notes; the rest roll into one note. */
+export const CSV_UNUSED_COLUMN_NOTES_MAX = 10;
 
 /** Fields a CSV column may map onto — all already exist on ShopProduct. */
 export type CsvImportField = "name" | "epaRegNo" | "is25b" | "kind";
@@ -378,32 +382,74 @@ export function parseCatalogCsv(input: string): CsvImportResult {
     );
     return result;
   }
+  if (header.cells.length > CSV_IMPORT_MAX_COLUMNS) {
+    result.fileProblems.push(
+      `Needs a look: this file has ${header.cells.length} columns; the import reads files with up to ${CSV_IMPORT_MAX_COLUMNS} columns.`,
+    );
+    return result;
+  }
+  // Blank-header columns that hold data somewhere: found in ONE pass over the body
+  // (each cell visited at most once), stopping as soon as every one is found.
+  const blankPending = new Set<number>();
+  header.cells.forEach((raw, idx) => {
+    if (raw.trim() === "") blankPending.add(idx);
+  });
+  const blankWithData = new Set<number>();
+  if (blankPending.size > 0) {
+    for (const rec of body) {
+      const cells = rec.cells;
+      const end = Math.min(cells.length, header.cells.length);
+      for (let i = 0; i < end; i++) {
+        if (blankPending.has(i) && cells[i].trim() !== "") {
+          blankPending.delete(i);
+          blankWithData.add(i);
+        }
+      }
+      if (blankPending.size === 0) break;
+    }
+  }
   const seen = new Set<CsvImportField>();
+  /** One duplicate-column note per field, however many extra columns map to it. */
+  const dupReported = new Set<CsvImportField>();
+  const unusedNotes: string[] = [];
   header.cells.forEach((raw, idx) => {
     const field = matchCsvHeader(raw);
     if (!field) {
       const header = raw.trim();
       if (header) {
         result.ignoredColumns.push(header);
-        result.fileProblems.push(`Needs a look: column "${header}" isn't used.`);
-      } else if (body.some((rec) => (rec.cells[idx] ?? "").trim() !== "")) {
+        unusedNotes.push(`Needs a look: column "${header}" isn't used.`);
+      } else if (blankWithData.has(idx)) {
         // A blank header over real data: say which column, by position.
         result.ignoredColumns.push(`column ${idx + 1}`);
-        result.fileProblems.push(`Needs a look: column ${idx + 1} has no header and isn't used.`);
+        unusedNotes.push(`Needs a look: column ${idx + 1} has no header and isn't used.`);
       }
       // A blank header with no data (e.g. a trailing comma on every line) is skipped silently.
       return;
     }
     if (seen.has(field)) {
-      result.fileProblems.push(
-        `Needs a look: more than one column maps to "${CSV_FIELD_LABELS[field]}"; using the first.`,
-      );
+      if (!dupReported.has(field)) {
+        dupReported.add(field);
+        result.fileProblems.push(
+          `Needs a look: more than one column maps to "${CSV_FIELD_LABELS[field]}"; using the first.`,
+        );
+      }
       return;
     }
     seen.add(field);
     result.columnMap[idx] = field;
     result.columns.push({ index: idx, header: raw.trim(), field });
   });
+  // Cap the per-column notes; ignoredColumns keeps the true total for the summary count.
+  result.fileProblems.push(...unusedNotes.slice(0, CSV_UNUSED_COLUMN_NOTES_MAX));
+  const moreUnused = unusedNotes.length - CSV_UNUSED_COLUMN_NOTES_MAX;
+  if (moreUnused > 0) {
+    result.fileProblems.push(
+      moreUnused === 1
+        ? "Needs a look: 1 more column isn't used."
+        : `Needs a look: ${moreUnused} more columns aren't used.`,
+    );
+  }
   for (const req of REQUIRED_CSV_FIELDS) {
     if (!seen.has(req)) result.fileProblems.push("Needs a look: missing a product name column.");
   }

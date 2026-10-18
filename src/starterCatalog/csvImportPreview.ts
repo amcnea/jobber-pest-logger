@@ -9,6 +9,7 @@
 import type { ShopProduct } from "../types";
 import {
   CSV_FIELD_LABELS,
+  CSV_UNUSED_COLUMN_NOTES_MAX,
   epaRegNoFormatOk,
   type CsvCandidate,
   type CsvImportResult,
@@ -63,6 +64,8 @@ export interface CsvImportPreview {
   columns: { header: string; label: string }[];
   /** How many columns are not used (each also has a "Needs a look" file note). */
   unusedColumns: number;
+  /** How many of fileProblems are unused-column notes (capped notes plus any roll-up note). */
+  unusedColumnNotes: number;
 }
 
 function shopMatch(
@@ -146,6 +149,10 @@ export function buildCsvImportPreview(result: CsvImportResult, catalog: ShopProd
     fileProblems: result.fileProblems,
     columns: result.columns.map((c) => ({ header: c.header, label: CSV_FIELD_LABELS[c.field] })),
     unusedColumns: result.ignoredColumns.length,
+    unusedColumnNotes:
+      result.ignoredColumns.length > CSV_UNUSED_COLUMN_NOTES_MAX
+        ? CSV_UNUSED_COLUMN_NOTES_MAX + 1
+        : result.ignoredColumns.length,
   };
 }
 
