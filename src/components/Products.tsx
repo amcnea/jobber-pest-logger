@@ -63,7 +63,7 @@ interface DraftErrors {
   epaRegNo?: string;
 }
 
-type ListFilter = "active" | "archived" | "all";
+type ListFilter = "active" | "archived" | "all" | "pending";
 type KindFilter = "all" | "pesticide" | "device";
 
 function plural(n: number, one: string, many: string): string {
@@ -131,6 +131,9 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   /** Control that opened label confirm; focus returns here (or to starter search) on close. */
   const labelConfirmReturnFocusRef = useRef<HTMLElement | null>(null);
   const prevLabelConfirmIdRef = useRef<string | null>(null);
+  /** Last row opened from "Review next label", so the next press moves on past it. */
+  const lastReviewedLabelIdRef = useRef<string | null>(null);
+  const reviewNextLabelRef = useRef<HTMLButtonElement>(null);
   const [labelConfirmId, setLabelConfirmId] = useState<string | null>(null);
   const [labelConfirmed, setLabelConfirmed] = useState(false);
   const [pendingLabelIds, setPendingLabelIds] = useState<string[]>(() => {
@@ -706,6 +709,36 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
   const hasExamples = catalogHasExampleProducts(catalog);
   const archivedCount = catalog.filter((p) => p.archived).length;
 
+  /**
+   * Slice 3: shop rows still waiting on label confirm (archived + on the pending list),
+   * in shop-list order. Covers CSV-imported rows and starter adds alike; both use the
+   * same existing per-product confirm step below. No bulk confirm: one label at a time.
+   */
+  const waitingLabel = useMemo(() => {
+    const ids = new Set(pendingLabelIds);
+    return catalog.filter((p) => p.archived && ids.has(p.id));
+  }, [catalog, pendingLabelIds]);
+  const waitingPosition =
+    labelConfirmId !== null ? waitingLabel.findIndex((p) => p.id === labelConfirmId) + 1 : 0;
+
+  /** Open the existing confirm step on the next waiting row after the last one reviewed. */
+  function reviewNextLabel() {
+    if (waitingLabel.length === 0 || labelConfirmId !== null) return;
+    const lastIdx =
+      lastReviewedLabelIdRef.current === null
+        ? -1
+        : catalog.findIndex((p) => p.id === lastReviewedLabelIdRef.current);
+    const next =
+      (lastIdx >= 0 ? waitingLabel.find((p) => catalog.indexOf(p) > lastIdx) : undefined) ??
+      waitingLabel[0];
+    lastReviewedLabelIdRef.current = next.id;
+    beginLabelConfirm(next.id);
+    // Return focus here when the confirm step closes, so the next press continues the
+    // queue (some mobile browsers do not focus a button on tap).
+    labelConfirmReturnFocusRef.current = reviewNextLabelRef.current;
+  }
+  const waitingCountId = `${csvIdPrefix}-waiting-label-count`;
+
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return catalog.filter((p) => {
@@ -713,6 +746,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
       if (editingId && p.id === editingId) return true;
       if (labelConfirmId && p.id === labelConfirmId) return true;
       if (pendingLabelIds.includes(p.id)) return true;
+      if (listFilter === "pending") return false;
       if (listFilter === "active" && p.archived) return false;
       if (listFilter === "archived" && !p.archived) return false;
       if (kindFilter !== "all" && p.kind !== kindFilter) return false;
@@ -1133,6 +1167,37 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
       )}
       {adding && form}
 
+      {!adding && editingId === null && waitingLabel.length > 0 && (
+        <div className="card" role="group" aria-label="Labels to confirm">
+          <p id={waitingCountId}>
+            {plural(waitingLabel.length, "product", "products")} waiting on label confirm.
+            {waitingPosition > 0 && ` Label ${waitingPosition} of ${waitingLabel.length}.`}
+          </p>
+          <div className="row">
+            <button
+              ref={reviewNextLabelRef}
+              type="button"
+              className="btn btn-primary"
+              aria-describedby={waitingCountId}
+              disabled={labelConfirmId !== null}
+              onClick={reviewNextLabel}
+            >
+              Review next label
+            </button>
+            {listFilter !== "pending" && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={labelConfirmId !== null}
+                onClick={() => setListFilter("pending")}
+              >
+                Show only waiting
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {!adding && catalog.length > 0 && (
         <div className="card catalog-filters">
           <label className="field">
@@ -1157,6 +1222,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
                 <option value="active">Active</option>
                 <option value="archived">Archived ({archivedCount})</option>
                 <option value="all">All</option>
+                <option value="pending">Waiting on label confirm ({waitingLabel.length})</option>
               </select>
             </label>
             <label className="field">
@@ -1174,7 +1240,14 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
           </div>
           <p className="hint" role="status">
             Showing {visible.length} of {catalog.length}
-            {listFilter === "active" ? " (active)" : listFilter === "archived" ? " (archived)" : ""}.
+            {listFilter === "active"
+              ? " (active)"
+              : listFilter === "archived"
+                ? " (archived)"
+                : listFilter === "pending"
+                  ? " (waiting on label confirm)"
+                  : ""}
+            .
           </p>
         </div>
       )}
