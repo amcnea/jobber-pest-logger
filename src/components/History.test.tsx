@@ -413,7 +413,7 @@ describe("History: 2-year delete guard", () => {
     expect(screen.getAllByRole("button", { name: "Edit" })).toHaveLength(4);
     expect(
       within(card("2026-09-20")).getByText(
-        "Can't delete yet. Texas requires keeping this record for 2 years from the application date. This app holds it until 2028-09-20, 2 years after the latest date saved for this log.",
+        "Can't delete yet. Texas requires keeping this record for 2 years from the application date. This app holds it until 2028-09-20.",
       ),
     ).toBeInTheDocument();
   });
