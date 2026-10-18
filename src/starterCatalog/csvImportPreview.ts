@@ -152,6 +152,17 @@ export function findShopDuplicate(candidate: CsvCandidate, catalog: ShopProduct[
 }
 
 /**
+ * Name-only version of findShopDuplicate: the existing "same name" message when
+ * this candidate's normalized name matches a shop row, else null. Used for a row
+ * the office chose to add despite a preview duplicate flag but then switched to
+ * the starter name (#206): the new name is checked; the accepted flag is not.
+ */
+export function findShopNameDuplicate(candidate: CsvCandidate, catalog: ShopProduct[]): string | null {
+  const match = shopMatch(catalog, "", normalizeImportName(candidate.name));
+  return match ? shopDuplicateMessage(match) : null;
+}
+
+/**
  * Build the preview list. A row is a duplicate when its normalized EPA reg #
  * or normalized name matches a shop row, or an earlier row in the file. The
  * first row in the file wins; later copies are marked.
