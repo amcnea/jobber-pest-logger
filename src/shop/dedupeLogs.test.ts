@@ -224,6 +224,9 @@ describe("write plan (#208 compatible)", () => {
     const plan = planDedupedWrite(stored, next, true);
     expect(plan.cleanup).toEqual([other, v.reviewedLate, v.reviewedEarly]);
     expect(plan.logs).toEqual([v.reviewedLate, other, v.reviewedEarly]);
+    // #221: the removed rev2 differs from its kept copy (index 1 in the cleanup); the exact
+    // copy of "o" needs no hint.
+    expect(plan.keptCopyAt).toEqual({ [v.rev2.id]: 1 });
   });
 
   it("keeps every loser when its set-aside copy wasn't saved", () => {
