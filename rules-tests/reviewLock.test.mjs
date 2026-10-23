@@ -18,6 +18,14 @@ const STRANGER = "uid-stranger";
 
 let env;
 
+// Dates relative to now so hold results (#221) never flip as time passes: a default log is
+// recent (held for about 2 more years); a PAST_HOLD log is 3 years old (released for good).
+const DAY = 86400000;
+const ymd = (ms) => new Date(ms).toISOString().slice(0, 10);
+const RECENT = ymd(Date.now() - 17 * DAY);
+const THREE_YEARS_AGO = ymd(Date.now() - 3 * 366 * DAY);
+const IN_THREE_YEARS = ymd(Date.now() + 3 * 366 * DAY);
+
 before(async () => {
   env = await initializeTestEnvironment({
     projectId: "demo-jpl-rules",
@@ -38,7 +46,7 @@ beforeEach(async () => {
 function makeLog(id, extra = {}) {
   return {
     id,
-    createdAt: "2026-10-01T15:00:00.000Z",
+    createdAt: `${RECENT}T15:00:00.000Z`,
     sampleData: false,
     jobberJobNumber: "",
     jobberAddress: "",
@@ -57,7 +65,7 @@ function makeLog(id, extra = {}) {
       },
     ],
     targetPestOrPurpose: "Ants",
-    dateUsed: "2026-10-01",
+    dateUsed: RECENT,
     personnel: [{ role: "applying", name: "Ana Office", licenseNumber: "TX-9" }],
     shopTpclNumber: "1",
     shopTpclLetter: "",
@@ -79,8 +87,8 @@ function makeLog(id, extra = {}) {
   };
 }
 
-/** Dates whose 2-year hold ended in Jan 2026 (#221): such a log may be removed. */
-const PAST_HOLD = { dateUsed: "2024-01-01", createdAt: "2024-01-01T15:00:00.000Z" };
+/** Dates whose 2-year hold ended a year ago (#221): such a log may be removed. */
+const PAST_HOLD = { dateUsed: THREE_YEARS_AGO, createdAt: `${THREE_YEARS_AGO}T15:00:00.000Z` };
 const oldLog = (id, extra = {}) => makeLog(id, { ...PAST_HOLD, ...extra });
 
 function reviewed(log) {
@@ -481,10 +489,10 @@ describe("#219: a forged copy of R next to its correction", () => {
       [[r], [fixed, forged(r)]],
       [[r], [makeLog("N"), fixed, forged(r)]],
       [[r, makeLog("U")], [fixed, forged(r), makeLog("U")]],
-      [[r, makeLog("U")], [fixed, forged(r)]],
-      [[r, makeLog("U")], [makeLog("N"), fixed, forged(r)]],
-      [[makeLog("U"), r, makeLog("V")], [fixed, forged(r)]],
-      [[makeLog("U"), r, makeLog("V")], [makeLog("N"), makeLog("M"), fixed, forged(r)]],
+      [[r, oldLog("U")], [fixed, forged(r)]],
+      [[r, oldLog("U")], [makeLog("N"), fixed, forged(r)]],
+      [[oldLog("U"), r, oldLog("V")], [fixed, forged(r)]],
+      [[oldLog("U"), r, oldLog("V")], [makeLog("N"), makeLog("M"), fixed, forged(r)]],
     ]) {
       for (const [, uid] of WRITERS) {
         await seed(stored);
@@ -538,9 +546,9 @@ describe("#219: a forged copy of R next to its correction", () => {
 
   it("deleting R while an unreviewed log is edited, or overwriting R while one is deleted, is denied", async () => {
     const r = reviewed(makeLog("R"));
-    await seed([r, makeLog("U")]);
-    await assertFails(put(TECH, [{ ...makeLog("U"), targetPestOrPurpose: "Ants" }]));
-    await seed([r, makeLog("U")]);
+    await seed([r, oldLog("U")]);
+    await assertFails(put(TECH, [{ ...oldLog("U"), serviceAddress: "9 Elm St" }]));
+    await seed([r, oldLog("U")]);
     await assertFails(put(TECH, [forged(r)]));
   });
 });
@@ -592,8 +600,6 @@ describe("#220: join and legacy PIN setup on a doc with no logs field", () => {
 // Dates are relative to now so the tests don't age (the boundary is the UTC date of
 // now - 36 h: that D is released, the next day is still held).
 
-const DAY = 86400000;
-const ymd = (ms) => new Date(ms).toISOString().slice(0, 10);
 const minusYears = (s, n) => `${Number(s.slice(0, 4)) - n}${s.slice(4)}`;
 // Release times fall at 12:00 UTC, and each case sits as far from its cutoff as now is
 // from 12:00 UTC. Within 10 minutes of it, wait until 10 minutes past (a run takes seconds).
@@ -613,13 +619,13 @@ describe("#221: removing a log under its 2-year hold", () => {
 
   it("removing a held unreviewed log is denied (recent dates, or a later retainUntil)", async () => {
     await assertFails(removeOnly(makeLog("U")));
-    await assertFails(removeOnly(oldLog("U", { retainUntil: "2027-01-01" })));
+    await assertFails(removeOnly(oldLog("U", { retainUntil: IN_THREE_YEARS })));
     await seed([makeLog("U")]);
     await assertFails(put(OFFICE, []));
   });
 
   it("removing a log past its hold is allowed (retainUntil, or no retainUntil and old dates)", async () => {
-    await assertSucceeds(removeOnly(makeLog("U", { retainUntil: "2025-06-01" })));
+    await assertSucceeds(removeOnly(makeLog("U", { retainUntil: THREE_YEARS_AGO })));
     await assertSucceeds(removeOnly(oldLog("U")));
   });
 
