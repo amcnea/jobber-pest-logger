@@ -163,9 +163,31 @@ export function setAsideDuplicateCopies(shopId: string, losers: readonly Duplica
   }
 }
 
+/**
+ * #228: firestore.rules check up to 8 differing removals in shrinkLogsOk0 and stay under
+ * the 1,000-expression limit up to 9 on a 100-log doc (#226). Remove at most 8 differing
+ * copies per cleanup write so larger dedupe cleanups never trip the expression cap.
+ */
+export const MAX_DEDUPE_CLEANUP_BATCH = 8;
+
+export interface DedupeCleanupStep {
+  /** Stored logs minus the copies removed through this batch, in stored order. */
+  logs: ApplicationLog[];
+  /**
+   * #221: for each copy removed in this batch that differs from its kept copy, the kept
+   * copy's index in `logs` ({logId: index}). Undefined when only exact copies are removed.
+   */
+  keptCopyAt?: Record<string, number>;
+}
+
 export interface DedupedWritePlan {
   /** Stored logs minus the removable copies, in stored order; null when nothing to remove. */
   cleanup: ApplicationLog[] | null;
+  /**
+   * #228: sequential cleanup batches (each removing <= MAX_DEDUPE_CLEANUP_BATCH differing
+   * copies); undefined when nothing to remove. The last batch's `logs` equals `cleanup`.
+   */
+  cleanups?: DedupeCleanupStep[];
   /** What to write: the caller's logs plus stored copies that must stay. */
   logs: ApplicationLog[];
   /**
@@ -188,17 +210,56 @@ export function planDedupedWrite(
 ): DedupedWritePlan {
   const { losers } = dedupeLogsById(stored);
   const removable = new Set<number>();
+  const differing: DuplicateLoser[] = [];
   const keep: ApplicationLog[] = [];
   for (const l of losers) {
-    if (l.identical || (setAsideOk && !isLogReviewed(l.log))) removable.add(l.index);
-    else keep.push(l.log);
+    if (l.identical || (setAsideOk && !isLogReviewed(l.log))) {
+      removable.add(l.index);
+      if (!l.identical) differing.push(l);
+    } else {
+      keep.push(l.log);
+    }
   }
-  const cleanup = removable.size ? stored.filter((_, i) => !removable.has(i)) : null;
-  const removedIds = new Set(losers.filter((l) => removable.has(l.index) && !l.identical).map((l) => l.log.id));
+  if (removable.size === 0) {
+    return { cleanup: null, logs: [...next, ...keep] };
+  }
+
+  // Exact copies aren't in firestore.rules' before.removeAll(after), so drop all of them in
+  // the first cleanup batch; split differing copies into <= MAX_DEDUPE_CLEANUP_BATCH chunks.
+  const dropped = new Set<number>();
+  for (const l of losers) {
+    if (l.identical) dropped.add(l.index);
+  }
+  const chunks: DuplicateLoser[][] = [];
+  for (let i = 0; i < differing.length; i += MAX_DEDUPE_CLEANUP_BATCH) {
+    chunks.push(differing.slice(i, i + MAX_DEDUPE_CLEANUP_BATCH));
+  }
+  if (chunks.length === 0) chunks.push([]);
+
+  const cleanups: DedupeCleanupStep[] = chunks.map((chunk) => {
+    const batchIds = new Set<string>();
+    for (const l of chunk) {
+      dropped.add(l.index);
+      batchIds.add(l.log.id);
+    }
+    const logs: ApplicationLog[] = [];
+    let keptCopyAt: Record<string, number> | undefined;
+    stored.forEach((log, origIdx) => {
+      if (dropped.has(origIdx)) return;
+      const idx = logs.push(log) - 1;
+      if (!removable.has(origIdx) && batchIds.has(log.id) && !(keptCopyAt && log.id in keptCopyAt)) {
+        keptCopyAt = { ...keptCopyAt, [log.id]: idx };
+      }
+    });
+    return keptCopyAt ? { logs, keptCopyAt } : { logs };
+  });
+
+  const cleanup = cleanups[cleanups.length - 1].logs;
+  const allRemovedIds = new Set(differing.map((l) => l.log.id));
   let keptCopyAt: Record<string, number> | undefined;
-  cleanup?.forEach((log, i) => {
-    if (!removedIds.has(log.id) || (keptCopyAt && log.id in keptCopyAt)) return;
+  cleanup.forEach((log, i) => {
+    if (!allRemovedIds.has(log.id) || (keptCopyAt && log.id in keptCopyAt)) return;
     keptCopyAt = { ...keptCopyAt, [log.id]: i };
   });
-  return { cleanup, logs: [...next, ...keep], keptCopyAt };
+  return { cleanup, cleanups, logs: [...next, ...keep], keptCopyAt };
 }
