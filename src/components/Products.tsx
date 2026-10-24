@@ -30,7 +30,7 @@ import {
   type StarterProduct,
 } from "../starterCatalog";
 import { highlightSegments } from "../starterCatalog/highlight";
-import { buildShopRegLookup } from "../starterCatalog/shopRegLookup";
+import { appendShopRegLookup, buildShopRegLookup, cloneShopRegLookup } from "../starterCatalog/shopRegLookup";
 import {
   CSV_FIELD_LABELS,
   CSV_IMPORT_MAX_BYTES,
@@ -582,6 +582,8 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
     let failure: string | null = null;
     /** Rows saved in this run, so later rows in the run are checked against them too. */
     const addedProducts: ShopProduct[] = [];
+    /** Working copy of the shared reg # lookup for this run (existing rows first, then new rows in add order). */
+    const inRunRegLookup = cloneShopRegLookup(catalog, shopRegLookup);
     /** #178: rows that became duplicates after the preview was built. */
     const skipped = new Map<number, string>();
     for (const { row, index } of picked) {
@@ -592,12 +594,11 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
       // plus rows already added in this run. A row the office ticked despite a preview
       // flag is left as their choice.
       if (row.duplicate === null) {
-        // Same list as before; the shared lookup only applies while nothing was added
-        // yet in this run (the combined array is then just `catalog`).
-        const dup =
-          addedProducts.length === 0
-            ? findShopDuplicate(candidate, catalog, shopRegLookup)
-            : findShopDuplicate(candidate, [...addedProducts, ...catalog]);
+        // Use the per-run working copy of the shared reg # lookup when available
+        // (existing rows first, then new rows in add order); otherwise scan the combined list.
+        const dup = inRunRegLookup
+          ? findShopDuplicate(candidate, inRunRegLookup.catalog, inRunRegLookup)
+          : findShopDuplicate(candidate, [...catalog, ...addedProducts]);
         if (dup) {
           skipped.set(index, dup);
           continue;
@@ -629,6 +630,7 @@ export function Products({ catalog, onUpsert, onDelete, onRemoveExamples }: Prop
       }
       if (!nextPending.includes(product.id)) nextPending.push(product.id);
       addedProducts.push(product);
+      if (inRunRegLookup) appendShopRegLookup(inRunRegLookup, product);
       added[index] = true;
       addedCount += 1;
     }
