@@ -289,26 +289,28 @@ export class RemoteShopStore implements ShopStore {
   private async planWrite(
     doc: ShopDocument,
     fs: FirestoreFns,
-  ): Promise<{ cleanup: ShopDocument | null; doc: ShopDocument } | null> {
+  ): Promise<{ cleanups: ShopDocument[]; doc: ShopDocument } | null> {
     const own = dedupeLogsById(doc.logs);
     const ownOk = setAsideDuplicateCopies(this.shopId, own.losers);
     const nextLogs = ownOk ? own.logs : doc.logs;
     if (!this.stored || this.stored.doc.updatedAt !== doc.updatedAt) {
       this.stored = null;
-      if (!doc.updatedAt) return { cleanup: null, doc: { ...doc, logs: nextLogs } };
+      if (!doc.updatedAt) return { cleanups: [], doc: { ...doc, logs: nextLogs } };
       const snap = await fs.getDoc(fs.docRef);
       const current = snap.exists() ? coerceShopDocument(snap.data()) : null;
       if (current && current.updatedAt !== doc.updatedAt) return null; // CAS would fail
       if (current) this.dedupeStored(current);
-      else return { cleanup: null, doc: { ...doc, logs: nextLogs } };
+      else return { cleanups: [], doc: { ...doc, logs: nextLogs } };
     }
     const { doc: storedDoc, setAsideOk } = this.stored!;
     const plan = planDedupedWrite(storedDoc.logs, nextLogs, setAsideOk);
     return {
-      // #221: keptCopyAt is for the rules on this cleanup write only; the next write drops it.
-      cleanup: plan.cleanup
-        ? { ...storedDoc, logs: plan.cleanup, ...(plan.keptCopyAt ? { keptCopyAt: plan.keptCopyAt } : {}) }
-        : null,
+      // #221, #228: each cleanup batch carries keptCopyAt for that batch only; the next write drops it.
+      cleanups: (plan.cleanups ?? []).map((step) => ({
+        ...storedDoc,
+        logs: step.logs,
+        ...(step.keptCopyAt ? { keptCopyAt: step.keptCopyAt } : {}),
+      })),
       doc: { ...doc, logs: plan.logs },
     };
   }
@@ -319,9 +321,9 @@ export class RemoteShopStore implements ShopStore {
       const plan = await this.planWrite(doc, fs);
       if (!plan) throw new ShopWriteConflictError();
       let expected = doc.updatedAt;
-      if (plan.cleanup) {
-        expected = await fs.putWithCas(expected, plan.cleanup);
-        this.dedupeStored({ ...plan.cleanup, updatedAt: expected });
+      for (const cleanup of plan.cleanups) {
+        expected = await fs.putWithCas(expected, cleanup);
+        this.dedupeStored({ ...cleanup, updatedAt: expected });
       }
       const updatedAt = await fs.putWithCas(expected, plan.doc);
       // The written doc is the stored doc for the next write (no re-read; #210 reuses it).

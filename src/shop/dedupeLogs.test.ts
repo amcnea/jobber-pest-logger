@@ -53,10 +53,10 @@ vi.mock("firebase/firestore", () => {
   };
 });
 
-const { compareDuplicateCopies, dedupeLogsById, planDedupedWrite, setAsideDuplicateCopies, DUPLICATE_ID_SET_ASIDE_REASON } =
+const { compareDuplicateCopies, dedupeLogsById, planDedupedWrite, setAsideDuplicateCopies, DUPLICATE_ID_SET_ASIDE_REASON, MAX_DEDUPE_CLEANUP_BATCH } =
   await import("./dedupeLogs");
 const { RemoteShopStore } = await import("./RemoteShopStore");
-const { enqueueLogOutbox, flushLogOutbox, outboxEntriesForShop } = await import("./logOutbox");
+const { enqueueLogOutbox, flushLogOutbox, outboxEntriesForShop, syncLogToRemote } = await import("./logOutbox");
 const { REMOTE_COPY_KEPT_ERROR } = await import("./logOutbox");
 const { takeShopCopy } = await import("./conflicts");
 const { SHOP_SESSION_KEY } = await import("./session");
@@ -234,6 +234,34 @@ describe("write plan (#208 compatible)", () => {
     const stored = [v.rev2, v.reviewedRev0];
     expect(planDedupedWrite(stored, [v.reviewedRev0], false)).toEqual({ cleanup: null, logs: [v.reviewedRev0, v.rev2] });
   });
+
+  it("#228: splits >8 differing unreviewed losers into batches of MAX_DEDUPE_CLEANUP_BATCH with per-batch keptCopyAt indices", () => {
+    const winners = Array.from({ length: 20 }, (_, i) => makeLog({ id: `L${i}`, revision: 1, serviceAddress: `${i} Winner St` }));
+    const differingLosers = winners.map((w, i) => ({ ...w, revision: 0, serviceAddress: `${i} Loser St` }));
+    const exactCopy = clone(winners[0]);
+    // Put differing losers ahead of winners so winner indices shift as each batch removes 8 losers.
+    const stored = [...differingLosers, exactCopy, ...winners];
+    const next = dedupeLogsById(stored).logs;
+    const plan = planDedupedWrite(stored, next, true);
+    expect(MAX_DEDUPE_CLEANUP_BATCH).toBe(8);
+    expect(plan.cleanups).toHaveLength(3);
+    // Batch 1 drops the exact copy + first 8 differing losers (L0..L7); 12 differing losers + 20 winners = 32 logs remain.
+    expect(plan.cleanups![0].logs).toHaveLength(32);
+    expect(Object.keys(plan.cleanups![0].keptCopyAt!)).toEqual(["L0", "L1", "L2", "L3", "L4", "L5", "L6", "L7"]);
+    // Batch 2 drops L8..L15; 4 differing losers + 20 winners = 24 logs remain.
+    expect(plan.cleanups![1].logs).toHaveLength(24);
+    expect(Object.keys(plan.cleanups![1].keptCopyAt!)).toEqual(["L8", "L9", "L10", "L11", "L12", "L13", "L14", "L15"]);
+    // Batch 3 drops L16..L19; only the 20 winners remain.
+    expect(plan.cleanups![2].logs).toEqual(winners);
+    expect(Object.keys(plan.cleanups![2].keptCopyAt!)).toEqual(["L16", "L17", "L18", "L19"]);
+    // In every batch, keptCopyAt[id] points to the winner with that id in THAT batch's logs array.
+    for (const step of plan.cleanups!) {
+      for (const [id, idx] of Object.entries(step.keptCopyAt!)) {
+        expect(step.logs[idx]).toEqual(winners[Number(id.slice(1))]);
+      }
+    }
+    expect(plan.cleanup).toEqual(winners);
+  });
 });
 
 describe("RemoteShopStore read path", () => {
@@ -339,6 +367,79 @@ describe("RemoteShopStore write path", () => {
     const res = await store.putShop(shopDoc([]) as unknown as ShopDocument);
     expect(res).toMatchObject({ ok: false, conflict: true });
     expect(fake.writes).toEqual([]);
+  });
+
+  it("#228: batches >9 (20) held differing duplicate removals into <=8-copy cleanup writes before saving", async () => {
+    const winners = Array.from({ length: 20 }, (_, i) => makeLog({ id: `L${i}`, revision: 1, serviceAddress: `${i} Winner St` }));
+    const differingLosers = winners.map((w, i) => ({ ...w, revision: 0, serviceAddress: `${i} Stray St` }));
+    fake.data = shopDoc([...differingLosers, ...winners]);
+    const store = new RemoteShopStore(CONFIG, SHOP);
+    const newLog = makeLog({ id: "N" });
+    await enqueueLogOutbox(SHOP, newLog);
+    expect(await flushLogOutbox(store, SHOP)).toEqual({ ok: true, flushed: 1, remaining: 0 });
+    // 3 cleanup batches (8, 8, 4) + 1 final write = 4 writes.
+    expect(fake.writes).toHaveLength(4);
+    expect((fake.writes[0].logs as ApplicationLog[]).length).toBe(32);
+    expect((fake.writes[1].logs as ApplicationLog[]).length).toBe(24);
+    expect((fake.writes[2].logs as ApplicationLog[]).length).toBe(20);
+    for (let b = 0; b < 3; b++) {
+      const batchLogs = fake.writes[b].logs as ApplicationLog[];
+      const kept = fake.writes[b].keptCopyAt as Record<string, number>;
+      expect(Object.keys(kept).length).toBe(b < 2 ? 8 : 4);
+      for (const [id, idx] of Object.entries(kept)) {
+        expect(batchLogs[idx].id).toBe(id);
+      }
+    }
+    // Final write carries the caller's new log and drops keptCopyAt.
+    expect(fake.writes[3].keptCopyAt).toBeUndefined();
+    expect(fake.writes[3].logs).toEqual([newLog, ...winners]);
+    // Set-aside recorded each of the 20 differing losers once (no duplicates across batches).
+    expect(setAsideRows().map((r) => r.deviceCopy)).toEqual(differingLosers);
+  });
+
+  it("#228 (Lawgical): when a cleanup write is refused, every copy is kept and the blocked save stays queued with lastError", async () => {
+    const v = versions();
+    const initialLogs = [v.rev2, v.reviewedRev0];
+    fake.data = shopDoc(initialLogs);
+    fake.failWrite = new Error("Missing or insufficient permissions.");
+    const store = new RemoteShopStore(CONFIG, SHOP);
+    const saved = makeLog({ id: "N", serviceAddress: "99 Pending St" });
+
+    // 1) Direct save path (syncLogToRemote): queues first, cleanup is refused, entry stays queued with lastError.
+    const sync = await syncLogToRemote(store, SHOP, saved);
+    expect(sync).toEqual({
+      ok: false,
+      error: "Missing or insufficient permissions.",
+      queued: true,
+    });
+    expect(fake.writes).toEqual([]);
+    expect((fake.data as unknown as ShopDocument).logs).toEqual(initialLogs);
+    expect(outboxEntriesForShop(SHOP)).toMatchObject([
+      { shopId: SHOP, log: saved, lastError: "Missing or insufficient permissions." },
+    ]);
+    expect(setAsideRows().map((r) => r.deviceCopy)).toEqual([v.rev2]);
+
+    // 2) Retry flush path (flushLogOutbox): still refused -> stays queued with lastError, remote copies untouched.
+    const flushedRefused = await flushLogOutbox(store, SHOP);
+    expect(flushedRefused).toEqual({
+      ok: false,
+      flushed: 0,
+      remaining: 1,
+      error: "Missing or insufficient permissions.",
+    });
+    expect(fake.writes).toEqual([]);
+    expect((fake.data as unknown as ShopDocument).logs).toEqual(initialLogs);
+    expect(outboxEntriesForShop(SHOP)).toMatchObject([
+      { shopId: SHOP, log: saved, lastError: "Missing or insufficient permissions." },
+    ]);
+
+    // 3) Once the refusal clears, the queued save flushes cleanly and no records are lost.
+    fake.failWrite = null;
+    expect(await flushLogOutbox(store, SHOP)).toEqual({ ok: true, flushed: 1, remaining: 0 });
+    expect(outboxEntriesForShop(SHOP)).toEqual([]);
+    expect(fake.writes).toHaveLength(2);
+    expect(fake.writes[1].logs).toEqual([saved, v.reviewedRev0]);
+    expect(setAsideRows().map((r) => r.deviceCopy)).toEqual([v.rev2]);
   });
 });
 
