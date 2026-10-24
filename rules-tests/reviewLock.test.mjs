@@ -684,6 +684,41 @@ describe("#221: removing a log under its 2-year hold", () => {
     await seed([makeLog("U")]);
     await assertSucceeds(put(TECH, [makeLog("N"), makeLog("U")], { keptCopyAt: { U: 9, X: "y" } }));
   });
+
+  it("#228: removing 20 held differing duplicate copies on a 100-log doc fails in one write, passes in 8-copy cleanup batches followed by the save", async () => {
+    const base = Array.from({ length: 100 }, (_, i) => (i < 10 ? reviewed(makeLog(`L${i}`)) : makeLog(`L${i}`)));
+    const losers = base.slice(10, 30).map((l) => ({ ...l, serviceAddress: "Other St" }));
+    // Put the 20 differing losers ahead of the 100 kept logs so winner indices shift after each batch.
+    await seed([...losers, ...base]);
+    await assertFails(
+      put(TECH, base, {
+        keptCopyAt: Object.fromEntries(base.slice(10, 30).map((l, k) => [l.id, 10 + k])),
+      }),
+    );
+
+    // Batch 1 removes losers[0..7] (L10..L17); 12 losers remain ahead of base.
+    const afterBatch1 = [...losers.slice(8), ...base];
+    await assertSucceeds(
+      put(TECH, afterBatch1, {
+        keptCopyAt: Object.fromEntries(base.slice(10, 18).map((l, k) => [l.id, 12 + 10 + k])),
+      }),
+    );
+    // Batch 2 removes losers[8..15] (L18..L25); 4 losers remain ahead of base.
+    const afterBatch2 = [...losers.slice(16), ...base];
+    await assertSucceeds(
+      put(TECH, afterBatch2, {
+        keptCopyAt: Object.fromEntries(base.slice(18, 26).map((l, k) => [l.id, 4 + 18 + k])),
+      }),
+    );
+    // Batch 3 removes losers[16..19] (L26..L29); only base remains.
+    await assertSucceeds(
+      put(TECH, base, {
+        keptCopyAt: Object.fromEntries(base.slice(26, 30).map((l, k) => [l.id, 26 + k])),
+      }),
+    );
+    // Final save write adds the caller's new log without keptCopyAt.
+    await assertSucceeds(put(TECH, [makeLog("N"), ...base]));
+  });
 });
 
 describe("#227: editing an unreviewed log may not move its 2-year hold earlier", () => {
