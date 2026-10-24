@@ -24,7 +24,9 @@ const DAY = 86400000;
 const ymd = (ms) => new Date(ms).toISOString().slice(0, 10);
 const RECENT = ymd(Date.now() - 17 * DAY);
 const THREE_YEARS_AGO = ymd(Date.now() - 3 * 366 * DAY);
+const IN_TWO_YEARS = ymd(Date.now() + 2 * 366 * DAY);
 const IN_THREE_YEARS = ymd(Date.now() + 3 * 366 * DAY);
+const IN_FOUR_YEARS = ymd(Date.now() + 4 * 366 * DAY);
 
 before(async () => {
   env = await initializeTestEnvironment({
@@ -394,13 +396,13 @@ describe("outbox flush (several logs in one write)", () => {
     await assertSucceeds(put(TECH, [makeLog("N"), ...rs.map((r) => correct(r, { serviceAddress: "9 Elm St" })), makeLog("U")]));
   });
 
-  it("large shop: a correction plus 20 unreviewed edits pass; more than 40 changed logs in one write is denied", async () => {
+  it("large shop: a correction plus 11 unreviewed edits pass; more than 40 changed logs in one write is denied", async () => {
     const logs = [];
     for (let i = 0; i < 200; i++) logs.push(i % 10 === 0 ? reviewed(makeLog(`L${i}`)) : makeLog(`L${i}`));
     await seed(logs);
     let edits = 0;
     const next = logs.map((l, i) =>
-      i === 0 ? correct(l, { serviceAddress: "9 Elm St" }) : i % 10 !== 0 && edits++ < 20 ? { ...l, targetPestOrPurpose: "Roaches" } : l,
+      i === 0 ? correct(l, { serviceAddress: "9 Elm St" }) : i % 10 !== 0 && edits++ < 11 ? { ...l, targetPestOrPurpose: "Roaches" } : l,
     );
     await assertSucceeds(put(TECH, [makeLog("N1"), ...next]));
     await seed(logs);
@@ -684,6 +686,88 @@ describe("#221: removing a log under its 2-year hold", () => {
   });
 });
 
+describe("#227: editing an unreviewed log may not move its 2-year hold earlier", () => {
+  const plusYears = (s, n) => `${Number(s.slice(0, 4)) + n}${s.slice(4)}`;
+  const nextDay = (d) => ymd(Date.parse(`${d}T00:00:00Z`) + DAY);
+  // makeLog("U") has dateUsed = RECENT and createdAt on RECENT, so createdAt's date + 1 day
+  // is nextDay(RECENT) and its fallback hold is 2 years after that.
+  const FALLBACK_HOLD = plusYears(nextDay(RECENT), 2);
+  const DAY_BEFORE_HOLD = ymd(Date.parse(`${FALLBACK_HOLD}T00:00:00Z`) - DAY);
+
+  it("moving a stored retainUntil earlier on an unreviewed log is denied", async () => {
+    const u = makeLog("U", { retainUntil: IN_THREE_YEARS });
+    await seed([u]);
+    await assertFails(put(TECH, [{ ...u, retainUntil: IN_TWO_YEARS }]));
+    await seed([u]);
+    await assertFails(put(OFFICE, [{ ...u, retainUntil: THREE_YEARS_AGO }]));
+  });
+
+  it("backdating dateUsed and createdAt on a held unreviewed log without retainUntil is denied", async () => {
+    const u = makeLog("U");
+    await seed([u]);
+    await assertFails(put(TECH, [{ ...u, dateUsed: THREE_YEARS_AGO, createdAt: `${THREE_YEARS_AGO}T15:00:00.000Z` }]));
+    await seed([u]);
+    await assertFails(put(OFFICE, [{ ...u, createdAt: `${THREE_YEARS_AGO}T15:00:00.000Z` }]));
+  });
+
+  it("stripping retainUntil and backdating dateUsed/createdAt is denied", async () => {
+    const u = makeLog("U", { retainUntil: IN_THREE_YEARS });
+    const { retainUntil, ...stripped } = u;
+    await seed([u]);
+    await assertFails(put(TECH, [stripped]));
+    await seed([u]);
+    await assertFails(put(TECH, [{ ...stripped, dateUsed: THREE_YEARS_AGO, createdAt: `${THREE_YEARS_AGO}T15:00:00.000Z` }]));
+  });
+
+  it("two-write dodge (backdate in write 1, then remove in write 2) is blocked at write 1", async () => {
+    const r = reviewed(makeLog("R"));
+    const u = makeLog("U");
+    await seed([u, r]);
+    await assertFails(put(TECH, [{ ...u, dateUsed: THREE_YEARS_AGO, createdAt: `${THREE_YEARS_AGO}T15:00:00.000Z`, retainUntil: THREE_YEARS_AGO }, r]));
+    // U is still in the shop doc under its original hold, so write 2 (removing U) is also denied.
+    await assertFails(put(TECH, [r]));
+  });
+
+  it("editing non-date fields on a held unreviewed log (with or without retainUntil) passes", async () => {
+    const u1 = makeLog("U");
+    await seed([u1]);
+    await assertSucceeds(put(TECH, [{ ...u1, targetPestOrPurpose: "Roaches", serviceAddress: "9 Elm St", poleLocation: "Rear" }]));
+    const u2 = makeLog("U", { retainUntil: IN_THREE_YEARS });
+    await seed([u2]);
+    await assertSucceeds(put(TECH, [{ ...u2, targetPestOrPurpose: "Roaches", serviceAddress: "9 Elm St" }]));
+  });
+
+  it("moving dateUsed earlier while keeping or ratcheting retainUntil (stampRetainUntil) passes", async () => {
+    const u1 = makeLog("U", { retainUntil: IN_THREE_YEARS });
+    await seed([u1]);
+    await assertSucceeds(put(TECH, [{ ...u1, dateUsed: THREE_YEARS_AGO }]));
+    // Legacy log without retainUntil: stampRetainUntil stamps the prior hold when dateUsed moves earlier.
+    const u2 = makeLog("U");
+    await seed([u2]);
+    await assertSucceeds(put(TECH, [{ ...u2, dateUsed: THREE_YEARS_AGO, retainUntil: FALLBACK_HOLD }]));
+  });
+
+  it("moving dateUsed later and moving retainUntil later (or keeping no retainUntil) passes", async () => {
+    const laterDate = nextDay(RECENT);
+    const u1 = makeLog("U", { retainUntil: FALLBACK_HOLD });
+    await seed([u1]);
+    await assertSucceeds(put(TECH, [{ ...u1, dateUsed: laterDate, retainUntil: IN_THREE_YEARS }]));
+    const u2 = makeLog("U");
+    await seed([u2]);
+    await assertSucceeds(put(TECH, [{ ...u2, dateUsed: laterDate }]));
+  });
+
+  it("adding retainUntil to a log that lacked it requires retainUntil >= its computed fallback hold", async () => {
+    const u = makeLog("U");
+    await seed([u]);
+    await assertSucceeds(put(TECH, [{ ...u, retainUntil: FALLBACK_HOLD }]));
+    await seed([u]);
+    await assertSucceeds(put(TECH, [{ ...u, retainUntil: IN_THREE_YEARS }]));
+    await seed([u]);
+    await assertFails(put(TECH, [{ ...u, retainUntil: DAY_BEFORE_HOLD }]));
+  });
+});
+
 describe("a stray logIds field neither blocks nor is required", () => {
   it("normal saves without logIds, and with a stale one, pass on a doc that carries it", async () => {
     const r = reviewed(makeLog("R"));
@@ -718,15 +802,20 @@ describe("a stray logIds field neither blocks nor is required", () => {
 });
 
 describe("per-write limits (measured)", () => {
-  it("29 unreviewed edits, 3 corrections, 5 re-sends, 3 removals past hold and 9 held duplicate removals pass on a 100-log doc", async () => {
+  it("17 unreviewed edits (5 when dateUsed changes), 3 corrections, 5 re-sends, 1 correction + 12 edits, 3 removals past hold and 9 held duplicate removals pass on a 100-log doc", async () => {
     const rec = { reuploadedAt: "2026-10-02T08:00:00-05:00", reuploadedBy: "Ana Office", reason: "x" };
     const base = Array.from({ length: 100 }, (_, i) => (i < 10 ? reviewed(makeLog(`L${i}`, { reuploads: [rec] })) : oldLog(`L${i}`)));
     await seed(base);
-    await assertSucceeds(put(TECH, base.map((l, i) => (i >= 10 && i < 39 ? { ...l, targetPestOrPurpose: "Roaches" } : l))));
+    await assertSucceeds(put(TECH, base.map((l, i) => (i >= 10 && i < 27 ? { ...l, targetPestOrPurpose: "Roaches" } : l))));
+    const withHold = base.map((l, i) => (i < 10 ? l : makeLog(l.id, { retainUntil: IN_THREE_YEARS })));
+    await seed(withHold);
+    await assertSucceeds(put(TECH, withHold.map((l, i) => (i >= 10 && i < 15 ? { ...l, dateUsed: THREE_YEARS_AGO, retainUntil: IN_FOUR_YEARS } : l))));
     await seed(base);
     await assertSucceeds(put(TECH, base.map((l, i) => (i < 3 ? correct(l, { serviceAddress: "9 Elm St" }) : l))));
     await seed(base);
     await assertSucceeds(put(TECH, base.map((l, i) => (i < 5 ? { ...l, reuploads: [rec, rec] } : l))));
+    await seed(base);
+    await assertSucceeds(put(TECH, base.map((l, i) => (i === 0 ? correct(l, { serviceAddress: "9 Elm St" }) : i >= 10 && i < 22 ? { ...l, targetPestOrPurpose: "Roaches" } : l))));
     await seed(base);
     await assertSucceeds(put(TECH, base.filter((l, i) => !(i >= 10 && i < 13))));
     const held = base.map((l, i) => (i < 10 ? l : makeLog(l.id)));
