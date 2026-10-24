@@ -42,6 +42,43 @@ export function buildShopRegLookup(catalog: readonly ShopProduct[]): ShopRegLook
 }
 
 /**
+ * Working copy of a shop reg # lookup for one multi-add run (perf only).
+ *
+ * Returns a fresh ShopRegLookup whose `catalog` and `byRegNo` buckets are shallow-cloned
+ * from `lookup` when `lookup` was built from this exact `catalog` array, or undefined
+ * otherwise (callers then keep the old combined-array scan). Appending rows with
+ * `appendShopRegLookup` keeps existing rows first, then new rows in add order, with
+ * blank reg #s skipped in `byRegNo`, without mutating the shared `lookup`.
+ */
+export function cloneShopRegLookup(
+  catalog: readonly ShopProduct[],
+  lookup?: ShopRegLookup,
+): ShopRegLookup | undefined {
+  if (!lookup || lookup.catalog !== catalog) return undefined;
+  const byRegNo = new Map<string, ShopProduct[]>();
+  for (const [key, rows] of lookup.byRegNo) {
+    byRegNo.set(key, [...rows]);
+  }
+  return { catalog: [...catalog], byRegNo };
+}
+
+/**
+ * Append a newly added shop row to a per-run lookup copy from `cloneShopRegLookup`.
+ * Keeps `lookup.catalog` (existing rows first, then new rows in add order) and
+ * `lookup.byRegNo` (blank reg #s skipped) in sync so `shopRowsWithRegNo` returns
+ * the exact same rows and order as scanning the combined list.
+ */
+export function appendShopRegLookup(lookup: ShopRegLookup, product: ShopProduct): void {
+  (lookup.catalog as ShopProduct[]).push(product);
+  const key = normalizeImportEpa(product.epaRegNo);
+  if (!key) return;
+  const byRegNo = lookup.byRegNo as Map<string, ShopProduct[]>;
+  const list = byRegNo.get(key);
+  if (list) list.push(product);
+  else byRegNo.set(key, [product]);
+}
+
+/**
  * Shop rows whose normalized reg # equals `key` (already normalized, non-blank), in
  * catalog order. Uses the lookup when it was built from this exact catalog array,
  * otherwise the old linear scan; both give the same list.

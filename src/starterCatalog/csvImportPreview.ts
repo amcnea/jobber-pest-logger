@@ -114,7 +114,7 @@ export interface CsvImportPreview {
 }
 
 function shopMatch(
-  catalog: ShopProduct[],
+  catalog: readonly ShopProduct[],
   epa: string,
   name: string,
   lookup?: ShopRegLookup,
@@ -146,7 +146,7 @@ function shopDuplicateMessage(match: { product: ShopProduct; by: "epa" | "name" 
  */
 export function findShopDuplicate(
   candidate: CsvCandidate,
-  catalog: ShopProduct[],
+  catalog: readonly ShopProduct[],
   lookup?: ShopRegLookup,
 ): string | null {
   const match = shopMatch(
