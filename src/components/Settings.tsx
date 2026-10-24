@@ -334,6 +334,7 @@ export function Settings({
       return;
     }
 
+    onBackupStampChange(loadLastBackupAt());
     // #163: accurate when restore kept device logs that carry change history.
     const restoreFlash = restoreBannerText(result.backup, applied.history);
     onRestored(

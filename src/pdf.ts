@@ -5,6 +5,7 @@ import {
   provenanceFileSuffix,
   provenanceLines,
   provenanceSummary,
+  shopSlugForFilename,
   type ExportProvenance,
 } from "./exportProvenance";
 import {
@@ -291,9 +292,11 @@ export function downloadPdf(
     drawFooter(doc, i, pageCount, footerLines);
   }
 
+  const slug = shopName ? shopSlugForFilename(shopName) : "";
+  const suffix = provenance ? `-${provenanceFileSuffix(provenance)}` : "";
   doc.save(
-    provenance
-      ? `texas-tda-application-logs-${provenanceFileSuffix(provenance)}.pdf`
-      : "texas-tda-application-logs.pdf",
+    slug
+      ? `texas-tda-application-logs-${slug}${suffix}.pdf`
+      : `texas-tda-application-logs${suffix}.pdf`,
   );
 }

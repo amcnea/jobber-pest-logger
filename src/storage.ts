@@ -2323,6 +2323,14 @@ export function applyBackup(backup: DeviceBackup): ApplyBackupResult {
       return applyBackupFailed(rollback());
     }
   }
+  // #234: seed lastBackupAt from backup.exportedAt when restoring onto a device with no stamp.
+  if (loadLastBackupAt() === null) {
+    try {
+      localStorage.setItem(LAST_BACKUP_KEY, JSON.stringify({ at: backup.exportedAt }));
+    } catch (err) {
+      console.error("jobber-pest-logger: could not seed last backup timestamp on restore", err);
+    }
+  }
   return { ok: true, history: merged.report };
 }
 

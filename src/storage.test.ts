@@ -1668,14 +1668,20 @@ describe("applyBackup", () => {
     expect(loadPeopleQuarantine()).toEqual(incoming.people);
   });
 
-  it("does not touch the backup stamp, dismissed flags or session", () => {
+  it("does not touch an existing backup stamp, dismissed flags or session", () => {
     markLastBackupNow();
     dismissPilotCard();
     storage.setItem(SHOP_SESSION_KEY, "s");
-    applyBackup(backup());
+    applyBackup(backup({ exportedAt: "2026-08-01T12:00:00.000Z" }));
     expect(loadLastBackupAt()).toBe(NOW.toISOString());
     expect(loadPilotCardDismissed()).toBe(true);
     expect(storage.getItem(SHOP_SESSION_KEY)).toBe("s");
+  });
+
+  it("seeds lastBackupAt from backup.exportedAt when restoring onto a device with no stamp (#234)", () => {
+    expect(loadLastBackupAt()).toBeNull();
+    expect(applyBackup(backup({ exportedAt: "2026-09-15T14:30:00.000Z" })).ok).toBe(true);
+    expect(loadLastBackupAt()).toBe("2026-09-15T14:30:00.000Z");
   });
 
   it("parse → apply → load restores a device", () => {

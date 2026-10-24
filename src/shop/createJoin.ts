@@ -294,7 +294,6 @@ export async function createShop(pins: CreateShopPins): Promise<CreateJoinResult
   }
 
   let shopId = "";
-  let lastProbeError = "";
   for (let attempt = 0; attempt < 6; attempt++) {
     const candidate = generateShopCode();
     const probe = new RemoteShopStore(fb.config, candidate);
@@ -304,7 +303,6 @@ export async function createShop(pins: CreateShopPins): Promise<CreateJoinResult
       break;
     }
     if (existing.ok) {
-      lastProbeError = "Shop code collision; retrying…";
       continue;
     }
     return { ok: false, error: existing.error };
@@ -312,7 +310,7 @@ export async function createShop(pins: CreateShopPins): Promise<CreateJoinResult
   if (!shopId) {
     return {
       ok: false,
-      error: lastProbeError || "Could not allocate a free shop code. Try again.",
+      error: "Could not allocate a free shop code. Try again.",
     };
   }
 
