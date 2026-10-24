@@ -330,8 +330,7 @@ describe("createShop", () => {
     for (const c of codes) seedShop({}, c);
     cloud.codes = [...codes];
     const r = await cj.createShop(PINS);
-    // Current wording is the last probe message ("…retrying…") even though it stopped.
-    expect(r).toEqual({ ok: false, error: "Shop code collision; retrying…" });
+    expect(r).toEqual({ ok: false, error: "Could not allocate a free shop code. Try again." });
     expect(cloud.probes).toEqual(codes);
     expect(cloud.puts).toEqual([]);
     expect(loadShopSession().shopId).toBe("");
