@@ -494,6 +494,7 @@ export default function App() {
     setCatalog(data.catalog);
     setPeople(data.people);
     setSettings(data.settings);
+    setLastBackupAt(loadLastBackupAt());
     // Settings builds the full banner (restoreBannerText), including logs kept with history.
     setSettingsFlash(flash ? { slot: "backup", text: flash } : null);
     setSettingsFormKey((k) => k + 1);
@@ -520,7 +521,7 @@ export default function App() {
         )}
       </header>
       <div className="banner">
-        v1.6. Thin PWA polish (A2HS tip + manifest). Schema locked to 4 TAC § 7.144. Texas SPCS
+        v1.6. Texas pesticide application log & export. Schema locked to 4 TAC § 7.144. Texas SPCS
         shops. Example seeds and incomplete records block real CSV/PDF export.
       </div>
       {allowOfficeSurfaces && <FirstRunChecklist steps={firstRunSteps} onGo={go} />}

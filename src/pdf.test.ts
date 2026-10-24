@@ -210,8 +210,15 @@ describe("downloadPdf document", () => {
     expect(doc.saved).toEqual(["texas-tda-application-logs.pdf"]);
   });
 
-  it("adds the provenance suffix to the filename", () => {
+  it("adds the shop slug and provenance suffix to the filename (#236)", () => {
     const doc = render([makeLog()], "Acme", provenance);
+    expect(doc.saved).toEqual([
+      "texas-tda-application-logs-acme-2026-09-01_to_2026-09-30-shared-generated-2026-09-26.pdf",
+    ]);
+  });
+
+  it("omits the slug when the shop name has no ASCII-sluggable characters (#236)", () => {
+    const doc = render([makeLog()], "東京", provenance);
     expect(doc.saved).toEqual([
       "texas-tda-application-logs-2026-09-01_to_2026-09-30-shared-generated-2026-09-26.pdf",
     ]);

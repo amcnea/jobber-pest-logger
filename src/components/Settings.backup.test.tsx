@@ -235,7 +235,7 @@ describe("Settings backup: restore from file", () => {
     expect(storage.loadLogs()).toEqual([]);
 
     vi.spyOn(window, "confirm").mockReturnValue(true);
-    const { onRestored } = setup();
+    const { onRestored, onBackupStampChange } = setup();
     await restoreText(text);
     await waitFor(() => expect(onRestored).toHaveBeenCalledTimes(1));
     const [data, flash] = onRestored.mock.calls[0]!;
@@ -244,11 +244,13 @@ describe("Settings backup: restore from file", () => {
     expect(data.people).toEqual([ALICE]);
     expect(data.settings).toEqual(SETTINGS);
     expect(flash).toMatch(/^Restored backup \(v1\.2\) from 2026-10-17T19:00:00\.000Z\./);
-    // Device storage now holds the restored rows.
+    // Device storage now holds the restored rows and seeds lastBackupAt (#234).
     expect(storage.loadLogs().map((l) => l.id).sort()).toEqual(["log-a", "log-b"]);
     expect(storage.loadCatalog()).toEqual([TALSTAR]);
     expect(storage.loadPeople()).toEqual([ALICE]);
     expect(storage.loadSettings()).toEqual(SETTINGS);
+    expect(storage.loadLastBackupAt()).toBe("2026-10-17T19:00:00.000Z");
+    expect(onBackupStampChange).toHaveBeenCalledWith("2026-10-17T19:00:00.000Z");
   });
 
   it("asks before replacing device data and does nothing when cancelled", async () => {
