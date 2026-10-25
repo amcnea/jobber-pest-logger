@@ -777,6 +777,89 @@ describe("#215: migrating legacy shop docs that still carry a logs array", () =>
     // Creating the reviewed copy R15 passes!
     await assertSucceeds(putLog(TECH, legacy[15]));
   });
+
+  it("with >96 (e.g. 101) legacy entries, advancing shops/{shopId}/legacyScan/cursor in 48-entry windows lets clients migrate unreviewed winners and create new logs while blocking forged reviewed IDs", async () => {
+    const forgedR = makeLog("R98", { serviceAddress: "Forged unreviewed copy" });
+    const legacy = Array.from({ length: 100 }, (_, i) =>
+      i === 98 ? reviewed(makeLog("R98")) : makeLog(`L${i}`),
+    );
+    await seedLegacy([forgedR, ...legacy]); // 101 entries; R98 is at index 99
+    const techDb = env.authenticatedContext(TECH).firestore();
+    const scanRef = doc(techDb, "shops", SHOP, "legacyScan", "cursor");
+
+    // Without advancing legacyScan/cursor, creating an unreviewed winner L0 or a brand-new log is denied (>96 entries).
+    await assertFails(putLog(TECH, legacy[0]));
+    await assertFails(putLog(TECH, makeLog("BRAND_NEW")));
+    // Reviewed winner R98 can still be created directly (request.resource.data in legacy && isReviewedLog).
+    await assertSucceeds(putLog(TECH, legacy[98]));
+
+    // Advancing legacyScan/cursor in 32-entry steps (0->32->64->96->128) for L0 (allowUnreviewed=true) verifies all 101 slots, then creating L0 succeeds.
+    for (let s = 0; s < 96; s += 48) {
+      await assertSucceeds(
+        setDoc(scanRef, {
+          logId: "L0",
+          allowUnreviewed: true,
+          start: s,
+          cursor: s + 48,
+          shopUpdatedAt: "2026-10-01T15:00:00.000Z",
+        }),
+      );
+    }
+    // Still < 101, so creating L0 before scanning the final window is denied.
+    await assertFails(putLog(TECH, legacy[0]));
+    await assertSucceeds(
+      setDoc(scanRef, {
+        logId: "L0",
+        allowUnreviewed: true,
+        start: 96,
+        cursor: 144,
+        shopUpdatedAt: "2026-10-01T15:00:00.000Z",
+      }),
+    );
+    await assertSucceeds(putLog(TECH, legacy[0]));
+
+    // Advancing legacyScan/cursor in 32-entry steps for BRAND_NEW (allowUnreviewed=false) verifies all 101 slots, then creating BRAND_NEW succeeds.
+    await assertSucceeds(deleteDoc(scanRef));
+    for (let s = 0; s < 101; s += 48) {
+      await assertSucceeds(
+        setDoc(scanRef, {
+          logId: "BRAND_NEW",
+          allowUnreviewed: false,
+          start: s,
+          cursor: s + 48,
+          shopUpdatedAt: "2026-10-01T15:00:00.000Z",
+        }),
+      );
+    }
+    await assertSucceeds(putLog(TECH, makeLog("BRAND_NEW")));
+
+    // Attempting to plant forgedR at logs/R98 via legacyScan/cursor fails when advancing cursor to 128 because slot 99 holds reviewed R98.
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await deleteDoc(doc(ctx.firestore(), "shops", SHOP, "logs", "R98"));
+    });
+    await assertSucceeds(deleteDoc(scanRef));
+    for (let s = 0; s < 96; s += 48) {
+      await assertSucceeds(
+        setDoc(scanRef, {
+          logId: "R98",
+          allowUnreviewed: true,
+          start: s,
+          cursor: s + 48,
+          shopUpdatedAt: "2026-10-01T15:00:00.000Z",
+        }),
+      );
+    }
+    await assertFails(
+      setDoc(scanRef, {
+        logId: "R98",
+        allowUnreviewed: true,
+        start: 96,
+        cursor: 144,
+        shopUpdatedAt: "2026-10-01T15:00:00.000Z",
+      }),
+    );
+    await assertFails(putLog(TECH, forgedR));
+  });
 });
 
 describe("a stray logIds field neither blocks nor is required", () => {

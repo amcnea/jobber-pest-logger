@@ -61,6 +61,13 @@ type FirestoreFns = {
     puts?: readonly { id: string; data: unknown }[],
     deletes?: readonly string[],
   ) => Promise<string>;
+  putLegacyScanCursor?: (scan: {
+    logId: string;
+    allowUnreviewed: boolean;
+    start: number;
+    cursor: number;
+    shopUpdatedAt: string;
+  }) => Promise<void>;
   /**
    * Membership-only update (join / legacy claim). Does not rewrite logs/catalog.
    * CAS on updatedAt; merges members (+ ownerUid when claiming legacy).
@@ -76,6 +83,12 @@ type FirestoreFns = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function snapStamp(snap: FirestoreSnap): unknown {
+  if (!snap.exists()) return null;
+  const data = snap.data();
+  return isRecord(data) ? data.updatedAt : undefined;
 }
 
 function parseMembers(raw: unknown): ShopMembers | undefined {
@@ -201,14 +214,19 @@ async function loadFirestore(config: FirebaseClientConfig, shopId: string): Prom
     doc,
     getDoc,
     getDocs,
+    setDoc,
     runTransaction,
   } = await import("firebase/firestore");
 
   const db = getFirestore(app);
   const docRef = doc(db, SHOPS_COLLECTION, shopId);
   const logsColRef = collection(db, SHOPS_COLLECTION, shopId, LOGS_SUBCOLLECTION);
+  const legacyScanRef = doc(db, SHOPS_COLLECTION, shopId, "legacyScan", "cursor");
   return {
     docRef,
+    putLegacyScanCursor: async (scan) => {
+      await setDoc(legacyScanRef, scan);
+    },
     getDoc: getDoc as FirestoreFns["getDoc"],
     getLogs: async () => {
       const snap = await getDocs(logsColRef);
@@ -368,7 +386,16 @@ export class RemoteShopStore implements ShopStore {
   async getShop(): Promise<ShopStoreResult<ShopDocument>> {
     try {
       const fs = await this.fs();
-      const [snap, logDocs] = await Promise.all([fs.getDoc(fs.docRef), fs.getLogs()]);
+      const snap = await fs.getDoc(fs.docRef);
+      const logDocs = await fs.getLogs();
+      const recheck = await fs.getDoc(fs.docRef);
+      if (snapStamp(snap) !== snapStamp(recheck)) {
+        return {
+          ok: false,
+          error: "Shop was updated elsewhere; reload and try again.",
+          conflict: true,
+        };
+      }
       if (!snap.exists()) {
         return {
           ok: false,
@@ -433,7 +460,12 @@ export class RemoteShopStore implements ShopStore {
     if (!doc.updatedAt) {
       return true;
     }
-    const [snap, logDocs] = await Promise.all([fs.getDoc(fs.docRef), fs.getLogs()]);
+    const snap = await fs.getDoc(fs.docRef);
+    const logDocs = await fs.getLogs();
+    const recheck = await fs.getDoc(fs.docRef);
+    if (snapStamp(snap) !== snapStamp(recheck)) {
+      return false;
+    }
     if (!snap.exists()) {
       return true;
     }
@@ -487,19 +519,54 @@ export class RemoteShopStore implements ShopStore {
       );
 
       let expected = doc.updatedAt;
+      const advanceLegacyScanIfNeeded = async (
+        legacyArr: readonly unknown[],
+        logId: string,
+        allowUnreviewed: boolean,
+      ): Promise<void> => {
+        if (legacyArr.length <= 48 || !fs.putLegacyScanCursor) return;
+        for (let start = 0; start < legacyArr.length; start += 48) {
+          await fs.putLegacyScanCursor({
+            logId,
+            allowUnreviewed,
+            start,
+            cursor: start + 48,
+            shopUpdatedAt: expected,
+          });
+        }
+      };
 
       // Step A: write unmigrated legacy winners to `shops/{shopId}/logs/{logId}` while they
       // are still present in `shops/{shopId}.logs` (satisfies `canCreateLog` in firestore.rules),
       // inside a CAS transaction so a stale cache never overwrites remote subcollection logs.
       const liveSubLogs = new Map(stored.subLogs);
       if (migration.winnersToCreate.length > 0) {
-        expected = await fs.commitWithCas(
-          expected,
-          { ...stored.doc, logs: stored.rawLegacyLogs as ApplicationLog[] },
-          migration.winnersToCreate.map((item) => ({ id: item.id, data: item.raw })),
-        );
-        for (const item of migration.winnersToCreate) {
-          liveSubLogs.set(item.id, item.log);
+        const needsScan =
+          stored.rawLegacyLogs.length > 48 &&
+          migration.winnersToCreate.some(
+            (item) => !liveSubLogs.has(item.id) && !item.log.reviewedAt,
+          );
+        if (!needsScan) {
+          expected = await fs.commitWithCas(
+            expected,
+            { ...stored.doc, logs: stored.rawLegacyLogs as ApplicationLog[] },
+            migration.winnersToCreate.map((item) => ({ id: item.id, data: item.raw })),
+          );
+          for (const item of migration.winnersToCreate) {
+            liveSubLogs.set(item.id, item.log);
+          }
+        } else {
+          for (const item of migration.winnersToCreate) {
+            if (!liveSubLogs.has(item.id) && !item.log.reviewedAt) {
+              await advanceLegacyScanIfNeeded(stored.rawLegacyLogs, item.id, true);
+            }
+            expected = await fs.commitWithCas(
+              expected,
+              { ...stored.doc, logs: stored.rawLegacyLogs as ApplicationLog[] },
+              [{ id: item.id, data: item.raw }],
+            );
+            liveSubLogs.set(item.id, item.log);
+          }
         }
       }
 
@@ -524,16 +591,37 @@ export class RemoteShopStore implements ShopStore {
         .map((log) => ({ id: log.id, data: log }));
       const deletes = [...liveSubLogs.keys()].filter((id) => !nextById.has(id));
 
+      if (migration.remainingLegacy.length > 48) {
+        for (const p of puts) {
+          if (!liveSubLogs.has(p.id)) {
+            await advanceLegacyScanIfNeeded(migration.remainingLegacy, p.id, false);
+            expected = await fs.commitWithCas(
+              expected,
+              { ...doc, logs: migration.remainingLegacy },
+              [p],
+            );
+            liveSubLogs.set(p.id, p.data);
+          }
+        }
+      }
+      const remainingPuts = puts.filter((p) => {
+        const prev = liveSubLogs.get(p.id);
+        return !prev || stableJson(prev) !== stableJson(p.data);
+      });
+
       const updatedAt = await fs.commitWithCas(
         expected,
         { ...doc, logs: migration.remainingLegacy },
-        puts,
+        remainingPuts,
         deletes,
       );
+      const writtenSubLogs = new Map(liveSubLogs);
+      for (const p of remainingPuts) writtenSubLogs.set(p.id, p.data);
+      for (const id of deletes) writtenSubLogs.delete(id);
       // The written state is cached for the next write (no re-read; #210 reuses it).
       this.cacheStored(
         { ...doc, logs: migration.remainingLegacy, updatedAt },
-        nextLogs,
+        [...writtenSubLogs.values()],
         migration.remainingLegacy,
       );
       return { ok: true, value: { updatedAt } };

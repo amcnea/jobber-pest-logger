@@ -23,7 +23,9 @@ const fake = vi.hoisted(() => ({
   subLogs: new Map<string, Record<string, unknown>>(),
   writes: [] as Record<string, unknown>[],
   logWrites: [] as { id: string; data: Record<string, unknown> | null }[],
+  scanWrites: [] as Record<string, unknown>[],
   failWrite: null as Error | null,
+  onGetLogs: null as (() => void) | null,
   stamp: 0,
 }));
 
@@ -31,7 +33,10 @@ vi.mock("./firebaseAuth", () => ({ ensureAnonymousAuth: vi.fn(async () => ({ uid
 vi.mock("./resolveShopStore", () => ({ resolveShopStore: vi.fn() }));
 vi.mock("./firebaseApp", () => ({ getFirebaseApp: vi.fn(async () => ({})) }));
 vi.mock("firebase/firestore", () => {
-  const snap = () => ({ exists: () => fake.data !== null, data: () => JSON.parse(JSON.stringify(fake.data)) });
+  const snap = () => {
+    const captured = fake.data === null ? null : JSON.parse(JSON.stringify(fake.data));
+    return { exists: () => captured !== null, data: () => (captured === null ? null : JSON.parse(JSON.stringify(captured))) };
+  };
   return {
     getFirestore: () => ({}),
     collection: (_db: unknown, ...segments: string[]) => ({ path: segments.join("/") }),
@@ -40,18 +45,22 @@ vi.mock("firebase/firestore", () => {
       id: segments[segments.length - 1] ?? "",
     }),
     getDoc: async () => snap(),
-    getDocs: async () => ({
-      docs: [...fake.subLogs.entries()].map(([id, d]) => ({
+    getDocs: async () => {
+      const docs = [...fake.subLogs.entries()].map(([id, d]) => ({
         id,
         data: () => JSON.parse(JSON.stringify(d)),
-      })),
-    }),
+      }));
+      fake.onGetLogs?.();
+      return { docs };
+    },
     setDoc: async (ref: { path?: string; id?: string }, value: Record<string, unknown>) => {
       if (fake.failWrite) throw fake.failWrite;
       const cloned = JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
       if (ref.path?.includes("/logs/") && ref.id) {
         fake.subLogs.set(ref.id, cloned);
         fake.logWrites.push({ id: ref.id, data: cloned });
+      } else if (ref.path?.includes("/legacyScan/")) {
+        fake.scanWrites.push(cloned);
       } else {
         fake.data = cloned;
       }
@@ -140,7 +149,9 @@ beforeEach(() => {
   fake.subLogs.clear();
   fake.writes = [];
   fake.logWrites = [];
+  fake.scanWrites = [];
   fake.failWrite = null;
+  fake.onGetLogs = null;
 });
 
 afterEach(() => {
@@ -792,6 +803,75 @@ describe("RemoteShopStore write path", () => {
     expect(fake.subLogs.get("N")).toEqual(logN);
     expect((fake.data as unknown as ShopDocument).logs).toEqual([v.reviewedLate]);
     expect(fake.logWrites).toEqual([{ id: "N", data: logN as unknown as Record<string, unknown> }]);
+
+    // A second write on the same store instance must still see L1 as reviewedEarly in its cached subLogs
+    // (not reviewedLate) and keep reviewedLate in remainingLegacy instead of draining it.
+    const logM = makeLog({ id: "M" });
+    await enqueueLogOutbox(SHOP, logM);
+    expect(await flushLogOutbox(store, SHOP)).toEqual({ ok: true, flushed: 1, remaining: 0 });
+    expect(fake.subLogs.get("L1")).toEqual(v.reviewedEarly);
+    expect(fake.subLogs.get("M")).toEqual(logM);
+    expect((fake.data as unknown as ShopDocument).logs).toEqual([v.reviewedLate]);
+  });
+
+  it("#215: when shops/{shopId}.logs has >96 entries, putShop advances shops/{shopId}/legacyScan/cursor in 48-entry windows before creating unreviewed winners and drains the legacy array", async () => {
+    const legacy = Array.from({ length: 100 }, (_, i) => makeLog({ id: `L${i}` }));
+    fake.data = shopDoc(legacy);
+    const store = new RemoteShopStore(CONFIG, SHOP);
+    const logN = makeLog({ id: "N" });
+    await enqueueLogOutbox(SHOP, logN);
+    expect(await flushLogOutbox(store, SHOP)).toEqual({ ok: true, flushed: 1, remaining: 0 });
+    expect(fake.subLogs.size).toBe(101);
+    expect(fake.subLogs.get("L99")).toEqual(legacy[99]);
+    expect(fake.subLogs.get("N")).toEqual(logN);
+    expect((fake.data as unknown as ShopDocument).logs).toEqual([]);
+    expect(
+      fake.scanWrites.some(
+        (w) =>
+          w.logId === "L0" &&
+          w.allowUnreviewed === true &&
+          w.start === 96 &&
+          w.cursor === 144,
+      ),
+    ).toBe(true);
+  });
+
+  it("#246: getShop and ensureStoredForWrite validate the shop doc and subcollection log reads as one snapshot", async () => {
+    const logA = makeLog({ id: "A" });
+    fake.data = shopDoc([]);
+    fake.subLogs.set("A", clone(logA) as unknown as Record<string, unknown>);
+    const store = new RemoteShopStore(CONFIG, SHOP);
+
+    // 1) If updatedAt changes on the shop doc while getLogs() is in flight, getShop returns a conflict.
+    fake.onGetLogs = () => {
+      if (fake.data) {
+        fake.data = { ...fake.data, updatedAt: "2026-10-17T12:05:00.000Z" };
+      }
+      fake.onGetLogs = null;
+    };
+    const r1 = await store.getShop();
+    expect(r1).toEqual({
+      ok: false,
+      error: "Shop was updated elsewhere; reload and try again.",
+      conflict: true,
+    });
+
+    // 2) If updatedAt changes while ensureStoredForWrite reads logs on cold cache, putShop returns a conflict without writing.
+    const baseline = shopDoc([]);
+    fake.data = baseline;
+    fake.onGetLogs = () => {
+      if (fake.data) {
+        fake.data = { ...fake.data, updatedAt: "2026-10-17T12:10:00.000Z" };
+      }
+      fake.onGetLogs = null;
+    };
+    const r2 = await store.putShop({ ...(baseline as unknown as ShopDocument), logs: [logA] });
+    expect(r2).toEqual({
+      ok: false,
+      error: "Shop was updated elsewhere; reload and try again.",
+      conflict: true,
+    });
+    expect(fake.writes).toEqual([]);
   });
 });
 
