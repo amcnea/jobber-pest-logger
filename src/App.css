@@ -726,3 +726,28 @@ label.field {
   background: #f3efe4;
   border-bottom: 1px solid var(--line);
 }
+
+.set-aside-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-bottom: 0.85rem;
+}
+
+.set-aside-details {
+  margin-top: 0.45rem;
+  padding-top: 0.45rem;
+  border-top: 1px dashed var(--line);
+}
+
+.set-aside-json {
+  margin: 0.25rem 0 0;
+  padding: 0.5rem 0.65rem;
+  background: #f6f4ec;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  overflow-x: auto;
+  max-height: 18rem;
+}

@@ -787,6 +787,7 @@ export default function App() {
             flash={settingsFlash}
             onFlashConsumed={consumeSettingsFlash}
             sessionRevision={shopSessionTick}
+            setAsideRevision={outboxTick}
             onShopSessionChange={handleShopSessionChange}
             onSave={handleSaveSettings}
             onRestored={handleRestored}

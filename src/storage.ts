@@ -819,18 +819,23 @@ export const SET_ASIDE_KEY = "jobber-pest-logger:set-aside:v1";
 export function normalizeSetAsideCopy(value: unknown): SetAsideCopy | null {
   if (!isRecord(value)) return null;
   if (!isNonBlankString(value.id) || !isNonBlankString(value.logId)) return null;
-  if (!isTimestamp(value.setAsideAt) || !isNonBlankString(value.setAsideBy)) return null;
+  if (!isTimestamp(value.setAsideAt)) return null;
+  const hasBy = isNonBlankString(value.setAsideBy);
+  const hasReason = isNonBlankString(value.reason);
+  if (!hasBy && !hasReason) return null;
   if (typeof value.shopId !== "string") return null;
   const deviceCopy = normalizeLog(value.deviceCopy);
   if (!deviceCopy || deviceCopy.id !== value.logId) return null;
-  return deepFreeze({
+  const entry: SetAsideCopy = {
     id: value.id,
     logId: value.logId,
     deviceCopy,
     setAsideAt: value.setAsideAt.trim(),
-    setAsideBy: value.setAsideBy.trim(),
+    setAsideBy: hasBy ? (value.setAsideBy as string).trim() : "",
     shopId: value.shopId,
-  });
+    ...(hasReason ? { reason: (value.reason as string).trim() } : {}),
+  };
+  return deepFreeze(entry);
 }
 
 /** Raw stored set-aside rows, exactly as saved (valid or not). Never rewritten on read. */
