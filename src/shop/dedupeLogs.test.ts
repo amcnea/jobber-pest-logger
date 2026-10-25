@@ -104,6 +104,7 @@ const {
   compareDuplicateCopies,
   dedupeLogsById,
   planDedupedWrite,
+  canUpdateSubcollectionLog,
   planLegacyDrain,
   setAsideDuplicateCopies,
   DUPLICATE_ID_SET_ASIDE_REASON,
@@ -356,6 +357,84 @@ describe("write plan (#208 compatible)", () => {
     expect(noRemovals.drainBatches).toEqual([]);
     expect(noRemovals.remainingLegacy).toEqual([rawEarly as unknown as ApplicationLog]);
     expect("history" in (noRemovals.remainingLegacy[0] as unknown as Record<string, unknown>)).toBe(false);
+  });
+
+  it("#215: when subLogs holds an older copy and legacyLogs holds a permitted newer winner, planLegacyDrain queues the legacy winner for Step A and drains it in Step B", () => {
+    const v = versions();
+    // (1) Unreviewed subLogs copy -> newer unreviewed legacy winner (same hold date):
+    const planUnrev = planLegacyDrain(
+      new Map([["L1", v.rev1]]),
+      [v.rev2],
+      [v.rev2],
+      [v.rev2],
+      true,
+    );
+    expect(canUpdateSubcollectionLog(v.rev1, v.rev2)).toBe(true);
+    expect(planUnrev.winnersToCreate.map((w) => w.log)).toEqual([v.rev2]);
+    expect(planUnrev.drainBatches).toEqual([[]]);
+    expect(planUnrev.remainingLegacy).toEqual([]);
+
+    // (2) Unreviewed subLogs copy -> reviewed legacy winner:
+    const planRevOverUnrev = planLegacyDrain(
+      new Map([["L1", v.rev1]]),
+      [v.reviewedRev0],
+      [v.reviewedRev0],
+      [v.reviewedRev0],
+      true,
+    );
+    expect(canUpdateSubcollectionLog(v.rev1, v.reviewedRev0)).toBe(true);
+    expect(planRevOverUnrev.winnersToCreate.map((w) => w.log)).toEqual([v.reviewedRev0]);
+    expect(planRevOverUnrev.drainBatches).toEqual([[]]);
+    expect(planRevOverUnrev.remainingLegacy).toEqual([]);
+
+    // (3) Reviewed subLogs copy -> valid reviewed correction in legacyLogs:
+    saveLogs([v.reviewedRev0]);
+    const corrRes = applyCorrection("L1", { ...v.reviewedRev0, serviceAddress: "6 Corrected After Review St" }, { changedBy: "p-ana", reason: "fix after review", people: PEOPLE, now: NOW });
+    if (!corrRes.ok) throw new Error(corrRes.error);
+    const reviewedThenCorrected = corrRes.log;
+    storage.removeItem("jobber-pest-logger:logs:v1");
+    const planRevCorr = planLegacyDrain(
+      new Map([["L1", v.reviewedRev0]]),
+      [reviewedThenCorrected],
+      [reviewedThenCorrected],
+      [reviewedThenCorrected],
+      true,
+    );
+    expect(canUpdateSubcollectionLog(v.reviewedRev0, reviewedThenCorrected)).toBe(true);
+    expect(planRevCorr.winnersToCreate.map((w) => w.log)).toEqual([reviewedThenCorrected]);
+    expect(planRevCorr.drainBatches).toEqual([[]]);
+    expect(planRevCorr.remainingLegacy).toEqual([]);
+  });
+
+  it("#215: when subLogs holds a copy and legacyLogs holds a winner that cannot overwrite subLogs under firestore.rules, planLegacyDrain keeps the legacy entry in remainingLegacy", () => {
+    const v = versions();
+    // (1) Reviewed subLogs copy vs conflicting reviewed legacy winner (later reviewedAt at same revision):
+    const planConflictingRev = planLegacyDrain(
+      new Map([["L1", v.reviewedEarly]]),
+      [v.reviewedLate],
+      [v.reviewedLate],
+      [v.reviewedLate],
+      true,
+    );
+    expect(canUpdateSubcollectionLog(v.reviewedEarly, v.reviewedLate)).toBe(false);
+    expect(planConflictingRev.winnersToCreate).toEqual([]);
+    expect(planConflictingRev.drainBatches).toEqual([]);
+    expect(planConflictingRev.remainingLegacy).toEqual([v.reviewedLate]);
+
+    // (2) Unreviewed subLogs copy with later dateUsed vs unreviewed legacy winner with backdated dateUsed and no retainUntil:
+    const subLaterHold = makeLog({ id: "L1", revision: 0, dateUsed: "2026-08-15", createdAt: "2026-08-15T10:00:00.000Z" });
+    const legacyBackdatedWinner = makeLog({ id: "L1", revision: 1, dateUsed: "2026-06-01", createdAt: "2026-06-01T10:00:00.000Z" });
+    const planBackdated = planLegacyDrain(
+      new Map([["L1", subLaterHold]]),
+      [legacyBackdatedWinner],
+      [legacyBackdatedWinner],
+      [legacyBackdatedWinner],
+      true,
+    );
+    expect(canUpdateSubcollectionLog(subLaterHold, legacyBackdatedWinner)).toBe(false);
+    expect(planBackdated.winnersToCreate).toEqual([]);
+    expect(planBackdated.drainBatches).toEqual([]);
+    expect(planBackdated.remainingLegacy).toEqual([legacyBackdatedWinner]);
   });
 });
 
@@ -683,6 +762,36 @@ describe("RemoteShopStore write path", () => {
     expect(fake.writes).toHaveLength(3);
     expect(fake.writes[2].logs).toEqual([]);
     expect(setAsideRows().map((r) => r.deviceCopy)).toEqual([v.rev2]);
+  });
+
+  it("#215: when subLogs has an older copy and legacyLogs has a newer permitted winner, putShop updates logs/{id} in Step A and drains the legacy entry in Step B", async () => {
+    const v = versions();
+    fake.data = shopDoc([v.rev2]);
+    fake.subLogs.set("L1", clone(v.rev1) as unknown as Record<string, unknown>);
+    const store = new RemoteShopStore(CONFIG, SHOP);
+    const logN = makeLog({ id: "N" });
+    await enqueueLogOutbox(SHOP, logN);
+    expect(await flushLogOutbox(store, SHOP)).toEqual({ ok: true, flushed: 1, remaining: 0 });
+    // Step A updated L1 from rev1 to rev2, Step B drained shops/SHOP1.logs, Step C created N.
+    expect(fake.subLogs.get("L1")).toEqual(v.rev2);
+    expect(fake.subLogs.get("N")).toEqual(logN);
+    expect((fake.data as unknown as ShopDocument).logs).toEqual([]);
+    expect(setAsideRows().map((r) => r.deviceCopy)).toEqual([v.rev1]);
+  });
+
+  it("#215: when subLogs has a reviewed copy and legacyLogs has a conflicting reviewed winner, putShop keeps the legacy entry in remainingLegacy and does not overwrite logs/{id}", async () => {
+    const v = versions();
+    fake.data = shopDoc([v.reviewedLate]);
+    fake.subLogs.set("L1", clone(v.reviewedEarly) as unknown as Record<string, unknown>);
+    const store = new RemoteShopStore(CONFIG, SHOP);
+    const logN = makeLog({ id: "N" });
+    await enqueueLogOutbox(SHOP, logN);
+    expect(await flushLogOutbox(store, SHOP)).toEqual({ ok: true, flushed: 1, remaining: 0 });
+    // L1 in subLogs stays reviewedEarly (not overwritten by conflicting reviewedLate), and reviewedLate stays in shops/SHOP1.logs.
+    expect(fake.subLogs.get("L1")).toEqual(v.reviewedEarly);
+    expect(fake.subLogs.get("N")).toEqual(logN);
+    expect((fake.data as unknown as ShopDocument).logs).toEqual([v.reviewedLate]);
+    expect(fake.logWrites).toEqual([{ id: "N", data: logN as unknown as Record<string, unknown> }]);
   });
 });
 

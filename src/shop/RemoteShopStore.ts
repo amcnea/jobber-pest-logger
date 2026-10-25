@@ -7,7 +7,13 @@
 
 import { parseShopSections } from "../storage";
 import type { ApplicationLog } from "../types";
-import { dedupeLogsById, planLegacyDrain, setAsideDuplicateCopies, stableJson } from "./dedupeLogs";
+import {
+  canUpdateSubcollectionLog,
+  dedupeLogsById,
+  planLegacyDrain,
+  setAsideDuplicateCopies,
+  stableJson,
+} from "./dedupeLogs";
 import { ensureAnonymousAuth } from "./firebaseAuth";
 import { getFirebaseApp } from "./firebaseApp";
 import type { FirebaseClientConfig } from "./firebaseConfig";
@@ -513,7 +519,7 @@ export class RemoteShopStore implements ShopStore {
       const puts = nextLogs
         .filter((log) => {
           const prev = liveSubLogs.get(log.id);
-          return !prev || stableJson(prev) !== stableJson(log);
+          return !prev || (stableJson(prev) !== stableJson(log) && canUpdateSubcollectionLog(prev, log));
         })
         .map((log) => ({ id: log.id, data: log }));
       const deletes = [...liveSubLogs.keys()].filter((id) => !nextById.has(id));

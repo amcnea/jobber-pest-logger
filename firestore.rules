@@ -265,37 +265,166 @@ service cloud.firestore {
     //     winner) has been written to `shops/{shopId}/logs/{logId}` (or its unreviewed
     //     2-year hold is over).
 
-    function legacyHasId(legacy, id) {
-      let n = legacy.size();
-      return (n > 0 && legacy[0].id == id)
-        || (n > 1 && legacy[1].id == id)
-        || (n > 2 && legacy[2].id == id)
-        || (n > 3 && legacy[3].id == id)
-        || (n > 4 && legacy[4].id == id)
-        || (n > 5 && legacy[5].id == id)
-        || (n > 6 && legacy[6].id == id)
-        || (n > 7 && legacy[7].id == id);
+    function legacySlotOk(legacy, i, id, allowUnreviewed) {
+      return !(legacy[i].id == id && (!allowUnreviewed || isReviewedLog(legacy[i])));
     }
 
-    function legacyHasReviewedId(legacy, id) {
+    function legacySlotsOk0(legacy, n, id, allowUnreviewed) {
+      return (n <= 0 || legacySlotOk(legacy, 0, id, allowUnreviewed))
+        && (n <= 1 || legacySlotOk(legacy, 1, id, allowUnreviewed))
+        && (n <= 2 || legacySlotOk(legacy, 2, id, allowUnreviewed))
+        && (n <= 3 || legacySlotOk(legacy, 3, id, allowUnreviewed))
+        && (n <= 4 || legacySlotOk(legacy, 4, id, allowUnreviewed))
+        && (n <= 5 || legacySlotOk(legacy, 5, id, allowUnreviewed))
+        && (n <= 6 || legacySlotOk(legacy, 6, id, allowUnreviewed))
+        && (n <= 7 || legacySlotOk(legacy, 7, id, allowUnreviewed));
+    }
+
+    function legacySlotsOk8(legacy, n, id, allowUnreviewed) {
+      return (n <= 8 || legacySlotOk(legacy, 8, id, allowUnreviewed))
+        && (n <= 9 || legacySlotOk(legacy, 9, id, allowUnreviewed))
+        && (n <= 10 || legacySlotOk(legacy, 10, id, allowUnreviewed))
+        && (n <= 11 || legacySlotOk(legacy, 11, id, allowUnreviewed))
+        && (n <= 12 || legacySlotOk(legacy, 12, id, allowUnreviewed))
+        && (n <= 13 || legacySlotOk(legacy, 13, id, allowUnreviewed))
+        && (n <= 14 || legacySlotOk(legacy, 14, id, allowUnreviewed))
+        && (n <= 15 || legacySlotOk(legacy, 15, id, allowUnreviewed));
+    }
+
+    function legacySlotsOk16(legacy, n, id, allowUnreviewed) {
+      return (n <= 16 || legacySlotOk(legacy, 16, id, allowUnreviewed))
+        && (n <= 17 || legacySlotOk(legacy, 17, id, allowUnreviewed))
+        && (n <= 18 || legacySlotOk(legacy, 18, id, allowUnreviewed))
+        && (n <= 19 || legacySlotOk(legacy, 19, id, allowUnreviewed))
+        && (n <= 20 || legacySlotOk(legacy, 20, id, allowUnreviewed))
+        && (n <= 21 || legacySlotOk(legacy, 21, id, allowUnreviewed))
+        && (n <= 22 || legacySlotOk(legacy, 22, id, allowUnreviewed))
+        && (n <= 23 || legacySlotOk(legacy, 23, id, allowUnreviewed));
+    }
+
+    function legacySlotsOk24(legacy, n, id, allowUnreviewed) {
+      return (n <= 24 || legacySlotOk(legacy, 24, id, allowUnreviewed))
+        && (n <= 25 || legacySlotOk(legacy, 25, id, allowUnreviewed))
+        && (n <= 26 || legacySlotOk(legacy, 26, id, allowUnreviewed))
+        && (n <= 27 || legacySlotOk(legacy, 27, id, allowUnreviewed))
+        && (n <= 28 || legacySlotOk(legacy, 28, id, allowUnreviewed))
+        && (n <= 29 || legacySlotOk(legacy, 29, id, allowUnreviewed))
+        && (n <= 30 || legacySlotOk(legacy, 30, id, allowUnreviewed))
+        && (n <= 31 || legacySlotOk(legacy, 31, id, allowUnreviewed));
+    }
+
+    function legacySlotsOk32(legacy, n, id, allowUnreviewed) {
+      return (n <= 32 || legacySlotOk(legacy, 32, id, allowUnreviewed))
+        && (n <= 33 || legacySlotOk(legacy, 33, id, allowUnreviewed))
+        && (n <= 34 || legacySlotOk(legacy, 34, id, allowUnreviewed))
+        && (n <= 35 || legacySlotOk(legacy, 35, id, allowUnreviewed))
+        && (n <= 36 || legacySlotOk(legacy, 36, id, allowUnreviewed))
+        && (n <= 37 || legacySlotOk(legacy, 37, id, allowUnreviewed))
+        && (n <= 38 || legacySlotOk(legacy, 38, id, allowUnreviewed))
+        && (n <= 39 || legacySlotOk(legacy, 39, id, allowUnreviewed));
+    }
+
+    function legacySlotsOk40(legacy, n, id, allowUnreviewed) {
+      return (n <= 40 || legacySlotOk(legacy, 40, id, allowUnreviewed))
+        && (n <= 41 || legacySlotOk(legacy, 41, id, allowUnreviewed))
+        && (n <= 42 || legacySlotOk(legacy, 42, id, allowUnreviewed))
+        && (n <= 43 || legacySlotOk(legacy, 43, id, allowUnreviewed))
+        && (n <= 44 || legacySlotOk(legacy, 44, id, allowUnreviewed))
+        && (n <= 45 || legacySlotOk(legacy, 45, id, allowUnreviewed))
+        && (n <= 46 || legacySlotOk(legacy, 46, id, allowUnreviewed))
+        && (n <= 47 || legacySlotOk(legacy, 47, id, allowUnreviewed));
+    }
+
+    function legacySlotsOk48(legacy, n, id, allowUnreviewed) {
+      return (n <= 48 || legacySlotOk(legacy, 48, id, allowUnreviewed))
+        && (n <= 49 || legacySlotOk(legacy, 49, id, allowUnreviewed))
+        && (n <= 50 || legacySlotOk(legacy, 50, id, allowUnreviewed))
+        && (n <= 51 || legacySlotOk(legacy, 51, id, allowUnreviewed))
+        && (n <= 52 || legacySlotOk(legacy, 52, id, allowUnreviewed))
+        && (n <= 53 || legacySlotOk(legacy, 53, id, allowUnreviewed))
+        && (n <= 54 || legacySlotOk(legacy, 54, id, allowUnreviewed))
+        && (n <= 55 || legacySlotOk(legacy, 55, id, allowUnreviewed));
+    }
+
+    function legacySlotsOk56(legacy, n, id, allowUnreviewed) {
+      return (n <= 56 || legacySlotOk(legacy, 56, id, allowUnreviewed))
+        && (n <= 57 || legacySlotOk(legacy, 57, id, allowUnreviewed))
+        && (n <= 58 || legacySlotOk(legacy, 58, id, allowUnreviewed))
+        && (n <= 59 || legacySlotOk(legacy, 59, id, allowUnreviewed))
+        && (n <= 60 || legacySlotOk(legacy, 60, id, allowUnreviewed))
+        && (n <= 61 || legacySlotOk(legacy, 61, id, allowUnreviewed))
+        && (n <= 62 || legacySlotOk(legacy, 62, id, allowUnreviewed))
+        && (n <= 63 || legacySlotOk(legacy, 63, id, allowUnreviewed));
+    }
+
+    function legacySlotsOk64(legacy, n, id, allowUnreviewed) {
+      return (n <= 64 || legacySlotOk(legacy, 64, id, allowUnreviewed))
+        && (n <= 65 || legacySlotOk(legacy, 65, id, allowUnreviewed))
+        && (n <= 66 || legacySlotOk(legacy, 66, id, allowUnreviewed))
+        && (n <= 67 || legacySlotOk(legacy, 67, id, allowUnreviewed))
+        && (n <= 68 || legacySlotOk(legacy, 68, id, allowUnreviewed))
+        && (n <= 69 || legacySlotOk(legacy, 69, id, allowUnreviewed))
+        && (n <= 70 || legacySlotOk(legacy, 70, id, allowUnreviewed))
+        && (n <= 71 || legacySlotOk(legacy, 71, id, allowUnreviewed));
+    }
+
+    function legacySlotsOk72(legacy, n, id, allowUnreviewed) {
+      return (n <= 72 || legacySlotOk(legacy, 72, id, allowUnreviewed))
+        && (n <= 73 || legacySlotOk(legacy, 73, id, allowUnreviewed))
+        && (n <= 74 || legacySlotOk(legacy, 74, id, allowUnreviewed))
+        && (n <= 75 || legacySlotOk(legacy, 75, id, allowUnreviewed))
+        && (n <= 76 || legacySlotOk(legacy, 76, id, allowUnreviewed))
+        && (n <= 77 || legacySlotOk(legacy, 77, id, allowUnreviewed))
+        && (n <= 78 || legacySlotOk(legacy, 78, id, allowUnreviewed))
+        && (n <= 79 || legacySlotOk(legacy, 79, id, allowUnreviewed));
+    }
+
+    function legacySlotsOk80(legacy, n, id, allowUnreviewed) {
+      return (n <= 80 || legacySlotOk(legacy, 80, id, allowUnreviewed))
+        && (n <= 81 || legacySlotOk(legacy, 81, id, allowUnreviewed))
+        && (n <= 82 || legacySlotOk(legacy, 82, id, allowUnreviewed))
+        && (n <= 83 || legacySlotOk(legacy, 83, id, allowUnreviewed))
+        && (n <= 84 || legacySlotOk(legacy, 84, id, allowUnreviewed))
+        && (n <= 85 || legacySlotOk(legacy, 85, id, allowUnreviewed))
+        && (n <= 86 || legacySlotOk(legacy, 86, id, allowUnreviewed))
+        && (n <= 87 || legacySlotOk(legacy, 87, id, allowUnreviewed));
+    }
+
+    function legacySlotsOk88(legacy, n, id, allowUnreviewed) {
+      return (n <= 88 || legacySlotOk(legacy, 88, id, allowUnreviewed))
+        && (n <= 89 || legacySlotOk(legacy, 89, id, allowUnreviewed))
+        && (n <= 90 || legacySlotOk(legacy, 90, id, allowUnreviewed))
+        && (n <= 91 || legacySlotOk(legacy, 91, id, allowUnreviewed))
+        && (n <= 92 || legacySlotOk(legacy, 92, id, allowUnreviewed))
+        && (n <= 93 || legacySlotOk(legacy, 93, id, allowUnreviewed))
+        && (n <= 94 || legacySlotOk(legacy, 94, id, allowUnreviewed))
+        && (n <= 95 || legacySlotOk(legacy, 95, id, allowUnreviewed));
+    }
+
+    function legacyAllSlotsOk(legacy, id, allowUnreviewed) {
       let n = legacy.size();
-      return (n > 0 && legacy[0].id == id && isReviewedLog(legacy[0]))
-        || (n > 1 && legacy[1].id == id && isReviewedLog(legacy[1]))
-        || (n > 2 && legacy[2].id == id && isReviewedLog(legacy[2]))
-        || (n > 3 && legacy[3].id == id && isReviewedLog(legacy[3]))
-        || (n > 4 && legacy[4].id == id && isReviewedLog(legacy[4]))
-        || (n > 5 && legacy[5].id == id && isReviewedLog(legacy[5]))
-        || (n > 6 && legacy[6].id == id && isReviewedLog(legacy[6]))
-        || (n > 7 && legacy[7].id == id && isReviewedLog(legacy[7]));
+      return n <= 96
+        && (n <= 0 || legacySlotsOk0(legacy, n, id, allowUnreviewed))
+        && (n <= 8 || legacySlotsOk8(legacy, n, id, allowUnreviewed))
+        && (n <= 16 || legacySlotsOk16(legacy, n, id, allowUnreviewed))
+        && (n <= 24 || legacySlotsOk24(legacy, n, id, allowUnreviewed))
+        && (n <= 32 || legacySlotsOk32(legacy, n, id, allowUnreviewed))
+        && (n <= 40 || legacySlotsOk40(legacy, n, id, allowUnreviewed))
+        && (n <= 48 || legacySlotsOk48(legacy, n, id, allowUnreviewed))
+        && (n <= 56 || legacySlotsOk56(legacy, n, id, allowUnreviewed))
+        && (n <= 64 || legacySlotsOk64(legacy, n, id, allowUnreviewed))
+        && (n <= 72 || legacySlotsOk72(legacy, n, id, allowUnreviewed))
+        && (n <= 80 || legacySlotsOk80(legacy, n, id, allowUnreviewed))
+        && (n <= 88 || legacySlotsOk88(legacy, n, id, allowUnreviewed));
     }
 
     function legacyCreateOk(legacy, logId) {
       return legacy.size() == 0
         || (
           request.resource.data in legacy
-          && (legacy.size() > 8 || !legacyHasReviewedId(legacy, logId) || isReviewedLog(request.resource.data))
-        )
-        || (legacy.size() <= 8 && !legacyHasId(legacy, logId));
+          ? (isReviewedLog(request.resource.data) || legacyAllSlotsOk(legacy, logId, true))
+          : legacyAllSlotsOk(legacy, logId, false)
+        );
     }
 
     function canCreateLog(shopId, logId) {

@@ -761,6 +761,22 @@ describe("#215: migrating legacy shop docs that still carry a logs array", () =>
     // Once drained, creating a brand-new log in the subcollection passes.
     await assertSucceeds(putLog(TECH, makeLog("N")));
   });
+
+  it("with >8 (e.g. 20) remaining legacy entries, creating a brand-new log passes while planting a forged copy of a reviewed legacy ID at index >= 8 is denied", async () => {
+    const forgedR = makeLog("R15", { serviceAddress: "Forged unreviewed copy" });
+    const legacy = Array.from({ length: 20 }, (_, i) =>
+      i === 15 ? reviewed(makeLog("R15")) : reviewed(makeLog(`L${i}`)),
+    );
+    // Even if forgedR is also in legacy at index 0 while reviewed R15 is at index 15:
+    await seedLegacy([forgedR, ...legacy]);
+    // Creating a brand-new log ID not in legacy passes even with 21 legacy entries remaining!
+    await assertSucceeds(putLog(TECH, makeLog("BRAND_NEW")));
+    // Planting an unreviewed copy for R15 (whose reviewed copy is at index 16) is denied!
+    await assertFails(putLog(TECH, forgedR));
+    await assertFails(putLog(TECH, makeLog("R15", { serviceAddress: "Not in legacy" })));
+    // Creating the reviewed copy R15 passes!
+    await assertSucceeds(putLog(TECH, legacy[15]));
+  });
 });
 
 describe("a stray logIds field neither blocks nor is required", () => {

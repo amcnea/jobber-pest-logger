@@ -187,6 +187,114 @@ export interface LegacyDrainPlan {
   remainingLegacy: ApplicationLog[];
 }
 
+const YMD_RE = /^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$/;
+const CREATED_AT_RE = /^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T/;
+
+function isRuleYmd(v: unknown): v is string {
+  return typeof v === "string" && YMD_RE.test(v.trim());
+}
+
+function ymdInt(v: string): number {
+  return Number(v.slice(0, 4)) * 10000 + Number(v.slice(5, 7)) * 100 + Number(v.slice(8, 10));
+}
+
+function addTwoYearsInt(start: number): number {
+  return start % 10000 === 229 ? start + 20072 : start + 20000;
+}
+
+function fallbackUntilInt(du: unknown, ca: unknown): number {
+  const caOk = typeof ca === "string" && CREATED_AT_RE.test(ca);
+  if (isRuleYmd(du)) {
+    const duVal = ymdInt(du.trim());
+    return addTwoYearsInt(caOk ? Math.max(duVal, ymdInt(ca) + 1) : duVal);
+  }
+  return caOk ? addTwoYearsInt(ymdInt(ca) + 1) : 99999999;
+}
+
+function holdUntilInt(log: Record<string, unknown>): number {
+  return isRuleYmd(log.retainUntil)
+    ? ymdInt(log.retainUntil.trim())
+    : fallbackUntilInt(log.dateUsed, log.createdAt);
+}
+
+function affectedTopKeys(a: Record<string, unknown>, b: Record<string, unknown>): string[] {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  const out: string[] = [];
+  for (const k of keys) {
+    if (!(k in a) || !(k in b) || stableJson(a[k]) !== stableJson(b[k])) out.push(k);
+  }
+  return out;
+}
+
+function nonBlankStr(v: unknown): v is string {
+  return typeof v === "string" && v.trim().length > 0;
+}
+
+/**
+ * True when updating an existing `shops/{shopId}/logs/{logId}` document from `prev` to
+ * `next` is permitted by `firestore.rules` (`reviewedChangeOk` / `unreviewedEditOk`).
+ */
+export function canUpdateSubcollectionLog(prev: ApplicationLog, next: ApplicationLog): boolean {
+  if (prev.id !== next.id || !nonBlankStr(next.id)) return false;
+  const p = prev as unknown as Record<string, unknown>;
+  const n = next as unknown as Record<string, unknown>;
+  if (!isLogReviewed(prev)) {
+    const diff = affectedTopKeys(p, n);
+    if (!diff.some((k) => k === "retainUntil" || k === "dateUsed" || k === "createdAt")) {
+      return true;
+    }
+    if (isRuleYmd(n.retainUntil) && ymdInt(n.retainUntil.trim()) >= holdUntilInt(p)) {
+      return true;
+    }
+    return (
+      !("retainUntil" in p) &&
+      !("retainUntil" in n) &&
+      fallbackUntilInt(n.dateUsed, n.createdAt) >= fallbackUntilInt(p.dateUsed, p.createdAt)
+    );
+  }
+  if (!isLogReviewed(next)) return false;
+  const priorHistory = Array.isArray(p.history) ? p.history : [];
+  const prevRev = typeof p.revision === "number" ? p.revision : priorHistory.length;
+  const nextRev = typeof n.revision === "number" ? n.revision : -1;
+  const prevRetain = typeof p.retainUntil === "string" ? p.retainUntil : "";
+  const nextRetain = typeof n.retainUntil === "string" ? n.retainUntil : "";
+  if (nextRev === prevRev + 1) {
+    const diff = affectedTopKeys(p, n);
+    if (diff.some((k) => k === "id" || k === "createdAt" || k === "reviewedAt" || k === "reviewedBy" || k === "reuploads")) {
+      return false;
+    }
+    if (nextRetain < prevRetain) return false;
+    const nextHistory = Array.isArray(n.history) ? n.history : null;
+    if (!nextHistory || nextHistory.length !== priorHistory.length + 1) return false;
+    if (stableJson(nextHistory.slice(0, priorHistory.length)) !== stableJson(priorHistory)) return false;
+    const entry = nextHistory[priorHistory.length] as Record<string, unknown> | null;
+    if (!entry || typeof entry !== "object") return false;
+    if (
+      entry.revision !== prevRev + 1 ||
+      !nonBlankStr(entry.changedAt) ||
+      !nonBlankStr(entry.changedBy) ||
+      !nonBlankStr(entry.reason) ||
+      !Array.isArray(entry.changes) ||
+      entry.changes.length === 0
+    ) {
+      return false;
+    }
+    const snap = entry.priorSnapshot as Record<string, unknown> | null;
+    if (!snap || typeof snap !== "object" || Array.isArray(snap)) return false;
+    if ("history" in snap || "reuploads" in snap || "retainUntil" in snap) return false;
+    const snapDiff = affectedTopKeys(p, snap);
+    return snapDiff.every((k) => k === "history" || k === "reuploads" || k === "retainUntil");
+  }
+  const diff = affectedTopKeys(p, n);
+  if (!diff.every((k) => k === "retainUntil" || k === "reuploads")) return false;
+  if (nextRetain < prevRetain) return false;
+  const beforeReuploads = Array.isArray(p.reuploads) ? p.reuploads : [];
+  if (beforeReuploads.length === 0) return true;
+  const nextReuploads = Array.isArray(n.reuploads) ? n.reuploads : null;
+  if (!nextReuploads || nextReuploads.length < beforeReuploads.length) return false;
+  return stableJson(nextReuploads.slice(0, beforeReuploads.length)) === stableJson(beforeReuploads);
+}
+
 /**
  * #215: plan migrating winners from a legacy `shops/{shopId}.logs` array into
  * `shops/{shopId}/logs/{logId}` and draining removable entries from `shops/{shopId}.logs`
@@ -218,16 +326,28 @@ export function planLegacyDrain(
   const nextIds = new Set(nextLogs.map((l) => l.id));
   const winnersToCreate: LegacyWinnerToMigrate[] = [];
   const queuedWinnerIds = new Set<string>();
+  const blockedWinnerIds = new Set<string>();
 
   for (let i = 0; i < legacyLogs.length; i++) {
     const id = legacyLogs[i].id;
-    if (subLogs.has(id) || queuedWinnerIds.has(id)) continue;
+    if (queuedWinnerIds.has(id) || blockedWinnerIds.has(id)) continue;
     const w = winnerById.get(id)!;
+    const existingSub = subLogs.get(id);
+    const rawIdx = legacyLogs.indexOf(w);
+    const raw =
+      rawIdx >= 0 && rawIdx < rawLegacyLogs.length && rawLegacyLogs[rawIdx] !== undefined
+        ? rawLegacyLogs[rawIdx]
+        : w;
+    if (existingSub) {
+      if (stableJson(existingSub) === winnerJsonById.get(id)) continue;
+      if (!canUpdateSubcollectionLog(existingSub, raw as ApplicationLog)) {
+        blockedWinnerIds.add(id);
+        continue;
+      }
+    }
     // Migrate the winner unless the caller omitted an unreviewed log (expired hold deletion).
     if (nextIds.has(id) || isLogReviewed(w)) {
       queuedWinnerIds.add(id);
-      const rawIdx = legacyLogs.indexOf(w);
-      const raw = rawIdx >= 0 && rawIdx < rawLegacyLogs.length && rawLegacyLogs[rawIdx] !== undefined ? rawLegacyLogs[rawIdx] : w;
       winnersToCreate.push({ id, log: w, raw });
     }
   }
@@ -242,7 +362,10 @@ export function planLegacyDrain(
   for (let i = 0; i < legacyLogs.length; i++) {
     const c = legacyLogs[i];
     const isWinnerCopy = stableJson(c) === winnerJsonById.get(c.id);
-    if (isWinnerCopy || (setAsideOk && !isLogReviewed(c))) {
+    if (
+      (isWinnerCopy && !blockedWinnerIds.has(c.id)) ||
+      (!isWinnerCopy && setAsideOk && !isLogReviewed(c))
+    ) {
       removableIndices.push(i);
       removableSet.add(i);
     }
