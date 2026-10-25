@@ -717,6 +717,25 @@ describe("#215: migrating legacy shop docs that still carry a logs array", () =>
     await assertSucceeds(putShopDoc(TECH, [rEarly]));
   });
 
+  it("draining a legacy array where stored entries omit history passes when kept entries preserve exact raw shape", async () => {
+    const { history: _h1, ...rawLate } = reviewed(makeLog("R", { serviceAddress: "200 Oak Ave" }), {
+      reviewedAt: "2026-10-02T18:00:00-05:00",
+      reviewedBy: "Ben Office",
+    });
+    const { history: _h2, ...rawEarly } = reviewed(makeLog("R", { serviceAddress: "100 Main St" }), {
+      reviewedAt: "2026-10-01T18:00:00-05:00",
+      reviewedBy: "Ana Office",
+    });
+    const { history: _h3, ...rawU } = makeLog("U");
+    await seedLegacy([rawLate, rawEarly, rawU]);
+    await assertSucceeds(putLog(TECH, rawLate));
+    await assertSucceeds(putLog(TECH, rawU));
+    // Rewriting the kept rawEarly with normalized history: [] is denied because it does not match resource.data.logs[1].
+    await assertFails(putShopDoc(TECH, [{ ...rawEarly, history: [] }]));
+    // Preserving the exact raw shape of rawEarly passes.
+    await assertSucceeds(putShopDoc(TECH, [rawEarly]));
+  });
+
     it("removing an expired unreviewed log from shops/{shopId}.logs without creating a subcollection doc passes", async () => {
     const r = reviewed(makeLog("R"));
     const expired = oldLog("OLD");

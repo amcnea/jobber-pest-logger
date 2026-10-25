@@ -64,18 +64,37 @@ vi.mock("firebase/firestore", () => {
       }
     },
     runTransaction: async (_db: unknown, fn: (t: unknown) => Promise<void>) => {
-      let staged: Record<string, unknown> | null = null;
+      let stagedShop: Record<string, unknown> | null = null;
+      const stagedLogs: { id: string; data: Record<string, unknown> | null }[] = [];
       await fn({
         get: async () => snap(),
-        set: (_ref: unknown, value: Record<string, unknown>) => {
-          staged = JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+        set: (ref: { path?: string; id?: string }, value: Record<string, unknown>) => {
+          const cloned = JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+          if (ref?.path?.includes("/logs/") && ref.id) {
+            stagedLogs.push({ id: ref.id, data: cloned });
+          } else {
+            stagedShop = cloned;
+          }
+        },
+        delete: (ref: { path?: string; id?: string }) => {
+          if (ref?.id) {
+            stagedLogs.push({ id: ref.id, data: null });
+          }
         },
         update: () => {},
       });
       if (fake.failWrite) throw fake.failWrite;
-      if (staged) {
-        fake.data = staged;
-        fake.writes.push(staged);
+      for (const op of stagedLogs) {
+        if (op.data === null) {
+          fake.subLogs.delete(op.id);
+        } else {
+          fake.subLogs.set(op.id, op.data);
+        }
+        fake.logWrites.push(op);
+      }
+      if (stagedShop) {
+        fake.data = stagedShop;
+        fake.writes.push(stagedShop);
       }
     },
   };
@@ -90,7 +109,7 @@ const {
   DUPLICATE_ID_SET_ASIDE_REASON,
   MAX_DEDUPE_CLEANUP_BATCH,
 } = await import("./dedupeLogs");
-const { RemoteShopStore } = await import("./RemoteShopStore");
+const { RemoteShopStore, MAX_LOG_WRITES_PER_TX } = await import("./RemoteShopStore");
 const { enqueueLogOutbox, flushLogOutbox, outboxEntriesForShop, syncLogToRemote } = await import("./logOutbox");
 const { REMOTE_COPY_KEPT_ERROR } = await import("./logOutbox");
 const { takeShopCopy } = await import("./conflicts");
@@ -159,7 +178,7 @@ function versions() {
   return { rev0, rev1, rev2, rev1Early, rev1Late, reviewedEarly, reviewedLate, reviewedRev0, reviewedRev1 };
 }
 
-function shopDoc(logs: ApplicationLog[], extra: Partial<ShopDocument> = {}): Record<string, unknown> {
+function shopDoc(logs: unknown[], extra: Partial<ShopDocument> = {}): Record<string, unknown> {
   return {
     version: "1",
     updatedAt: "2026-10-01T00:00:00.000Z",
@@ -310,6 +329,34 @@ describe("write plan (#208 compatible)", () => {
     expect(plan.remainingLegacy).toEqual([v.reviewedEarly]);
     expect(plan.drainBatches).toEqual([[v.reviewedEarly]]);
   });
+
+  it("#215: planLegacyDrain preserves raw legacy entries without normalized defaults (e.g. history) in drainBatches and remainingLegacy", () => {
+    const v = versions();
+    const rawLate = clone(v.reviewedLate) as unknown as Record<string, unknown>;
+    const rawEarly = clone(v.reviewedEarly) as unknown as Record<string, unknown>;
+    delete rawLate.history;
+    delete rawEarly.history;
+    const legacy = [v.reviewedLate, v.reviewedEarly];
+    const rawLegacy = [rawLate, rawEarly];
+    const plan = planLegacyDrain(new Map(), legacy, rawLegacy, [v.reviewedLate], true);
+    expect(plan.winnersToCreate[0].raw).toEqual(rawLate);
+    expect("history" in (plan.winnersToCreate[0].raw as Record<string, unknown>)).toBe(false);
+    expect(plan.drainBatches).toEqual([[rawEarly as unknown as ApplicationLog]]);
+    expect(plan.remainingLegacy).toEqual([rawEarly as unknown as ApplicationLog]);
+    expect("history" in (plan.remainingLegacy[0] as unknown as Record<string, unknown>)).toBe(false);
+
+    // No-removals path (winner already in subLogs, only reviewed loser remains in legacyLogs):
+    const noRemovals = planLegacyDrain(
+      new Map([["L1", v.reviewedLate]]),
+      [v.reviewedEarly],
+      [rawEarly],
+      [v.reviewedLate],
+      true,
+    );
+    expect(noRemovals.drainBatches).toEqual([]);
+    expect(noRemovals.remainingLegacy).toEqual([rawEarly as unknown as ApplicationLog]);
+    expect("history" in (noRemovals.remainingLegacy[0] as unknown as Record<string, unknown>)).toBe(false);
+  });
 });
 
 describe("RemoteShopStore read path", () => {
@@ -396,6 +443,31 @@ describe("RemoteShopStore write path", () => {
     expect(setAsideRows()).toHaveLength(2);
   });
 
+  it("#215: putShop preserves raw legacy entries without history across drain batches and subsequent writes", async () => {
+    const v = versions();
+    const rawLate = clone(v.reviewedLate) as unknown as Record<string, unknown>;
+    const rawEarly = clone(v.reviewedEarly) as unknown as Record<string, unknown>;
+    delete rawLate.history;
+    delete rawEarly.history;
+    fake.data = shopDoc([rawLate, rawEarly]);
+    const store = new RemoteShopStore(CONFIG, SHOP);
+    await enqueueLogOutbox(SHOP, makeLog({ id: "N" }));
+    expect(await flushLogOutbox(store, SHOP)).toEqual({ ok: true, flushed: 1, remaining: 0 });
+    expect(fake.subLogs.get("L1")).toEqual(rawLate);
+    expect("history" in (fake.subLogs.get("L1") as Record<string, unknown>)).toBe(false);
+    expect(fake.writes[0].logs).toEqual([rawEarly]);
+    expect("history" in ((fake.writes[0].logs as Record<string, unknown>[])[0])).toBe(false);
+    expect(fake.writes[1].logs).toEqual([rawEarly]);
+    expect("history" in ((fake.writes[1].logs as Record<string, unknown>[])[0])).toBe(false);
+
+    // Subsequent write reusing cached state also keeps rawEarly without history:
+    await enqueueLogOutbox(SHOP, makeLog({ id: "M" }));
+    expect(await flushLogOutbox(store, SHOP)).toEqual({ ok: true, flushed: 1, remaining: 0 });
+    expect(fake.writes[2].logs).toEqual([rawEarly]);
+    expect("history" in ((fake.writes[2].logs as Record<string, unknown>[])[0])).toBe(false);
+    expect(setAsideRows()).toHaveLength(1);
+  });
+
   it("an unreviewed device copy is refused against the reviewed winner (conflict screen), not merged over the stray", async () => {
     const v = versions();
     fake.data = shopDoc([v.rev2, v.reviewedRev0]);
@@ -441,6 +513,50 @@ describe("RemoteShopStore write path", () => {
     expect(res).toMatchObject({ ok: false, conflict: true });
     expect(fake.writes).toEqual([]);
     expect(fake.logWrites).toEqual([]);
+  });
+
+  it("#215: when remote updatedAt changes after getShop (cached state is stale), putShop conflicts inside CAS without overwriting or deleting any per-log doc", async () => {
+    const logA = makeLog({ id: "a", serviceAddress: "1 Original St" });
+    const logB = makeLog({ id: "b", serviceAddress: "2 Keep St" });
+    fake.data = shopDoc([]);
+    fake.subLogs.set("a", clone(logA) as unknown as Record<string, unknown>);
+    fake.subLogs.set("b", clone(logB) as unknown as Record<string, unknown>);
+
+    // Device A reads the shop and caches updatedAt = "2026-10-01T00:00:00.000Z".
+    const storeA = new RemoteShopStore(CONFIG, SHOP);
+    const gotA = await storeA.getShop();
+    if (!gotA.ok) throw new Error(gotA.error);
+
+    // Device B edits log "a" and commits, advancing remote updatedAt.
+    const logAByB = { ...logA, revision: 1, serviceAddress: "1 Edited By B St" };
+    fake.subLogs.set("a", clone(logAByB) as unknown as Record<string, unknown>);
+    fake.data = { ...fake.data, updatedAt: "2026-10-02T00:00:00.000Z" };
+
+    // Device A now attempts to overwrite "a" with its stale edit and delete "b".
+    const staleA = { ...logA, revision: 1, serviceAddress: "1 Stale Edit By A St" };
+    const res = await storeA.putShop({ ...gotA.value, logs: [staleA] });
+    expect(res).toMatchObject({ ok: false, conflict: true });
+    // Neither "a" nor "b" was overwritten or deleted in shops/{shopId}/logs/{logId}.
+    expect(fake.logWrites).toEqual([]);
+    expect(fake.writes).toEqual([]);
+    expect(fake.subLogs.get("a")).toEqual(logAByB);
+    expect(fake.subLogs.get("b")).toEqual(logB);
+  });
+
+  it("#215: chunks >499 per-log writes across CAS transactions of <=499 log writes + 1 shop write", async () => {
+    expect(MAX_LOG_WRITES_PER_TX).toBe(499);
+    fake.data = shopDoc([]);
+    const store = new RemoteShopStore(CONFIG, SHOP);
+    const got = await store.getShop();
+    if (!got.ok) throw new Error(got.error);
+
+    const manyLogs = Array.from({ length: 505 }, (_, i) => makeLog({ id: `L${i}`, serviceAddress: `${i} Bulk St` }));
+    const res = await store.putShop({ ...got.value, logs: manyLogs });
+    expect(res.ok).toBe(true);
+    expect(fake.subLogs.size).toBe(505);
+    // 505 log writes split across 2 CAS transactions (499 + 6), each updating the shop doc once.
+    expect(fake.writes).toHaveLength(2);
+    expect(fake.logWrites).toHaveLength(505);
   });
 
   it("#215 / #228: drains >8 (40) legacy entries in <=8-entry batches after writing winners to shops/{shopId}/logs/{logId}", async () => {

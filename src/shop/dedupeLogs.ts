@@ -190,7 +190,10 @@ export interface LegacyDrainPlan {
 /**
  * #215: plan migrating winners from a legacy `shops/{shopId}.logs` array into
  * `shops/{shopId}/logs/{logId}` and draining removable entries from `shops/{shopId}.logs`
- * in batches of <= MAX_DEDUPE_CLEANUP_BATCH (8).
+ * in batches of <= MAX_DEDUPE_CLEANUP_BATCH (8). Preserves the exact `rawLegacyLogs`
+ * objects for kept entries in `drainBatches` and `remainingLegacy` so Firestore rules
+ * (`before.removeAll(after)`) see unchanged raw maps even when `normalizeLog` added
+ * default fields like `history: []`.
  */
 export function planLegacyDrain(
   subLogs: ReadonlyMap<string, ApplicationLog>,
@@ -224,34 +227,43 @@ export function planLegacyDrain(
     if (nextIds.has(id) || isLogReviewed(w)) {
       queuedWinnerIds.add(id);
       const rawIdx = legacyLogs.indexOf(w);
-      const raw = rawIdx >= 0 && rawIdx < rawLegacyLogs.length ? rawLegacyLogs[rawIdx] : w;
+      const raw = rawIdx >= 0 && rawIdx < rawLegacyLogs.length && rawLegacyLogs[rawIdx] !== undefined ? rawLegacyLogs[rawIdx] : w;
       winnersToCreate.push({ id, log: w, raw });
     }
   }
 
+  const rawAt = (i: number): ApplicationLog =>
+    (i < rawLegacyLogs.length && rawLegacyLogs[i] !== undefined
+      ? rawLegacyLogs[i]
+      : legacyLogs[i]) as ApplicationLog;
+
   const removableIndices: number[] = [];
-  const remainingLegacy: ApplicationLog[] = [];
+  const removableSet = new Set<number>();
   for (let i = 0; i < legacyLogs.length; i++) {
     const c = legacyLogs[i];
     const isWinnerCopy = stableJson(c) === winnerJsonById.get(c.id);
     if (isWinnerCopy || (setAsideOk && !isLogReviewed(c))) {
       removableIndices.push(i);
-    } else {
-      remainingLegacy.push(c);
+      removableSet.add(i);
     }
   }
+
+  const remainingLegacy: ApplicationLog[] = legacyLogs
+    .map((_, i) => i)
+    .filter((i) => !removableSet.has(i))
+    .map(rawAt);
 
   if (removableIndices.length === 0) {
     return { winnersToCreate, drainBatches: [], remainingLegacy };
   }
 
   // Group identical removable entries together so dropping a group removes all copies of that
-  // JSON value at once; each batch drops <= MAX_DEDUPE_CLEANUP_BATCH total indices.
+  // raw JSON value at once; each batch drops <= MAX_DEDUPE_CLEANUP_BATCH total indices.
   const keptJsons = new Set(remainingLegacy.map((l) => stableJson(l)));
   const zeroCostIndices: number[] = [];
   const groupsByJson = new Map<string, number[]>();
   for (const idx of removableIndices) {
-    const json = stableJson(legacyLogs[idx]);
+    const json = stableJson(rawAt(idx));
     if (keptJsons.has(json)) {
       zeroCostIndices.push(idx);
     } else {
@@ -282,7 +294,10 @@ export function planLegacyDrain(
   const dropped = new Set<number>();
   const drainBatches: ApplicationLog[][] = chunks.map((chunk) => {
     for (const idx of chunk) dropped.add(idx);
-    return legacyLogs.filter((_, i) => !dropped.has(i));
+    return legacyLogs
+      .map((_, i) => i)
+      .filter((i) => !dropped.has(i))
+      .map(rawAt);
   });
 
   return { winnersToCreate, drainBatches, remainingLegacy };
