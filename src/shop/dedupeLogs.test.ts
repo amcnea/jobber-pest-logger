@@ -862,6 +862,60 @@ describe("RemoteShopStore write path", () => {
     expect((fake.data as unknown as ShopDocument).logs).toEqual([]);
   });
 
+  it("#215: when shops/{shopId}.logs has >48 entries, a caller-edited log at index >= 8 is prioritized into the 8 migrated winners and saved in a single flush", async () => {
+    const legacy = Array.from({ length: 60 }, (_, i) => makeLog({ id: `L${i}`, revision: 0 }));
+    fake.data = shopDoc(legacy);
+    const store = new RemoteShopStore(CONFIG, SHOP);
+    const editedL50 = makeLog({
+      id: "L50",
+      revision: 1,
+      serviceAddress: "50 Edited Legacy St",
+    });
+    await enqueueLogOutbox(SHOP, editedL50);
+    expect(await flushLogOutbox(store, SHOP)).toEqual({ ok: true, flushed: 1, remaining: 0 });
+    expect(fake.subLogs.get("L50")).toEqual(editedL50);
+    expect(outboxEntriesForShop(SHOP)).toEqual([]);
+    const got = await store.getShop();
+    expect(got.ok && got.value.logs.find((l) => l.id === "L50")).toEqual(editedL50);
+  });
+
+  it("#215: when >8 unmigrated legacy logs are edited in a single putShop while legacyLogs.length > 48, putShop migrates the first 8 and returns ok: false so the caller retries for the rest", async () => {
+    const legacy = Array.from({ length: 60 }, (_, i) => makeLog({ id: `L${i}`, revision: 0 }));
+    fake.data = shopDoc(legacy);
+    const store = new RemoteShopStore(CONFIG, SHOP);
+    const got1 = await store.getShop();
+    expect(got1.ok).toBe(true);
+    if (!got1.ok) return;
+
+    // Edit 10 legacy logs (L20..L29) in a single putShop call.
+    const editedLogs = got1.value.logs.map((l, idx) =>
+      idx >= 20 && idx < 30
+        ? { ...l, revision: 1, serviceAddress: `Edited ${l.id}`, updatedAt: "2026-10-17T18:00:00.000Z" }
+        : l,
+    );
+    const put1 = await store.putShop({ ...got1.value, logs: editedLogs });
+    expect(put1).toEqual({
+      ok: false,
+      error: "Log L28 is still being migrated; try again.",
+    });
+    // First 8 edited winners (L20..L27) were migrated to subLogs and drained from legacyLogs (52 remain).
+    expect(fake.subLogs.size).toBe(8);
+    expect(fake.subLogs.has("L20")).toBe(true);
+    expect(fake.subLogs.has("L27")).toBe(true);
+    expect(fake.subLogs.has("L28")).toBe(false);
+    expect((fake.data as unknown as ShopDocument).logs).toHaveLength(52);
+
+    // Retrying with the fresh snapshot migrates the remaining 2 edited winners (L28, L29) + 6 more and applies all 10 edits in Step C.
+    const got2 = await store.getShop();
+    expect(got2.ok).toBe(true);
+    if (!got2.ok) return;
+    const put2 = await store.putShop({ ...got2.value, logs: editedLogs });
+    expect(put2.ok).toBe(true);
+    for (let idx = 20; idx < 30; idx++) {
+      expect(fake.subLogs.get(`L${idx}`)).toEqual(editedLogs[idx]);
+    }
+  });
+
   it("#215: putShop rejects a disallowed caller update to an existing subcollection log instead of silently dropping it", async () => {
     const v = versions();
     fake.data = shopDoc([]);

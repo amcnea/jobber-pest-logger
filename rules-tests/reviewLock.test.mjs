@@ -16,6 +16,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  runTransaction,
   setDoc,
   updateDoc,
 } from "firebase/firestore";
@@ -889,7 +890,9 @@ describe("#215: migrating legacy shop docs that still carry a logs array", () =>
     );
     // If legacy[0] (already migrated to logs/L0 above) is drained without changing updatedAt (size 101 -> 100),
     // continuing the 101-sized cursor at start=48 is rejected, and a completed 101-sized cursor cannot satisfy legacyScannedTailOk on a 100-entry array.
-    await assertSucceeds(putShopDoc(TECH, [forgedR, ...legacy.slice(1)]));
+    await assertSucceeds(
+      putShopDoc(TECH, [forgedR, ...legacy.slice(1)], { updatedAt: "2026-10-01T15:00:00.000Z" }),
+    );
     await assertFails(
       setDoc(scanRef, {
         logId: "R98",
@@ -898,6 +901,54 @@ describe("#215: migrating legacy shop docs that still carry a logs array", () =>
         cursor: 96,
         shopUpdatedAt: "2026-10-01T15:00:00.000Z",
         legacySize: 100,
+      }),
+    );
+    // A cursor completed for the 101-entry array must not authorize a create on the 100-entry array.
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "shops", SHOP, "legacyScan", "cursor"), {
+        logId: "FRESH",
+        allowUnreviewed: false,
+        start: 96,
+        cursor: 144,
+        shopUpdatedAt: "2026-10-01T15:00:00.000Z",
+        legacySize: 101,
+      });
+    });
+    await assertFails(putLog(TECH, makeLog("FRESH")));
+  });
+
+  it("#252: multi-write CAS transactions pass Firestore rule limits for a 48-entry legacy migration and a 499-log update", async () => {
+    // 1) 48-entry unreviewed legacy array: creating all 48 winners + updating shops/SHOP1 in a single runTransaction passes.
+    const legacy48 = Array.from({ length: 48 }, (_, i) => makeLog(`L${i}`));
+    await seedLegacy(legacy48);
+    const techDb = env.authenticatedContext(TECH).firestore();
+    await assertSucceeds(
+      runTransaction(techDb, async (tx) => {
+        await tx.get(doc(techDb, "shops", SHOP));
+        for (const l of legacy48) {
+          tx.set(doc(techDb, "shops", SHOP, "logs", l.id), l);
+        }
+        tx.set(doc(techDb, "shops", SHOP), shopDoc(legacy48, { updatedAt: "2026-10-02T15:00:00.000Z" }));
+      }),
+    );
+
+    // 2) 499-log update in a single runTransaction (with shops/SHOP1.logs = []) passes isShopMember + unreviewedEditOk across all 499 logs.
+    await env.clearFirestore();
+    const logs499 = Array.from({ length: 499 }, (_, i) => makeLog(`U${i}`));
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      await setDoc(doc(db, "shops", SHOP), shopDoc([]));
+      for (const l of logs499) {
+        await setDoc(doc(db, "shops", SHOP, "logs", l.id), l);
+      }
+    });
+    await assertSucceeds(
+      runTransaction(techDb, async (tx) => {
+        await tx.get(doc(techDb, "shops", SHOP));
+        for (const l of logs499) {
+          tx.set(doc(techDb, "shops", SHOP, "logs", l.id), { ...l, notes: "updated", revision: 1 });
+        }
+        tx.set(doc(techDb, "shops", SHOP), shopDoc([], { updatedAt: "2026-10-03T15:00:00.000Z" }));
       }),
     );
   });

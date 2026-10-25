@@ -600,6 +600,19 @@ export class RemoteShopStore implements ShopStore {
       // and update `shops/{shopId}` inside the CAS transaction.
       const nextById = new Map(nextLogs.map((l) => [l.id, l]));
       const deferredLegacyIds = new Set(migration.remainingLegacy.map((l) => l.id));
+      const storedById = new Map(stored.doc.logs.map((l) => [l.id, l]));
+      const droppedEdit = nextLogs.find(
+        (log) =>
+          !liveSubLogs.has(log.id) &&
+          deferredLegacyIds.has(log.id) &&
+          stableJson(storedById.get(log.id)) !== stableJson(log),
+      );
+      if (droppedEdit) {
+        return {
+          ok: false,
+          error: `Log ${droppedEdit.id} is still being migrated; try again.`,
+        };
+      }
       const changed = nextLogs.filter((log) => {
         const prev = liveSubLogs.get(log.id);
         if (!prev) {

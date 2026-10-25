@@ -329,17 +329,20 @@ export function planLegacyDrain(
     winnerJsonById.set(w.id, stableJson(w));
   }
 
-  const nextIds = new Set(nextLogs.map((l) => l.id));
+  const nextById = new Map(nextLogs.map((l) => [l.id, l]));
+  const nextIds = new Set(nextById.keys());
   const winnersToCreate: LegacyWinnerToMigrate[] = [];
   const queuedWinnerIds = new Set<string>();
   const blockedWinnerIds = new Set<string>();
   const deferredIds = new Set<string>();
   const needsScanForUnreviewedCreate = legacyLogs.length > 48;
-  let unreviewedCreatesQueued = 0;
+  const directCandidates: LegacyWinnerToMigrate[] = [];
+  const editedScanCandidates: LegacyWinnerToMigrate[] = [];
+  const unchangedScanCandidates: LegacyWinnerToMigrate[] = [];
 
   for (let i = 0; i < legacyLogs.length; i++) {
     const id = legacyLogs[i].id;
-    if (queuedWinnerIds.has(id) || blockedWinnerIds.has(id) || deferredIds.has(id)) continue;
+    if (queuedWinnerIds.has(id) || blockedWinnerIds.has(id)) continue;
     const w = winnerById.get(id)!;
     const existingSub = subLogs.get(id);
     const rawIdx = legacyLogs.indexOf(w);
@@ -356,20 +359,29 @@ export function planLegacyDrain(
     }
     // Migrate the winner unless the caller omitted an unreviewed log (expired hold deletion).
     if (nextIds.has(id) || isLogReviewed(w)) {
-      if (
-        needsScanForUnreviewedCreate &&
-        !existingSub &&
-        !isLogReviewed(w) &&
-        unreviewedCreatesQueued >= MAX_DEDUPE_CLEANUP_BATCH
-      ) {
-        deferredIds.add(id);
-        continue;
-      }
-      if (needsScanForUnreviewedCreate && !existingSub && !isLogReviewed(w)) {
-        unreviewedCreatesQueued++;
-      }
       queuedWinnerIds.add(id);
-      winnersToCreate.push({ id, log: w, raw });
+      const item: LegacyWinnerToMigrate = { id, log: w, raw };
+      if (needsScanForUnreviewedCreate && !existingSub && !isLogReviewed(w)) {
+        const nextLog = nextById.get(id);
+        const callerEdited = Boolean(nextLog && stableJson(nextLog) !== winnerJsonById.get(id));
+        if (callerEdited) {
+          editedScanCandidates.push(item);
+        } else {
+          unchangedScanCandidates.push(item);
+        }
+      } else {
+        directCandidates.push(item);
+      }
+    }
+  }
+
+  winnersToCreate.push(...directCandidates);
+  const scanOrdered = [...editedScanCandidates, ...unchangedScanCandidates];
+  for (let i = 0; i < scanOrdered.length; i++) {
+    if (i < MAX_DEDUPE_CLEANUP_BATCH) {
+      winnersToCreate.push(scanOrdered[i]);
+    } else {
+      deferredIds.add(scanOrdered[i].id);
     }
   }
 
