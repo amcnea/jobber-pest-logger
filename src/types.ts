@@ -171,10 +171,12 @@ export interface SetAsideCopy {
   deviceCopy: ApplicationLog;
   /** ISO with local offset. */
   setAsideAt: string;
-  /** Roster person name. */
+  /** Roster person name ("" when set aside automatically by `reason`). */
   setAsideBy: string;
   /** Shared shop the conflict was with ("" if unknown). */
   shopId: string;
+  /** Automatic set-aside reason, e.g. "duplicate-id" (#211); omitted on sync-conflict rows. */
+  reason?: string;
 }
 
 export interface ShopSettings {
