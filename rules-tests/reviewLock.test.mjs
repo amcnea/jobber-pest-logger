@@ -793,7 +793,7 @@ describe("#215: migrating legacy shop docs that still carry a logs array", () =>
     // Reviewed winner R98 can still be created directly (request.resource.data in legacy && isReviewedLog).
     await assertSucceeds(putLog(TECH, legacy[98]));
 
-    // Advancing legacyScan/cursor in 32-entry steps (0->32->64->96->128) for L0 (allowUnreviewed=true) verifies all 101 slots, then creating L0 succeeds.
+    // Advancing legacyScan/cursor in 48-entry steps (0->48->96->144) for L0 (allowUnreviewed=true) verifies all 101 slots, then creating L0 succeeds.
     for (let s = 0; s < 96; s += 48) {
       await assertSucceeds(
         setDoc(scanRef, {
@@ -802,6 +802,7 @@ describe("#215: migrating legacy shop docs that still carry a logs array", () =>
           start: s,
           cursor: s + 48,
           shopUpdatedAt: "2026-10-01T15:00:00.000Z",
+          legacySize: 101,
         }),
       );
     }
@@ -814,11 +815,12 @@ describe("#215: migrating legacy shop docs that still carry a logs array", () =>
         start: 96,
         cursor: 144,
         shopUpdatedAt: "2026-10-01T15:00:00.000Z",
+        legacySize: 101,
       }),
     );
     await assertSucceeds(putLog(TECH, legacy[0]));
 
-    // Advancing legacyScan/cursor in 32-entry steps for BRAND_NEW (allowUnreviewed=false) verifies all 101 slots, then creating BRAND_NEW succeeds.
+    // Advancing legacyScan/cursor in 48-entry steps for BRAND_NEW (allowUnreviewed=false) verifies all 101 slots, then creating BRAND_NEW succeeds.
     await assertSucceeds(deleteDoc(scanRef));
     for (let s = 0; s < 101; s += 48) {
       await assertSucceeds(
@@ -828,12 +830,13 @@ describe("#215: migrating legacy shop docs that still carry a logs array", () =>
           start: s,
           cursor: s + 48,
           shopUpdatedAt: "2026-10-01T15:00:00.000Z",
+          legacySize: 101,
         }),
       );
     }
     await assertSucceeds(putLog(TECH, makeLog("BRAND_NEW")));
 
-    // Attempting to plant forgedR at logs/R98 via legacyScan/cursor fails when advancing cursor to 128 because slot 99 holds reviewed R98.
+    // Attempting to plant forgedR at logs/R98 via legacyScan/cursor fails when advancing cursor to 144 because slot 99 holds reviewed R98.
     await env.withSecurityRulesDisabled(async (ctx) => {
       await deleteDoc(doc(ctx.firestore(), "shops", SHOP, "logs", "R98"));
     });
@@ -846,6 +849,7 @@ describe("#215: migrating legacy shop docs that still carry a logs array", () =>
           start: s,
           cursor: s + 48,
           shopUpdatedAt: "2026-10-01T15:00:00.000Z",
+          legacySize: 101,
         }),
       );
     }
@@ -856,9 +860,46 @@ describe("#215: migrating legacy shop docs that still carry a logs array", () =>
         start: 96,
         cursor: 144,
         shopUpdatedAt: "2026-10-01T15:00:00.000Z",
+        legacySize: 101,
       }),
     );
     await assertFails(putLog(TECH, forgedR));
+
+    // #249: legacyScan/cursor is bound to legacySize so draining entries without changing updatedAt cannot reuse a cursor across a shifted legacy array.
+    await assertSucceeds(
+      setDoc(scanRef, {
+        logId: "R98",
+        allowUnreviewed: true,
+        start: 0,
+        cursor: 48,
+        shopUpdatedAt: "2026-10-01T15:00:00.000Z",
+        legacySize: 101,
+      }),
+    );
+    // Writing a cursor step with a mismatched legacySize is rejected.
+    await assertFails(
+      setDoc(scanRef, {
+        logId: "R98",
+        allowUnreviewed: true,
+        start: 48,
+        cursor: 96,
+        shopUpdatedAt: "2026-10-01T15:00:00.000Z",
+        legacySize: 100,
+      }),
+    );
+    // If legacy[0] (already migrated to logs/L0 above) is drained without changing updatedAt (size 101 -> 100),
+    // continuing the 101-sized cursor at start=48 is rejected, and a completed 101-sized cursor cannot satisfy legacyScannedTailOk on a 100-entry array.
+    await assertSucceeds(putShopDoc(TECH, [forgedR, ...legacy.slice(1)]));
+    await assertFails(
+      setDoc(scanRef, {
+        logId: "R98",
+        allowUnreviewed: true,
+        start: 48,
+        cursor: 96,
+        shopUpdatedAt: "2026-10-01T15:00:00.000Z",
+        legacySize: 100,
+      }),
+    );
   });
 });
 

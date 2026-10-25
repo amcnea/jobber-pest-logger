@@ -185,6 +185,12 @@ export interface LegacyDrainPlan {
   drainBatches: ApplicationLog[][];
   /** Entries that stay in `shops/{shopId}.logs` (e.g. #212 reviewed losers, or losers when !setAsideOk). */
   remainingLegacy: ApplicationLog[];
+  /**
+   * Log IDs whose legacy winner cannot overwrite the existing `shops/{shopId}/logs/{logId}`
+   * doc under `firestore.rules` (or whose unreviewed winner migration was deferred while
+   * `legacyLogs.length > 48`), so their legacy entries stay in `remainingLegacy`.
+   */
+  blockedWinnerIds: ReadonlySet<string>;
 }
 
 const YMD_RE = /^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$/;
@@ -311,7 +317,7 @@ export function planLegacyDrain(
   setAsideOk: boolean,
 ): LegacyDrainPlan {
   if (legacyLogs.length === 0) {
-    return { winnersToCreate: [], drainBatches: [], remainingLegacy: [] };
+    return { winnersToCreate: [], drainBatches: [], remainingLegacy: [], blockedWinnerIds: new Set() };
   }
 
   const allStored = [...subLogs.values(), ...legacyLogs];
@@ -327,10 +333,13 @@ export function planLegacyDrain(
   const winnersToCreate: LegacyWinnerToMigrate[] = [];
   const queuedWinnerIds = new Set<string>();
   const blockedWinnerIds = new Set<string>();
+  const deferredIds = new Set<string>();
+  const needsScanForUnreviewedCreate = legacyLogs.length > 48;
+  let unreviewedCreatesQueued = 0;
 
   for (let i = 0; i < legacyLogs.length; i++) {
     const id = legacyLogs[i].id;
-    if (queuedWinnerIds.has(id) || blockedWinnerIds.has(id)) continue;
+    if (queuedWinnerIds.has(id) || blockedWinnerIds.has(id) || deferredIds.has(id)) continue;
     const w = winnerById.get(id)!;
     const existingSub = subLogs.get(id);
     const rawIdx = legacyLogs.indexOf(w);
@@ -347,6 +356,18 @@ export function planLegacyDrain(
     }
     // Migrate the winner unless the caller omitted an unreviewed log (expired hold deletion).
     if (nextIds.has(id) || isLogReviewed(w)) {
+      if (
+        needsScanForUnreviewedCreate &&
+        !existingSub &&
+        !isLogReviewed(w) &&
+        unreviewedCreatesQueued >= MAX_DEDUPE_CLEANUP_BATCH
+      ) {
+        deferredIds.add(id);
+        continue;
+      }
+      if (needsScanForUnreviewedCreate && !existingSub && !isLogReviewed(w)) {
+        unreviewedCreatesQueued++;
+      }
       queuedWinnerIds.add(id);
       winnersToCreate.push({ id, log: w, raw });
     }
@@ -363,8 +384,9 @@ export function planLegacyDrain(
     const c = legacyLogs[i];
     const isWinnerCopy = stableJson(c) === winnerJsonById.get(c.id);
     if (
-      (isWinnerCopy && !blockedWinnerIds.has(c.id)) ||
-      (!isWinnerCopy && setAsideOk && !isLogReviewed(c))
+      !deferredIds.has(c.id) &&
+      ((isWinnerCopy && !blockedWinnerIds.has(c.id)) ||
+        (!isWinnerCopy && setAsideOk && !isLogReviewed(c)))
     ) {
       removableIndices.push(i);
       removableSet.add(i);
@@ -377,7 +399,7 @@ export function planLegacyDrain(
     .map(rawAt);
 
   if (removableIndices.length === 0) {
-    return { winnersToCreate, drainBatches: [], remainingLegacy };
+    return { winnersToCreate, drainBatches: [], remainingLegacy, blockedWinnerIds };
   }
 
   // Group identical removable entries together so dropping a group removes all copies of that
@@ -423,7 +445,7 @@ export function planLegacyDrain(
       .map(rawAt);
   });
 
-  return { winnersToCreate, drainBatches, remainingLegacy };
+  return { winnersToCreate, drainBatches, remainingLegacy, blockedWinnerIds };
 }
 
 export interface DedupeCleanupStep {

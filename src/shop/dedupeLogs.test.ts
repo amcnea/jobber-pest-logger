@@ -814,26 +814,70 @@ describe("RemoteShopStore write path", () => {
     expect((fake.data as unknown as ShopDocument).logs).toEqual([v.reviewedLate]);
   });
 
-  it("#215: when shops/{shopId}.logs has >96 entries, putShop advances shops/{shopId}/legacyScan/cursor in 48-entry windows before creating unreviewed winners and drains the legacy array", async () => {
+  it("#215: when shops/{shopId}.logs has >96 entries, putShop caps unreviewed scan winners to 8 per save, advances shops/{shopId}/legacyScan/cursor with legacySize in 48-entry windows, and drains the rest across subsequent saves", async () => {
     const legacy = Array.from({ length: 100 }, (_, i) => makeLog({ id: `L${i}` }));
     fake.data = shopDoc(legacy);
     const store = new RemoteShopStore(CONFIG, SHOP);
     const logN = makeLog({ id: "N" });
     await enqueueLogOutbox(SHOP, logN);
     expect(await flushLogOutbox(store, SHOP)).toEqual({ ok: true, flushed: 1, remaining: 0 });
-    expect(fake.subLogs.size).toBe(101);
-    expect(fake.subLogs.get("L99")).toEqual(legacy[99]);
+    // First save migrates 8 unreviewed legacy winners + new log N (9 total in subLogs) and drains 8 entries from legacy (92 remain).
+    expect(fake.subLogs.size).toBe(9);
+    expect(fake.subLogs.get("L0")).toEqual(legacy[0]);
+    expect(fake.subLogs.get("L7")).toEqual(legacy[7]);
+    expect(fake.subLogs.has("L8")).toBe(false);
     expect(fake.subLogs.get("N")).toEqual(logN);
-    expect((fake.data as unknown as ShopDocument).logs).toEqual([]);
+    expect((fake.data as unknown as ShopDocument).logs).toHaveLength(92);
     expect(
       fake.scanWrites.some(
         (w) =>
           w.logId === "L0" &&
           w.allowUnreviewed === true &&
           w.start === 96 &&
-          w.cursor === 144,
+          w.cursor === 144 &&
+          w.legacySize === 100,
       ),
     ).toBe(true);
+    expect(
+      fake.scanWrites.some(
+        (w) =>
+          w.logId === "N" &&
+          w.allowUnreviewed === false &&
+          w.start === 48 &&
+          w.cursor === 96 &&
+          w.legacySize === 92,
+      ),
+    ).toBe(true);
+
+    // Subsequent saves continue draining 8 unreviewed winners per save until <= 48 remain, then migrate the rest in one batch.
+    while (((fake.data as unknown as ShopDocument).logs ?? []).length > 0) {
+      const got = await store.getShop();
+      expect(got.ok).toBe(true);
+      if (!got.ok) break;
+      const put = await store.putShop(got.value);
+      expect(put.ok).toBe(true);
+    }
+    expect(fake.subLogs.size).toBe(101);
+    expect(fake.subLogs.get("L99")).toEqual(legacy[99]);
+    expect((fake.data as unknown as ShopDocument).logs).toEqual([]);
+  });
+
+  it("#215: putShop rejects a disallowed caller update to an existing subcollection log instead of silently dropping it", async () => {
+    const v = versions();
+    fake.data = shopDoc([]);
+    fake.subLogs.set("L1", clone(v.reviewedEarly) as unknown as Record<string, unknown>);
+    const store = new RemoteShopStore(CONFIG, SHOP);
+    const got = await store.getShop();
+    expect(got.ok).toBe(true);
+    if (!got.ok) return;
+
+    // Attempting to overwrite reviewedEarly with a same-revision tampered copy must return ok: false.
+    const res = await store.putShop({ ...got.value, logs: [v.reviewedLate] });
+    expect(res).toEqual({
+      ok: false,
+      error: "Log L1 can't be changed this way (review lock / retention hold).",
+    });
+    expect(fake.subLogs.get("L1")).toEqual(v.reviewedEarly);
   });
 
   it("#246: getShop and ensureStoredForWrite validate the shop doc and subcollection log reads as one snapshot", async () => {

@@ -317,6 +317,7 @@ service cloud.firestore {
       let cursor = scanData.get('cursor', null);
       return cursor is int
         && cursor >= n
+        && scanData.get('legacySize', -1) == n
         && scanData.get('logId', null) == id
         && scanData.get('shopUpdatedAt', null) == shopSnap.data.get('updatedAt', null)
         && (allowUnreviewed || scanData.get('allowUnreviewed', false) == false);
@@ -338,24 +339,21 @@ service cloud.firestore {
       let snap = get(/databases/$(database)/documents/shops/$(shopId));
       let legacy = snap != null ? snap.data.get('logs', []) : [];
       let n = legacy.size();
-      let start = request.resource.data.get('start', null);
-      let nextCursor = request.resource.data.get('cursor', null);
-      let scanId = request.resource.data.get('logId', null);
-      let scanAllow = request.resource.data.get('allowUnreviewed', false);
-      let shopUpdatedAt = request.resource.data.get('shopUpdatedAt', null);
+      let d = request.resource.data;
+      let start = d.start;
       return snap != null
         && isMemberData(snap.data)
-        && request.resource.data.keys().hasOnly(['logId', 'allowUnreviewed', 'start', 'cursor', 'shopUpdatedAt'])
-        && scanId is string
-        && scanAllow is bool
-        && shopUpdatedAt is string
-        && shopUpdatedAt == snap.data.get('updatedAt', null)
+        && d.keys().hasOnly(['logId', 'allowUnreviewed', 'start', 'cursor', 'shopUpdatedAt', 'legacySize'])
+        && d.logId is string
+        && d.allowUnreviewed is bool
+        && d.shopUpdatedAt is string
+        && d.shopUpdatedAt == snap.data.get('updatedAt', null)
+        && d.legacySize == n
         && start is int
-        && nextCursor is int
         && start >= 0
         && start < n
-        && nextCursor == start + 48
-        && legacyChunk48Ok(legacy, n, start, scanId, scanAllow);
+        && d.cursor == start + 48
+        && legacyChunk48Ok(legacy, n, start, d.logId, d.allowUnreviewed);
     }
 
     function canCreateLog(shopId, logId) {
@@ -440,17 +438,18 @@ service cloud.firestore {
             request.resource == null
               ? isShopMember(shopId)
               : (
-                (
-                  resource == null || request.resource.data.get('start', null) == 0
-                    ? request.resource.data.get('start', null) == 0
+                legacyScanStepWriteOk(shopId)
+                && (
+                  resource == null || request.resource.data.start == 0
+                    ? request.resource.data.start == 0
                     : (
-                      resource.data.get('cursor', null) == request.resource.data.get('start', null)
-                      && resource.data.get('logId', null) == request.resource.data.get('logId', null)
-                      && resource.data.get('allowUnreviewed', false) == request.resource.data.get('allowUnreviewed', false)
-                      && resource.data.get('shopUpdatedAt', null) == request.resource.data.get('shopUpdatedAt', null)
+                      resource.data.cursor == request.resource.data.start
+                      && resource.data.logId == request.resource.data.logId
+                      && resource.data.allowUnreviewed == request.resource.data.allowUnreviewed
+                      && resource.data.shopUpdatedAt == request.resource.data.shopUpdatedAt
+                      && resource.data.legacySize == request.resource.data.legacySize
                     )
                 )
-                && legacyScanStepWriteOk(shopId)
               )
           );
       }

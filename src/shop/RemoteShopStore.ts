@@ -67,6 +67,7 @@ type FirestoreFns = {
     start: number;
     cursor: number;
     shopUpdatedAt: string;
+    legacySize: number;
   }) => Promise<void>;
   /**
    * Membership-only update (join / legacy claim). Does not rewrite logs/catalog.
@@ -532,6 +533,7 @@ export class RemoteShopStore implements ShopStore {
             start,
             cursor: start + 48,
             shopUpdatedAt: expected,
+            legacySize: legacyArr.length,
           });
         }
       };
@@ -556,10 +558,24 @@ export class RemoteShopStore implements ShopStore {
             liveSubLogs.set(item.id, item.log);
           }
         } else {
-          for (const item of migration.winnersToCreate) {
-            if (!liveSubLogs.has(item.id) && !item.log.reviewedAt) {
-              await advanceLegacyScanIfNeeded(stored.rawLegacyLogs, item.id, true);
+          const directItems = migration.winnersToCreate.filter(
+            (item) => liveSubLogs.has(item.id) || Boolean(item.log.reviewedAt),
+          );
+          if (directItems.length > 0) {
+            expected = await fs.commitWithCas(
+              expected,
+              { ...stored.doc, logs: stored.rawLegacyLogs as ApplicationLog[] },
+              directItems.map((item) => ({ id: item.id, data: item.raw })),
+            );
+            for (const item of directItems) {
+              liveSubLogs.set(item.id, item.log);
             }
+          }
+          const scanItems = migration.winnersToCreate
+            .filter((item) => !liveSubLogs.has(item.id) && !item.log.reviewedAt)
+            .slice(0, 8);
+          for (const item of scanItems) {
+            await advanceLegacyScanIfNeeded(stored.rawLegacyLogs, item.id, true);
             expected = await fs.commitWithCas(
               expected,
               { ...stored.doc, logs: stored.rawLegacyLogs as ApplicationLog[] },
@@ -583,12 +599,33 @@ export class RemoteShopStore implements ShopStore {
       // Step C + D: atomically verify `updatedAt`, write changed logs, delete removed logs,
       // and update `shops/{shopId}` inside the CAS transaction.
       const nextById = new Map(nextLogs.map((l) => [l.id, l]));
-      const puts = nextLogs
-        .filter((log) => {
-          const prev = liveSubLogs.get(log.id);
-          return !prev || (stableJson(prev) !== stableJson(log) && canUpdateSubcollectionLog(prev, log));
-        })
-        .map((log) => ({ id: log.id, data: log }));
+      const deferredLegacyIds = new Set(migration.remainingLegacy.map((l) => l.id));
+      const changed = nextLogs.filter((log) => {
+        const prev = liveSubLogs.get(log.id);
+        if (!prev) {
+          return !deferredLegacyIds.has(log.id);
+        }
+        if (stableJson(prev) === stableJson(log)) {
+          return false;
+        }
+        // If this ID has a blocked legacy winner that was already present in stored.doc.logs
+        // and the caller did not edit it, keep the existing subcollection doc untouched.
+        if (migration.blockedWinnerIds.has(log.id)) {
+          const storedMerged = stored.doc.logs.find((l) => l.id === log.id);
+          if (storedMerged && stableJson(storedMerged) === stableJson(log)) {
+            return false;
+          }
+        }
+        return true;
+      });
+      const refused = changed.find((log) => {
+        const prev = liveSubLogs.get(log.id);
+        return prev && !canUpdateSubcollectionLog(prev, log);
+      });
+      if (refused) {
+        throw new Error(`Log ${refused.id} can't be changed this way (review lock / retention hold).`);
+      }
+      const puts = changed.map((log) => ({ id: log.id, data: log }));
       const deletes = [...liveSubLogs.keys()].filter((id) => !nextById.has(id));
 
       if (migration.remainingLegacy.length > 48) {
