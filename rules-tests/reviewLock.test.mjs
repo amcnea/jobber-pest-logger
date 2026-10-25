@@ -1,7 +1,8 @@
-// Firestore rules: review lock on shared logs (#162). Runs against the emulator:
-//   cd rules-tests && npm ci && npm test   (Java 21+)
-// Writes mirror the client: RemoteShopStore.putShop sets the whole shops/{shopId} doc,
-// and logOutbox / mergeLogIntoSet replaces a log in place or prepends a new one.
+/**
+ * Firestore security rules tests for the review lock on shared logs (#162, #208, #215).
+ *
+ * Run via: npm run test:rules (starts the Firestore emulator around this file).
+ */
 import { readFileSync } from "node:fs";
 import { after, before, beforeEach, describe, it } from "node:test";
 import {
@@ -9,145 +10,180 @@ import {
   assertSucceeds,
   initializeTestEnvironment,
 } from "@firebase/rules-unit-testing";
-import { deleteDoc, doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  getDocs,
+  runTransaction,
+  setDoc,
+  updateDoc,
+} from "firebase/firestore";
 
-const SHOP = "SHOP162";
+const SHOP = "SHOP1";
 const OFFICE = "uid-office";
 const TECH = "uid-tech";
 const STRANGER = "uid-stranger";
 
 let env;
 
-// Dates relative to now so hold results (#221) never flip as time passes: a default log is
-// recent (held for about 2 more years); a PAST_HOLD log is 3 years old (released for good).
-const DAY = 86400000;
-const ymd = (ms) => new Date(ms).toISOString().slice(0, 10);
-const RECENT = ymd(Date.now() - 17 * DAY);
-const THREE_YEARS_AGO = ymd(Date.now() - 3 * 366 * DAY);
-const IN_TWO_YEARS = ymd(Date.now() + 2 * 366 * DAY);
-const IN_THREE_YEARS = ymd(Date.now() + 3 * 366 * DAY);
-const IN_FOUR_YEARS = ymd(Date.now() + 4 * 366 * DAY);
-
 before(async () => {
+  const [host, port] = (process.env.FIRESTORE_EMULATOR_HOST ?? "127.0.0.1:8080").split(":");
   env = await initializeTestEnvironment({
-    projectId: "demo-jpl-rules",
-    firestore: { rules: readFileSync(new URL("../firestore.rules", import.meta.url), "utf8") },
+    projectId: "demo-review-lock",
+    firestore: {
+      host,
+      port: Number(port),
+      rules: readFileSync(new URL("../firestore.rules", import.meta.url), "utf8"),
+    },
   });
-});
-
-after(async () => {
-  await env?.cleanup();
 });
 
 beforeEach(async () => {
   await env.clearFirestore();
 });
 
-// ---- fixtures (shapes as normalizeLog / buildCorrection / buildReupload write them) ----
+after(async () => {
+  await env?.cleanup();
+});
+
+// ---- fixtures (mirror src/types.ts + src/storage.ts buildCorrection) -------------------
+
+const DAY = 86400000;
+const ymd = (ms) => new Date(ms).toISOString().slice(0, 10);
+const RECENT = ymd(Date.now() - 10 * DAY);
+const THREE_YEARS_AGO = ymd(Date.now() - 3 * 365 * DAY);
+const IN_TWO_YEARS = ymd(Date.now() + 2 * 365 * DAY);
+const IN_THREE_YEARS = ymd(Date.now() + 3 * 365 * DAY);
+const IN_FOUR_YEARS = ymd(Date.now() + 4 * 365 * DAY);
 
 function makeLog(id, extra = {}) {
   return {
     id,
     createdAt: `${RECENT}T15:00:00.000Z`,
-    sampleData: false,
-    jobberJobNumber: "",
-    jobberAddress: "",
-    customerBillingName: "Pat Customer",
-    customerBillingAddress: "1 Main St",
-    serviceAddress: "1 Main St",
-    poleLocation: "",
-    products: [
-      {
-        lineId: "p1",
-        catalogId: "cat-1",
-        name: "Talstar P",
-        epaRegNo: "279-3206",
-        method: "spray",
-        rtuAmount: "1 gal",
-      },
-    ],
-    targetPestOrPurpose: "Ants",
+    updatedAt: `${RECENT}T15:00:00.000Z`,
     dateUsed: RECENT,
-    personnel: [{ role: "applying", name: "Ana Office", licenseNumber: "TX-9" }],
-    shopTpclNumber: "1",
-    shopTpclLetter: "",
-    isTermite: false,
-    termite: {
-      areaTreatedSqFt: "",
-      isBait: false,
-      physicalBarrierMeasurement: "",
-      diagramNote: "",
-      isCommercialPretreat: false,
-      tankCount: "",
-      tankGallons: "",
-      startTime: "",
-      stopTime: "",
-    },
-    revision: 0,
-    history: [],
+    timeStarted: "09:00",
+    timeFinished: "09:30",
+    customerName: "Acme Holdings",
+    serviceAddress: "100 Main St, Austin TX",
+    applicatorName: "Taylor Tech",
+    applicatorLicense: "CA-001",
+    supervisedStatus: "licensed",
+    epaRegNo: "53883-326",
+    productName: "Bifen I/T",
+    amountUsed: "1",
+    unit: "fl_oz",
+    targetPestOrPurpose: "Ants",
+    method: "Perimeter spray",
+    poleLocation: "Front perimeter",
+    tempF: "78",
+    windMph: "5",
+    windDirection: "S",
+    notes: "",
     ...extra,
   };
 }
 
-/** Dates whose 2-year hold ended a year ago (#221): such a log may be removed. */
-const PAST_HOLD = { dateUsed: THREE_YEARS_AGO, createdAt: `${THREE_YEARS_AGO}T15:00:00.000Z` };
-const oldLog = (id, extra = {}) => makeLog(id, { ...PAST_HOLD, ...extra });
-
-function reviewed(log) {
-  return { ...log, reviewedAt: "2026-10-02T09:00:00-05:00", reviewedBy: "Ana Office" };
+/** An unreviewed log whose 2-year hold is already over (#221). */
+function oldLog(id, extra = {}) {
+  return makeLog(id, {
+    createdAt: `${THREE_YEARS_AGO}T15:00:00.000Z`,
+    updatedAt: `${THREE_YEARS_AGO}T15:00:00.000Z`,
+    dateUsed: THREE_YEARS_AGO,
+    ...extra,
+  });
 }
 
-/** Same as storage.buildCorrection: snapshot without history / reuploads / retainUntil. */
-function correct(prev, fields, entryOverrides = {}) {
-  const { history = [], reuploads, retainUntil, ...priorSnapshot } = prev;
-  const revision = (prev.revision ?? history.length) + 1;
+function reviewed(log, extra = {}) {
+  return {
+    ...log,
+    reviewedAt: "2026-10-01T18:00:00-05:00",
+    reviewedBy: "Ana Office (TPCL #900001)",
+    revision: 0,
+    ...extra,
+  };
+}
+
+/** Build a correction the way storage.buildCorrection does. */
+function correct(prev, patch, opts = {}) {
+  const { history, reuploads, retainUntil, ...priorSnapshot } = prev;
+  const priorHistory = history ?? [];
+  const revision = (prev.revision ?? priorHistory.length) + 1;
+  const changes = opts.changes ?? Object.keys(patch).map((field) => ({
+    field,
+    label: field,
+    before: String(prev[field] ?? ""),
+    after: String(patch[field] ?? ""),
+  }));
   const entry = {
     revision,
+    changedAt: opts.changedAt ?? "2026-10-17T20:30:00-05:00",
+    changedBy: opts.changedBy ?? "Taylor Tech (CA #001)",
+    reason: opts.reason ?? "Wrong house number on work order",
+    changes,
     priorSnapshot,
-    changedAt: "2026-10-03T10:00:00-05:00",
-    changedBy: "Ana Office",
-    reason: "Wrong address",
-    changes: Object.keys(fields).map((f) => ({ field: f, old: prev[f] ?? null, new: fields[f] })),
-    ...entryOverrides,
   };
   return {
     ...prev,
-    ...fields,
+    ...patch,
+    updatedAt: "2026-10-17T20:30:00-05:00",
     revision,
-    history: [...history, entry],
-    ...(reuploads ? { reuploads } : {}),
-    ...(retainUntil ? { retainUntil } : {}),
+    history: [...priorHistory, entry],
   };
 }
 
-function shopDoc(logs) {
+function shopDoc(logs = [], extra = {}) {
   return {
-    version: "1",
-    updatedAt: "2026-10-17T12:00:00.000Z",
+    version: 1,
+    shopId: SHOP,
+    updatedAt: "2026-10-01T15:00:00.000Z",
     logs,
-    catalog: [],
-    people: [{ id: "p-ana", name: "Ana Office", licenseNumber: "TX-9", roleTags: [], licenseExpiry: "", ceDueDate: "" }],
-    settings: { shopName: "Acme", shopTpclNumber: "1", shopTpclLetter: "" },
-    pinsConfigured: true,
+    catalog: { products: [], equipment: [], methods: [], units: [], targetPests: [] },
+    people: [],
+    settings: { shopName: "Acme", shopTpclNumber: "900001", shopTpclLetter: "" },
+    auth: { officePinHash: "h1", techPinHash: "h2" },
     ownerUid: OFFICE,
     members: { [OFFICE]: "office", [TECH]: "tech" },
+    ...extra,
   };
 }
 
-async function seed(logs) {
+/** Seed the shop doc (with `logs: []`) and each log at `shops/{shopId}/logs/{log.id}`. */
+async function seed(logs, extra = {}) {
   await env.withSecurityRulesDisabled(async (ctx) => {
-    await setDoc(doc(ctx.firestore(), "shops", SHOP), shopDoc(logs));
+    const db = ctx.firestore();
+    await setDoc(doc(db, "shops", SHOP), shopDoc([], extra));
+    for (const log of logs) {
+      await setDoc(doc(db, "shops", SHOP, "logs", log.id), log);
+    }
   });
 }
 
-/** Client-style whole-doc put (RemoteShopStore.putWithCas → transaction.set). */
-function put(uid, logs, extra = {}) {
-  const db = env.authenticatedContext(uid).firestore();
-  return setDoc(doc(db, "shops", SHOP), {
-    ...shopDoc(logs),
-    updatedAt: "2026-10-17T12:05:00.000Z",
-    ...extra,
+/** Seed a legacy shop doc that still carries its logs in `shops/{shopId}.logs`. */
+async function seedLegacy(logs, extra = {}) {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), "shops", SHOP), shopDoc(logs, extra));
   });
+}
+
+function putLog(uid, log, docId = log.id) {
+  const db = env.authenticatedContext(uid).firestore();
+  return setDoc(doc(db, "shops", SHOP, "logs", docId), log);
+}
+
+function delLog(uid, logId) {
+  const db = env.authenticatedContext(uid).firestore();
+  return deleteDoc(doc(db, "shops", SHOP, "logs", logId));
+}
+
+function putShopDoc(uid, logs = [], extra = {}) {
+  const db = env.authenticatedContext(uid).firestore();
+  return setDoc(
+    doc(db, "shops", SHOP),
+    shopDoc(logs, { updatedAt: "2026-10-17T20:30:00.000Z", ...extra }),
+  );
 }
 
 const WRITERS = [
@@ -155,63 +191,66 @@ const WRITERS = [
   ["office", OFFICE],
 ];
 
-// ---- tests ----
+// ---- tests ----------------------------------------------------------------------------
 
 describe("reviewed log: overwrite and delete are denied", () => {
   for (const [who, uid] of WRITERS) {
-    it(`${who}: plain overwrite of a reviewed log (same revision, changed value) is denied`, async () => {
+    it(`${who} plain overwrite of a reviewed log is denied`, async () => {
       const r = reviewed(makeLog("R"));
       await seed([r, makeLog("U")]);
-      await assertFails(put(uid, [{ ...r, serviceAddress: "9 Elm St" }, makeLog("U")]));
+      await assertFails(putLog(uid, { ...r, serviceAddress: "9 Elm St" }));
     });
 
-    it(`${who}: deleting a reviewed log from the shop is denied`, async () => {
+    it(`${who} deleting a reviewed log is denied`, async () => {
       const r = reviewed(makeLog("R"));
       await seed([r, makeLog("U")]);
-      await assertFails(put(uid, [makeLog("U")]));
+      await assertFails(delLog(uid, "R"));
     });
   }
 
-  it("removing the review stamp is denied", async () => {
+  it("removing the review stamp from a reviewed log is denied", async () => {
     const r = reviewed(makeLog("R"));
     await seed([r]);
-    const { reviewedAt, reviewedBy, ...unstamped } = r;
-    await assertFails(put(TECH, [unstamped]));
+    const { reviewedAt, reviewedBy, revision, ...unstamped } = r;
+    await assertFails(putLog(TECH, unstamped));
   });
 
-  it("replacing a reviewed log with a different id in its place is denied", async () => {
+  it("changing the id of a reviewed log or writing it under another doc key is denied", async () => {
     const r = reviewed(makeLog("R"));
     await seed([r]);
-    await assertFails(put(TECH, [makeLog("X")]));
-  });
-
-  it("dropping the logs field entirely is denied when a reviewed log exists", async () => {
-    await seed([reviewed(makeLog("R"))]);
-    const db = env.authenticatedContext(OFFICE).firestore();
-    const { logs, ...rest } = shopDoc([]);
-    await assertFails(setDoc(doc(db, "shops", SHOP), rest));
+    await assertFails(putLog(TECH, { ...r, id: "X" }, "R"));
+    await assertFails(putLog(TECH, r, "X"));
   });
 
   it("deleting the shop doc stays denied", async () => {
     await seed([reviewed(makeLog("R"))]);
-    await assertFails(deleteDoc(doc(env.authenticatedContext(OFFICE).firestore(), "shops", SHOP)));
+    const db = env.authenticatedContext(OFFICE).firestore();
+    await assertFails(deleteDoc(doc(db, "shops", SHOP)));
+  });
+
+  it("stuffing logs into the shop doc's legacy logs array is denied", async () => {
+    await seed([]);
+    await assertFails(putShopDoc(TECH, [makeLog("N")]));
+    await assertFails(putShopDoc(OFFICE, [makeLog("N")]));
   });
 });
 
 describe("reviewed log: a proper correction is allowed", () => {
   for (const [who, uid] of WRITERS) {
-    it(`${who}: revision +1, prior snapshot appended, reason and changedBy`, async () => {
+    it(`${who} correction (revision + 1, priorSnapshot appended, reason and changedBy) passes`, async () => {
       const r = reviewed(makeLog("R"));
-      await seed([makeLog("U"), r]);
-      await assertSucceeds(put(uid, [makeLog("U"), correct(r, { serviceAddress: "9 Elm St" })]));
+      await seed([r, makeLog("U")]);
+      const fixed = correct(r, { serviceAddress: "9 Elm St" });
+      await assertSucceeds(putLog(uid, fixed));
     });
   }
 
-  it("a second correction on top of the first", async () => {
-    const r = reviewed(makeLog("R"));
-    const first = correct(r, { serviceAddress: "9 Elm St" });
-    await seed([first]);
-    await assertSucceeds(put(TECH, [correct(first, { targetPestOrPurpose: "Roaches" }, { reason: "Wrong pest" })]));
+  it("a second correction on top of the first passes", async () => {
+    const r0 = reviewed(makeLog("R"));
+    const r1 = correct(r0, { serviceAddress: "9 Elm St" });
+    await seed([r1]);
+    const r2 = correct(r1, { targetPestOrPurpose: "Roaches" }, { reason: "Tech noted roaches too" });
+    await assertSucceeds(putLog(OFFICE, r2));
   });
 
   it("keeps re-upload records and a stored hold (hold may move later)", async () => {
@@ -222,15 +261,15 @@ describe("reviewed log: a proper correction is allowed", () => {
       }),
     );
     await seed([r]);
-    await assertSucceeds(put(TECH, [correct(r, { serviceAddress: "9 Elm St" })]));
+    await assertSucceeds(putLog(TECH, correct(r, { serviceAddress: "9 Elm St" })));
     await seed([r]);
-    await assertSucceeds(put(TECH, [{ ...correct(r, { serviceAddress: "9 Elm St" }), retainUntil: "2029-01-01" }]));
+    await assertSucceeds(putLog(TECH, { ...correct(r, { serviceAddress: "9 Elm St" }), retainUntil: "2029-01-01" }));
   });
 
   it("a reviewed log without a stored revision (revision = history length)", async () => {
     const { revision, ...noRev } = reviewed(makeLog("R"));
     await seed([noRev]);
-    await assertSucceeds(put(TECH, [correct(noRev, { serviceAddress: "9 Elm St" })]));
+    await assertSucceeds(putLog(TECH, correct(noRev, { serviceAddress: "9 Elm St" })));
   });
 });
 
@@ -281,7 +320,7 @@ describe("reviewed log: an improper correction is denied", () => {
     it(name, async () => {
       const r = name === "hold shortened" ? { ...base(), retainUntil: "2029-01-01" } : base();
       await seed([r]);
-      await assertFails(put(TECH, [build(base())]));
+      await assertFails(putLog(TECH, build(base())));
     });
   }
 
@@ -290,7 +329,7 @@ describe("reviewed log: an improper correction is denied", () => {
     await seed([first]);
     const second = correct(first, { targetPestOrPurpose: "Roaches" });
     second.history = [{ ...second.history[0], reason: "edited later" }, second.history[1]];
-    await assertFails(put(TECH, [second]));
+    await assertFails(putLog(TECH, second));
   });
 });
 
@@ -298,27 +337,27 @@ describe("reviewed log: same-revision re-sends", () => {
   it("an unchanged re-send passes", async () => {
     const r = reviewed(makeLog("R"));
     await seed([r]);
-    await assertSucceeds(put(TECH, [r]));
+    await assertSucceeds(putLog(TECH, r));
   });
 
   it("a later retainUntil hold passes; an earlier or removed one is denied", async () => {
     const r = reviewed(makeLog("R", { retainUntil: "2028-10-01" }));
     await seed([r]);
-    await assertSucceeds(put(TECH, [{ ...r, retainUntil: "2029-01-01" }]));
+    await assertSucceeds(putLog(TECH, { ...r, retainUntil: "2029-01-01" }));
     await seed([r]);
-    await assertFails(put(TECH, [{ ...r, retainUntil: "2027-01-01" }]));
+    await assertFails(putLog(TECH, { ...r, retainUntil: "2027-01-01" }));
     await seed([r]);
     const { retainUntil, ...noHold } = r;
-    await assertFails(put(TECH, [noHold]));
+    await assertFails(putLog(TECH, noHold));
   });
 
   it("an appended re-upload record passes; dropping one is denied", async () => {
     const rec = { reuploadedAt: "2026-10-02T08:00:00-05:00", reuploadedBy: "Ana Office", reason: "Shop lost it" };
     const r = reviewed(makeLog("R", { reuploads: [rec] }));
     await seed([r]);
-    await assertSucceeds(put(TECH, [{ ...r, reuploads: [rec, { ...rec, reason: "Again" }] }]));
+    await assertSucceeds(putLog(TECH, { ...r, reuploads: [rec, { ...rec, reason: "Again" }] }));
     await seed([r]);
-    await assertFails(put(TECH, [{ ...r, reuploads: [] }]));
+    await assertFails(putLog(TECH, { ...r, reuploads: [] }));
   });
 });
 
@@ -330,85 +369,75 @@ describe("re-upload of a log the shop no longer has", () => {
         reuploads: [{ reuploadedAt: "2026-10-17T20:40:00-05:00", reuploadedBy: "Ana Office", reason: "Shop lost it" }],
       }),
     );
-    await assertSucceeds(put(TECH, [reup, makeLog("U")]));
+    await assertSucceeds(putLog(TECH, reup));
   });
 
-  it("re-upload into a shop doc with no logs yet", async () => {
+  it("re-upload into a shop with no logs yet", async () => {
     await seed([]);
     const reup = makeLog("R", {
       reuploads: [{ reuploadedAt: "2026-10-17T20:40:00-05:00", reuploadedBy: "Ana Office", reason: "Shop lost it" }],
     });
-    await assertSucceeds(put(TECH, [reup]));
+    await assertSucceeds(putLog(TECH, reup));
   });
 });
 
 describe("unreviewed logs behave as before", () => {
   for (const [who, uid] of WRITERS) {
-    it(`${who}: overwrite, delete and add are allowed`, async () => {
+    it(`${who}: overwrite, delete (past hold) and add are allowed`, async () => {
       await seed([oldLog("U1"), makeLog("U2")]);
-      await assertSucceeds(put(uid, [makeLog("N"), { ...oldLog("U1"), serviceAddress: "9 Elm St" }, makeLog("U2")]));
-      await assertSucceeds(put(uid, [makeLog("N"), makeLog("U2")]));
+      await assertSucceeds(putLog(uid, makeLog("N")));
+      await assertSucceeds(putLog(uid, { ...oldLog("U1"), serviceAddress: "9 Elm St" }));
+      await assertSucceeds(delLog(uid, "U1"));
     });
   }
 
   it("office review action (sets reviewedAt / reviewedBy) is allowed", async () => {
     await seed([makeLog("U")]);
-    await assertSucceeds(put(OFFICE, [reviewed(makeLog("U"))]));
+    await assertSucceeds(putLog(OFFICE, reviewed(makeLog("U"))));
   });
 
-  it("a reviewed log in the shop doesn't block edits to unreviewed ones", async () => {
+  it("a reviewed log in the shop doesn't block edits or deletes of unreviewed ones", async () => {
     const r = reviewed(makeLog("R"));
     await seed([oldLog("U"), r]);
-    await assertSucceeds(put(TECH, [{ ...oldLog("U"), serviceAddress: "9 Elm St" }, r]));
-    await assertSucceeds(put(TECH, [r]));
+    await assertSucceeds(putLog(TECH, { ...oldLog("U"), serviceAddress: "9 Elm St" }));
+    await assertSucceeds(delLog(TECH, "U"));
   });
 
-  it("a stranger still can't write", async () => {
-    await seed([makeLog("U")]);
-    await assertFails(put(STRANGER, [makeLog("U"), makeLog("N")]));
+  it("a stranger still can't create, update, or delete logs", async () => {
+    await seed([oldLog("U")]);
+    await assertFails(putLog(STRANGER, makeLog("N")));
+    await assertFails(putLog(STRANGER, { ...oldLog("U"), serviceAddress: "9 Elm St" }));
+    await assertFails(delLog(STRANGER, "U"));
   });
 });
 
-describe("outbox flush (several logs in one write)", () => {
-  it("new logs prepended + a correction + unreviewed edits pass", async () => {
+describe("#215: per-log documents prevent duplicate IDs and remove array expression limits", () => {
+  it("a second copy reusing R's id cannot be created under R or under another document key", async () => {
     const r = reviewed(makeLog("R"));
-    await seed([makeLog("U1"), r, makeLog("U2")]);
-    await assertSucceeds(
-      put(TECH, [
-        makeLog("N1"),
-        makeLog("N2"),
-        { ...makeLog("U1"), targetPestOrPurpose: "Roaches" },
-        correct(r, { serviceAddress: "9 Elm St" }),
-        { ...makeLog("U2"), targetPestOrPurpose: "Fleas" },
-      ]),
-    );
+    await seed([r]);
+    // Writing at logs/R hits `update` on the existing reviewed doc and is denied.
+    await assertFails(putLog(TECH, makeLog("R", { serviceAddress: "Forged" }), "R"));
+    await assertFails(putLog(OFFICE, { ...r, serviceAddress: "Forged" }, "R"));
+    // Writing with id="R" under another document key logs/FAKE fails `request.resource.data.id == logId`.
+    await assertFails(putLog(TECH, makeLog("R", { serviceAddress: "Forged" }), "FAKE"));
+    await assertFails(putLog(OFFICE, { ...r, serviceAddress: "Forged" }, "FAKE"));
+    // Writing a correction of R with id="X" fails under both logs/R and logs/X.
+    await assertFails(putLog(TECH, { ...correct(r, { serviceAddress: "9 Elm St" }), id: "X" }, "R"));
   });
 
-  it("new logs prepended + an overwrite of a reviewed log is denied", async () => {
-    const r = reviewed(makeLog("R"));
-    await seed([makeLog("U1"), r]);
-    await assertFails(put(TECH, [makeLog("N1"), makeLog("U1"), { ...r, serviceAddress: "9 Elm St" }]));
-  });
-
-  it("three corrections of reviewed logs in one write pass", async () => {
-    const rs = ["R1", "R2", "R3"].map((id) => reviewed(makeLog(id)));
-    await seed([...rs, makeLog("U")]);
-    await assertSucceeds(put(TECH, [makeLog("N"), ...rs.map((r) => correct(r, { serviceAddress: "9 Elm St" })), makeLog("U")]));
-  });
-
-  it("large shop: a correction plus 11 unreviewed edits pass; more than 40 changed logs in one write is denied", async () => {
+  it("large shop (200 logs): per-log writes succeed with no 40-log or expression-budget ceiling", async () => {
     const logs = [];
-    for (let i = 0; i < 200; i++) logs.push(i % 10 === 0 ? reviewed(makeLog(`L${i}`)) : makeLog(`L${i}`));
+    for (let i = 0; i < 200; i++) {
+      logs.push(i % 10 === 0 ? reviewed(makeLog(`L${i}`)) : makeLog(`L${i}`));
+    }
     await seed(logs);
-    let edits = 0;
-    const next = logs.map((l, i) =>
-      i === 0 ? correct(l, { serviceAddress: "9 Elm St" }) : i % 10 !== 0 && edits++ < 11 ? { ...l, targetPestOrPurpose: "Roaches" } : l,
-    );
-    await assertSucceeds(put(TECH, [makeLog("N1"), ...next]));
-    await seed(logs);
-    edits = 0;
-    const tooMany = logs.map((l, i) => (i % 10 !== 0 && edits++ < 41 ? { ...l, targetPestOrPurpose: "Roaches" } : l));
-    await assertFails(put(TECH, tooMany));
+    await assertSucceeds(putLog(TECH, makeLog("N1")));
+    await assertSucceeds(putLog(TECH, correct(logs[0], { serviceAddress: "9 Elm St" })));
+    for (let i = 1; i <= 45; i++) {
+      if (i % 10 !== 0) {
+        await assertSucceeds(putLog(TECH, { ...logs[i], targetPestOrPurpose: "Roaches" }));
+      }
+    }
   });
 });
 
@@ -425,139 +454,29 @@ describe("other shop writes still work with reviewed logs present", () => {
   });
 
   it("office settings change with logs untouched", async () => {
-    const logs = [reviewed(makeLog("R")), makeLog("U")];
-    await seed(logs);
-    await assertSucceeds(put(OFFICE, logs, { settings: { shopName: "Acme 2", shopTpclNumber: "1", shopTpclLetter: "" } }));
+    await seed([reviewed(makeLog("R")), makeLog("U")]);
+    await assertSucceeds(
+      putShopDoc(OFFICE, [], { settings: { shopName: "Acme 2", shopTpclNumber: "1", shopTpclLetter: "" } }),
+    );
   });
 
-  it("members can still read", async () => {
+  it("signed-in callers can read shop and logs; unauthenticated callers cannot", async () => {
     await seed([reviewed(makeLog("R"))]);
-    await assertSucceeds(getDoc(doc(env.authenticatedContext(TECH).firestore(), "shops", SHOP)));
-  });
-});
+    const techDb = env.authenticatedContext(TECH).firestore();
+    await assertSucceeds(getDoc(doc(techDb, "shops", SHOP)));
+    await assertSucceeds(getDoc(doc(techDb, "shops", SHOP, "logs", "R")));
+    await assertSucceeds(getDocs(collection(techDb, "shops", SHOP, "logs")));
 
-// ---- #214: paired replacement must exist and keep the id -------------------------------
-// (A new entry that reuses a stored id in front of R is a known rules gap, #215; the
-// client handles it on read in #211 / #212.)
-
-describe("#214: paired replacement of a reviewed log", () => {
-  it("a valid-looking correction under another id is denied", async () => {
-    const r = reviewed(makeLog("R"));
-    await seed([r]);
-    await assertFails(put(TECH, [{ ...correct(r, { serviceAddress: "9 Elm St" }), id: "X" }]));
-  });
-
-  it("a forged copy in R's slot is denied, even with a valid correction under another id in front", async () => {
-    const r = reviewed(makeLog("R"));
-    await seed([r, makeLog("U")]);
-    await assertFails(put(TECH, [{ ...correct(r, { serviceAddress: "9 Elm St" }), id: "N" }, { ...r, serviceAddress: "Forged" }, makeLog("U")]));
-  });
-
-  it("deleting a reviewed log (pair index out of range) is denied", async () => {
-    const r = reviewed(makeLog("R"));
-    await seed([makeLog("U"), r]);
-    await assertFails(put(TECH, [makeLog("U")]));
-    await seed([r]);
-    await assertFails(put(TECH, []));
-  });
-
-  it("fake behind R: R overwritten, its correction pushed to the front, is denied", async () => {
-    const r = reviewed(makeLog("R"));
-    await seed([r]);
-    const fixed = correct(r, { serviceAddress: "9 Elm St" });
-    await assertFails(put(TECH, [fixed, { ...r, serviceAddress: "Forged" }]));
-  });
-
-  it("the genuine correction (same id, in place) still passes", async () => {
-    const r = reviewed(makeLog("R"));
-    await seed([makeLog("U"), r]);
-    await assertSucceeds(put(OFFICE, [makeLog("N"), makeLog("U"), correct(r, { serviceAddress: "9 Elm St" })]));
-  });
-});
-
-// ---- Bundle #218: a `logIds` field is ignored -----------------------------------------
-
-// ---- Bundle #219: deletions must not shift the pairing ---------------------------------
-// Grow writes (same size or bigger) may not delete; shrink writes may not add. A forged
-// second copy of R next to its correction has no pair either way.
-
-describe("#219: a forged copy of R next to its correction", () => {
-  const forged = (r) => ({ ...r, serviceAddress: "Forged" });
-
-  it("forged duplicate behind R is denied (plain, with an inserted log, with a deleted unreviewed log)", async () => {
-    const r = reviewed(makeLog("R"));
-    const fixed = correct(r, { serviceAddress: "9 Elm St" });
-    for (const [stored, next] of [
-      [[r], [fixed, forged(r)]],
-      [[r], [makeLog("N"), fixed, forged(r)]],
-      [[r, makeLog("U")], [fixed, forged(r), makeLog("U")]],
-      [[r, oldLog("U")], [fixed, forged(r)]],
-      [[r, oldLog("U")], [makeLog("N"), fixed, forged(r)]],
-      [[oldLog("U"), r, oldLog("V")], [fixed, forged(r)]],
-      [[oldLog("U"), r, oldLog("V")], [makeLog("N"), makeLog("M"), fixed, forged(r)]],
-    ]) {
-      for (const [, uid] of WRITERS) {
-        await seed(stored);
-        await assertFails(put(uid, next));
-      }
-    }
-  });
-
-  it("forged duplicate in front of a corrected R is denied", async () => {
-    const r = reviewed(makeLog("R"));
-    const fixed = correct(r, { serviceAddress: "9 Elm St" });
-    await seed([r, makeLog("U")]);
-    await assertFails(put(TECH, [forged(r), fixed, makeLog("U")]));
-    await seed([r, makeLog("U")]);
-    await assertFails(put(TECH, [makeLog("N"), forged(r), fixed, makeLog("U")]));
-  });
-
-  it("a correction while an unreviewed log is deleted passes ([R, U] -> [correct(R)])", async () => {
-    const r = reviewed(makeLog("R"));
-    const fixed = correct(r, { serviceAddress: "9 Elm St" });
-    for (const [, uid] of WRITERS) {
-      await seed([r, oldLog("U")]);
-      await assertSucceeds(put(uid, [fixed]));
-      await seed([oldLog("U"), r]);
-      await assertSucceeds(put(uid, [fixed]));
-    }
-  });
-
-  it("deleting an unreviewed log next to an unchanged R passes", async () => {
-    const r = reviewed(makeLog("R"));
-    for (const [, uid] of WRITERS) {
-      await seed([r, oldLog("U")]);
-      await assertSucceeds(put(uid, [r]));
-      await seed([oldLog("U"), r]);
-      await assertSucceeds(put(uid, [r]));
-      await seed([oldLog("U"), r, makeLog("V")]);
-      await assertSucceeds(put(uid, [r, makeLog("V")]));
-    }
-  });
-
-  it("#211 cleanup: removing an unreviewed duplicate or an exact copy next to R passes", async () => {
-    const r = reviewed(makeLog("R"));
-    const u = makeLog("U");
-    await seed([u, { ...u, targetPestOrPurpose: "Ants" }, r]);
-    await assertSucceeds(put(TECH, [u, r]));
-    await seed([u, u, r]);
-    await assertSucceeds(put(TECH, [u, r]));
-    await seed([r, u, r]);
-    await assertSucceeds(put(TECH, [u, r]));
-  });
-
-  it("deleting R while an unreviewed log is edited, or overwriting R while one is deleted, is denied", async () => {
-    const r = reviewed(makeLog("R"));
-    await seed([r, oldLog("U")]);
-    await assertFails(put(TECH, [{ ...oldLog("U"), serviceAddress: "9 Elm St" }]));
-    await seed([r, oldLog("U")]);
-    await assertFails(put(TECH, [forged(r)]));
+    const anonDb = env.unauthenticatedContext().firestore();
+    await assertFails(getDoc(doc(anonDb, "shops", SHOP)));
+    await assertFails(getDoc(doc(anonDb, "shops", SHOP, "logs", "R")));
+    await assertFails(getDocs(collection(anonDb, "shops", SHOP, "logs")));
   });
 });
 
 // ---- #220: a shop doc with no logs field ----------------------------------------------
 
-describe("#220: join and legacy PIN setup on a doc with no logs field", () => {
+describe("#220: join, legacy PIN setup, and per-log writes on a doc with no logs field", () => {
   async function seedRaw(data) {
     await env.withSecurityRulesDisabled(async (ctx) => {
       await setDoc(doc(ctx.firestore(), "shops", SHOP), data);
@@ -577,7 +496,7 @@ describe("#220: join and legacy PIN setup on a doc with no logs field", () => {
   });
 
   it("legacy PIN bootstrap passes", async () => {
-    const { logs, pinsConfigured, ownerUid, members, ...legacy } = shopDoc([]);
+    const { logs, auth, ownerUid, members, ...legacy } = shopDoc([]);
     await seedRaw({ ...legacy, members: {} });
     const db = env.authenticatedContext(OFFICE).firestore();
     await assertSucceeds(
@@ -590,10 +509,11 @@ describe("#220: join and legacy PIN setup on a doc with no logs field", () => {
     );
   });
 
-  it("adding logs to such a doc still goes through the lock", async () => {
+  it("creating a shop doc without a logs field (or with logs: []) passes, and adding logs to subcollection works", async () => {
     const { logs, ...noLogs } = shopDoc([]);
-    await seedRaw(noLogs);
-    await assertSucceeds(put(TECH, [makeLog("N")]));
+    const officeDb = env.authenticatedContext(OFFICE).firestore();
+    await assertSucceeds(setDoc(doc(officeDb, "shops", SHOP), noLogs));
+    await assertSucceeds(putLog(TECH, makeLog("N")));
   });
 });
 
@@ -603,8 +523,6 @@ describe("#220: join and legacy PIN setup on a doc with no logs field", () => {
 // now - 36 h: that D is released, the next day is still held).
 
 const minusYears = (s, n) => `${Number(s.slice(0, 4)) - n}${s.slice(4)}`;
-// Release times fall at 12:00 UTC, and each case sits as far from its cutoff as now is
-// from 12:00 UTC. Within 10 minutes of it, wait until 10 minutes past (a run takes seconds).
 const GUARD = 10 * 60000;
 const sinceNoon = (Date.now() % DAY) - DAY / 2;
 if (Math.abs(sinceNoon) < GUARD) await new Promise((resolve) => setTimeout(resolve, GUARD - sinceNoon));
@@ -616,14 +534,12 @@ describe("#221: removing a log under its 2-year hold", () => {
   const removeOnly = async (log) => {
     const r = reviewed(makeLog("R"));
     await seed([log, r]);
-    return put(TECH, [r]);
+    return delLog(TECH, log.id);
   };
 
   it("removing a held unreviewed log is denied (recent dates, or a later retainUntil)", async () => {
     await assertFails(removeOnly(makeLog("U")));
     await assertFails(removeOnly(oldLog("U", { retainUntil: IN_THREE_YEARS })));
-    await seed([makeLog("U")]);
-    await assertFails(put(OFFICE, []));
   });
 
   it("removing a log past its hold is allowed (retainUntil, or no retainUntil and old dates)", async () => {
@@ -662,200 +578,392 @@ describe("#221: removing a log under its 2-year hold", () => {
       await assertFails(removeOnly(log));
     }
   });
-
-  it("#211: removing a held duplicate copy is allowed when keptCopyAt names a same-id copy", async () => {
-    const r = reviewed(makeLog("R"));
-    const u = makeLog("U");
-    const loser = { ...u, serviceAddress: "Other St" };
-    await seed([loser, r, u]);
-    await assertSucceeds(put(TECH, [r, u], { keptCopyAt: { U: 1 } }));
-    await seed([loser, r, u]);
-    await assertFails(put(TECH, [r, u]));
-    await seed([loser, r, u]);
-    await assertFails(put(TECH, [r, u], { keptCopyAt: { U: 0 } }));
-    await seed([loser, r, u]);
-    await assertFails(put(TECH, [r, u], { keptCopyAt: { U: 7 } }));
-    // An exact copy needs no hint (an identical copy stays).
-    await seed([u, r, u]);
-    await assertSucceeds(put(TECH, [r, u]));
-  });
-
-  it("a stale keptCopyAt doesn't block normal saves", async () => {
-    await seed([makeLog("U")]);
-    await assertSucceeds(put(TECH, [makeLog("N"), makeLog("U")], { keptCopyAt: { U: 9, X: "y" } }));
-  });
-
-  it("#228: removing 20 held differing duplicate copies on a 100-log doc fails in one write, passes in 8-copy cleanup batches followed by the save", async () => {
-    const base = Array.from({ length: 100 }, (_, i) => (i < 10 ? reviewed(makeLog(`L${i}`)) : makeLog(`L${i}`)));
-    const losers = base.slice(10, 30).map((l) => ({ ...l, serviceAddress: "Other St" }));
-    // Put the 20 differing losers ahead of the 100 kept logs so winner indices shift after each batch.
-    await seed([...losers, ...base]);
-    await assertFails(
-      put(TECH, base, {
-        keptCopyAt: Object.fromEntries(base.slice(10, 30).map((l, k) => [l.id, 10 + k])),
-      }),
-    );
-
-    // Batch 1 removes losers[0..7] (L10..L17); 12 losers remain ahead of base.
-    const afterBatch1 = [...losers.slice(8), ...base];
-    await assertSucceeds(
-      put(TECH, afterBatch1, {
-        keptCopyAt: Object.fromEntries(base.slice(10, 18).map((l, k) => [l.id, 12 + 10 + k])),
-      }),
-    );
-    // Batch 2 removes losers[8..15] (L18..L25); 4 losers remain ahead of base.
-    const afterBatch2 = [...losers.slice(16), ...base];
-    await assertSucceeds(
-      put(TECH, afterBatch2, {
-        keptCopyAt: Object.fromEntries(base.slice(18, 26).map((l, k) => [l.id, 4 + 18 + k])),
-      }),
-    );
-    // Batch 3 removes losers[16..19] (L26..L29); only base remains.
-    await assertSucceeds(
-      put(TECH, base, {
-        keptCopyAt: Object.fromEntries(base.slice(26, 30).map((l, k) => [l.id, 26 + k])),
-      }),
-    );
-    // Final save write adds the caller's new log without keptCopyAt.
-    await assertSucceeds(put(TECH, [makeLog("N"), ...base]));
-  });
 });
 
 describe("#227: editing an unreviewed log may not move its 2-year hold earlier", () => {
   const plusYears = (s, n) => `${Number(s.slice(0, 4)) + n}${s.slice(4)}`;
   const nextDay = (d) => ymd(Date.parse(`${d}T00:00:00Z`) + DAY);
-  // makeLog("U") has dateUsed = RECENT and createdAt on RECENT, so createdAt's date + 1 day
-  // is nextDay(RECENT) and its fallback hold is 2 years after that.
   const FALLBACK_HOLD = plusYears(nextDay(RECENT), 2);
   const DAY_BEFORE_HOLD = ymd(Date.parse(`${FALLBACK_HOLD}T00:00:00Z`) - DAY);
 
   it("moving a stored retainUntil earlier on an unreviewed log is denied", async () => {
     const u = makeLog("U", { retainUntil: IN_THREE_YEARS });
     await seed([u]);
-    await assertFails(put(TECH, [{ ...u, retainUntil: IN_TWO_YEARS }]));
+    await assertFails(putLog(TECH, { ...u, retainUntil: IN_TWO_YEARS }));
     await seed([u]);
-    await assertFails(put(OFFICE, [{ ...u, retainUntil: THREE_YEARS_AGO }]));
+    await assertFails(putLog(OFFICE, { ...u, retainUntil: THREE_YEARS_AGO }));
   });
 
   it("backdating dateUsed and createdAt on a held unreviewed log without retainUntil is denied", async () => {
     const u = makeLog("U");
     await seed([u]);
-    await assertFails(put(TECH, [{ ...u, dateUsed: THREE_YEARS_AGO, createdAt: `${THREE_YEARS_AGO}T15:00:00.000Z` }]));
+    await assertFails(putLog(TECH, { ...u, dateUsed: THREE_YEARS_AGO, createdAt: `${THREE_YEARS_AGO}T15:00:00.000Z` }));
     await seed([u]);
-    await assertFails(put(OFFICE, [{ ...u, createdAt: `${THREE_YEARS_AGO}T15:00:00.000Z` }]));
+    await assertFails(putLog(OFFICE, { ...u, createdAt: `${THREE_YEARS_AGO}T15:00:00.000Z` }));
   });
 
   it("stripping retainUntil and backdating dateUsed/createdAt is denied", async () => {
     const u = makeLog("U", { retainUntil: IN_THREE_YEARS });
     const { retainUntil, ...stripped } = u;
     await seed([u]);
-    await assertFails(put(TECH, [stripped]));
+    await assertFails(putLog(TECH, stripped));
     await seed([u]);
-    await assertFails(put(TECH, [{ ...stripped, dateUsed: THREE_YEARS_AGO, createdAt: `${THREE_YEARS_AGO}T15:00:00.000Z` }]));
+    await assertFails(putLog(TECH, { ...stripped, dateUsed: THREE_YEARS_AGO, createdAt: `${THREE_YEARS_AGO}T15:00:00.000Z` }));
   });
 
   it("two-write dodge (backdate in write 1, then remove in write 2) is blocked at write 1", async () => {
     const r = reviewed(makeLog("R"));
     const u = makeLog("U");
     await seed([u, r]);
-    await assertFails(put(TECH, [{ ...u, dateUsed: THREE_YEARS_AGO, createdAt: `${THREE_YEARS_AGO}T15:00:00.000Z`, retainUntil: THREE_YEARS_AGO }, r]));
-    // U is still in the shop doc under its original hold, so write 2 (removing U) is also denied.
-    await assertFails(put(TECH, [r]));
+    await assertFails(putLog(TECH, { ...u, dateUsed: THREE_YEARS_AGO, createdAt: `${THREE_YEARS_AGO}T15:00:00.000Z`, retainUntil: THREE_YEARS_AGO }));
+    await assertFails(delLog(TECH, "U"));
   });
 
   it("editing non-date fields on a held unreviewed log (with or without retainUntil) passes", async () => {
     const u1 = makeLog("U");
     await seed([u1]);
-    await assertSucceeds(put(TECH, [{ ...u1, targetPestOrPurpose: "Roaches", serviceAddress: "9 Elm St", poleLocation: "Rear" }]));
+    await assertSucceeds(putLog(TECH, { ...u1, targetPestOrPurpose: "Roaches", serviceAddress: "9 Elm St", poleLocation: "Rear" }));
     const u2 = makeLog("U", { retainUntil: IN_THREE_YEARS });
     await seed([u2]);
-    await assertSucceeds(put(TECH, [{ ...u2, targetPestOrPurpose: "Roaches", serviceAddress: "9 Elm St" }]));
+    await assertSucceeds(putLog(TECH, { ...u2, targetPestOrPurpose: "Roaches", serviceAddress: "9 Elm St" }));
   });
 
   it("moving dateUsed earlier while keeping or ratcheting retainUntil (stampRetainUntil) passes", async () => {
     const u1 = makeLog("U", { retainUntil: IN_THREE_YEARS });
     await seed([u1]);
-    await assertSucceeds(put(TECH, [{ ...u1, dateUsed: THREE_YEARS_AGO }]));
-    // Legacy log without retainUntil: stampRetainUntil stamps the prior hold when dateUsed moves earlier.
+    await assertSucceeds(putLog(TECH, { ...u1, dateUsed: THREE_YEARS_AGO }));
     const u2 = makeLog("U");
     await seed([u2]);
-    await assertSucceeds(put(TECH, [{ ...u2, dateUsed: THREE_YEARS_AGO, retainUntil: FALLBACK_HOLD }]));
+    await assertSucceeds(putLog(TECH, { ...u2, dateUsed: THREE_YEARS_AGO, retainUntil: FALLBACK_HOLD }));
   });
 
   it("moving dateUsed later and moving retainUntil later (or keeping no retainUntil) passes", async () => {
     const laterDate = nextDay(RECENT);
     const u1 = makeLog("U", { retainUntil: FALLBACK_HOLD });
     await seed([u1]);
-    await assertSucceeds(put(TECH, [{ ...u1, dateUsed: laterDate, retainUntil: IN_THREE_YEARS }]));
+    await assertSucceeds(putLog(TECH, { ...u1, dateUsed: laterDate, retainUntil: IN_THREE_YEARS }));
     const u2 = makeLog("U");
     await seed([u2]);
-    await assertSucceeds(put(TECH, [{ ...u2, dateUsed: laterDate }]));
+    await assertSucceeds(putLog(TECH, { ...u2, dateUsed: laterDate }));
   });
 
   it("adding retainUntil to a log that lacked it requires retainUntil >= its computed fallback hold", async () => {
     const u = makeLog("U");
     await seed([u]);
-    await assertSucceeds(put(TECH, [{ ...u, retainUntil: FALLBACK_HOLD }]));
+    await assertSucceeds(putLog(TECH, { ...u, retainUntil: FALLBACK_HOLD }));
     await seed([u]);
-    await assertSucceeds(put(TECH, [{ ...u, retainUntil: IN_THREE_YEARS }]));
+    await assertSucceeds(putLog(TECH, { ...u, retainUntil: IN_THREE_YEARS }));
     await seed([u]);
-    await assertFails(put(TECH, [{ ...u, retainUntil: DAY_BEFORE_HOLD }]));
+    await assertFails(putLog(TECH, { ...u, retainUntil: DAY_BEFORE_HOLD }));
+  });
+});
+
+describe("#215: migrating legacy shop docs that still carry a logs array", () => {
+  it("dropping a legacy reviewed or held unreviewed log from shops/{shopId}.logs without migrating it to logs/{logId} is denied", async () => {
+    const r = reviewed(makeLog("R"));
+    const u = makeLog("U");
+    await seedLegacy([r, u]);
+    await assertFails(putShopDoc(TECH, []));
+    await assertFails(putShopDoc(OFFICE, [u]));
+    await assertFails(putShopDoc(TECH, [r]));
+  });
+
+  it("planting a forged copy at logs/R while R is still in the legacy logs array is denied", async () => {
+    const r = reviewed(makeLog("R"));
+    const forged = makeLog("R", { serviceAddress: "Forged" });
+    await seedLegacy([r]);
+    await assertFails(putLog(TECH, forged));
+    // Even if the legacy array already contained [forged, r], creating logs/R with the unreviewed forged copy is denied.
+    await seedLegacy([forged, r]);
+    await assertFails(putLog(TECH, forged));
+    await assertSucceeds(putLog(TECH, r));
+  });
+
+  it("migrating legacy logs to shops/{shopId}/logs/{logId} and then clearing shops/{shopId}.logs passes", async () => {
+    const r = reviewed(makeLog("R"));
+    const u = makeLog("U");
+    await seedLegacy([r, u]);
+    await assertSucceeds(putLog(TECH, r));
+    await assertSucceeds(putLog(TECH, u));
+    await assertSucceeds(putShopDoc(TECH, []));
+  });
+
+  it("migrating a legacy array with duplicate losers (reviewed winner or unreviewed winner) and clearing shops/{shopId}.logs passes", async () => {
+    const r = reviewed(makeLog("R"));
+    const rLoser = makeLog("R", { serviceAddress: "Unreviewed duplicate" });
+    const u = makeLog("U", { updatedAt: `${RECENT}T16:00:00.000Z` });
+    const uLoser = makeLog("U", { serviceAddress: "Older duplicate", retainUntil: IN_FOUR_YEARS });
+    await seedLegacy([rLoser, r, uLoser, u]);
+    await assertSucceeds(putLog(TECH, r));
+    await assertSucceeds(putLog(TECH, u));
+    await assertSucceeds(putShopDoc(TECH, []));
+  });
+
+  it("#212: when a legacy array holds two conflicting reviewed copies of R, the losing reviewed copy cannot be dropped", async () => {
+    const rEarly = reviewed(makeLog("R", { serviceAddress: "100 Main St" }), {
+      reviewedAt: "2026-10-01T18:00:00-05:00",
+      reviewedBy: "Ana Office",
+    });
+    const rLate = reviewed(makeLog("R", { serviceAddress: "200 Oak Ave" }), {
+      reviewedAt: "2026-10-02T18:00:00-05:00",
+      reviewedBy: "Ben Office",
+    });
+    const u = makeLog("U");
+    await seedLegacy([rLate, rEarly, u]);
+    await assertSucceeds(putLog(TECH, rLate));
+    await assertSucceeds(putLog(TECH, u));
+    // Dropping rEarly is denied because logs/R holds rLate (different review stamp, same revision 0).
+    await assertFails(putShopDoc(TECH, []));
+    // Draining rLate and u while keeping rEarly in shops/{shopId}.logs passes.
+    await assertSucceeds(putShopDoc(TECH, [rEarly]));
+  });
+
+  it("draining a legacy array where stored entries omit history passes when kept entries preserve exact raw shape", async () => {
+    const { history: _h1, ...rawLate } = reviewed(makeLog("R", { serviceAddress: "200 Oak Ave" }), {
+      reviewedAt: "2026-10-02T18:00:00-05:00",
+      reviewedBy: "Ben Office",
+    });
+    const { history: _h2, ...rawEarly } = reviewed(makeLog("R", { serviceAddress: "100 Main St" }), {
+      reviewedAt: "2026-10-01T18:00:00-05:00",
+      reviewedBy: "Ana Office",
+    });
+    const { history: _h3, ...rawU } = makeLog("U");
+    await seedLegacy([rawLate, rawEarly, rawU]);
+    await assertSucceeds(putLog(TECH, rawLate));
+    await assertSucceeds(putLog(TECH, rawU));
+    // Rewriting the kept rawEarly with normalized history: [] is denied because it does not match resource.data.logs[1].
+    await assertFails(putShopDoc(TECH, [{ ...rawEarly, history: [] }]));
+    // Preserving the exact raw shape of rawEarly passes.
+    await assertSucceeds(putShopDoc(TECH, [rawEarly]));
+  });
+
+    it("removing an expired unreviewed log from shops/{shopId}.logs without creating a subcollection doc passes", async () => {
+    const r = reviewed(makeLog("R"));
+    const expired = oldLog("OLD");
+    await seedLegacy([r, expired]);
+    await assertSucceeds(putLog(TECH, r));
+    await assertSucceeds(putShopDoc(TECH, []));
+  });
+
+  it("draining >8 legacy entries in one shops/{shopId} write is denied, but draining in 8-entry batches passes", async () => {
+    const legacy = Array.from({ length: 20 }, (_, i) => (i < 5 ? reviewed(makeLog(`L${i}`)) : makeLog(`L${i}`)));
+    await seedLegacy(legacy);
+    for (const log of legacy) {
+      await assertSucceeds(putLog(TECH, log));
+    }
+    // Removing all 20 in one write is denied (exceeds 8-entry per-write cap).
+    await assertFails(putShopDoc(TECH, []));
+    // Batch 1 removes L0..L7 (12 remain).
+    await assertSucceeds(putShopDoc(TECH, legacy.slice(8)));
+    // Batch 2 removes L8..L15 (4 remain).
+    await assertSucceeds(putShopDoc(TECH, legacy.slice(16)));
+    // Batch 3 removes L16..L19 (0 remain).
+    await assertSucceeds(putShopDoc(TECH, []));
+    // Once drained, creating a brand-new log in the subcollection passes.
+    await assertSucceeds(putLog(TECH, makeLog("N")));
+  });
+
+  it("with >8 (e.g. 20) remaining legacy entries, creating a brand-new log passes while planting a forged copy of a reviewed legacy ID at index >= 8 is denied", async () => {
+    const forgedR = makeLog("R15", { serviceAddress: "Forged unreviewed copy" });
+    const legacy = Array.from({ length: 20 }, (_, i) =>
+      i === 15 ? reviewed(makeLog("R15")) : reviewed(makeLog(`L${i}`)),
+    );
+    // Even if forgedR is also in legacy at index 0 while reviewed R15 is at index 15:
+    await seedLegacy([forgedR, ...legacy]);
+    // Creating a brand-new log ID not in legacy passes even with 21 legacy entries remaining!
+    await assertSucceeds(putLog(TECH, makeLog("BRAND_NEW")));
+    // Planting an unreviewed copy for R15 (whose reviewed copy is at index 16) is denied!
+    await assertFails(putLog(TECH, forgedR));
+    await assertFails(putLog(TECH, makeLog("R15", { serviceAddress: "Not in legacy" })));
+    // Creating the reviewed copy R15 passes!
+    await assertSucceeds(putLog(TECH, legacy[15]));
+  });
+
+  it("with >96 (e.g. 101) legacy entries, advancing shops/{shopId}/legacyScan/cursor in 48-entry windows lets clients migrate unreviewed winners and create new logs while blocking forged reviewed IDs", async () => {
+    const forgedR = makeLog("R98", { serviceAddress: "Forged unreviewed copy" });
+    const legacy = Array.from({ length: 100 }, (_, i) =>
+      i === 98 ? reviewed(makeLog("R98")) : makeLog(`L${i}`),
+    );
+    await seedLegacy([forgedR, ...legacy]); // 101 entries; R98 is at index 99
+    const techDb = env.authenticatedContext(TECH).firestore();
+    const scanRef = doc(techDb, "shops", SHOP, "legacyScan", "cursor");
+
+    // Without advancing legacyScan/cursor, creating an unreviewed winner L0 or a brand-new log is denied (>96 entries).
+    await assertFails(putLog(TECH, legacy[0]));
+    await assertFails(putLog(TECH, makeLog("BRAND_NEW")));
+    // Reviewed winner R98 can still be created directly (request.resource.data in legacy && isReviewedLog).
+    await assertSucceeds(putLog(TECH, legacy[98]));
+
+    // Advancing legacyScan/cursor in 48-entry steps (0->48->96->144) for L0 (allowUnreviewed=true) verifies all 101 slots, then creating L0 succeeds.
+    for (let s = 0; s < 96; s += 48) {
+      await assertSucceeds(
+        setDoc(scanRef, {
+          logId: "L0",
+          allowUnreviewed: true,
+          start: s,
+          cursor: s + 48,
+          shopUpdatedAt: "2026-10-01T15:00:00.000Z",
+          legacySize: 101,
+        }),
+      );
+    }
+    // Still < 101, so creating L0 before scanning the final window is denied.
+    await assertFails(putLog(TECH, legacy[0]));
+    await assertSucceeds(
+      setDoc(scanRef, {
+        logId: "L0",
+        allowUnreviewed: true,
+        start: 96,
+        cursor: 144,
+        shopUpdatedAt: "2026-10-01T15:00:00.000Z",
+        legacySize: 101,
+      }),
+    );
+    await assertSucceeds(putLog(TECH, legacy[0]));
+
+    // Advancing legacyScan/cursor in 48-entry steps for BRAND_NEW (allowUnreviewed=false) verifies all 101 slots, then creating BRAND_NEW succeeds.
+    await assertSucceeds(deleteDoc(scanRef));
+    for (let s = 0; s < 101; s += 48) {
+      await assertSucceeds(
+        setDoc(scanRef, {
+          logId: "BRAND_NEW",
+          allowUnreviewed: false,
+          start: s,
+          cursor: s + 48,
+          shopUpdatedAt: "2026-10-01T15:00:00.000Z",
+          legacySize: 101,
+        }),
+      );
+    }
+    await assertSucceeds(putLog(TECH, makeLog("BRAND_NEW")));
+
+    // Attempting to plant forgedR at logs/R98 via legacyScan/cursor fails when advancing cursor to 144 because slot 99 holds reviewed R98.
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await deleteDoc(doc(ctx.firestore(), "shops", SHOP, "logs", "R98"));
+    });
+    await assertSucceeds(deleteDoc(scanRef));
+    for (let s = 0; s < 96; s += 48) {
+      await assertSucceeds(
+        setDoc(scanRef, {
+          logId: "R98",
+          allowUnreviewed: true,
+          start: s,
+          cursor: s + 48,
+          shopUpdatedAt: "2026-10-01T15:00:00.000Z",
+          legacySize: 101,
+        }),
+      );
+    }
+    await assertFails(
+      setDoc(scanRef, {
+        logId: "R98",
+        allowUnreviewed: true,
+        start: 96,
+        cursor: 144,
+        shopUpdatedAt: "2026-10-01T15:00:00.000Z",
+        legacySize: 101,
+      }),
+    );
+    await assertFails(putLog(TECH, forgedR));
+
+    // #249: legacyScan/cursor is bound to legacySize so draining entries without changing updatedAt cannot reuse a cursor across a shifted legacy array.
+    await assertSucceeds(
+      setDoc(scanRef, {
+        logId: "R98",
+        allowUnreviewed: true,
+        start: 0,
+        cursor: 48,
+        shopUpdatedAt: "2026-10-01T15:00:00.000Z",
+        legacySize: 101,
+      }),
+    );
+    // Writing a cursor step with a mismatched legacySize is rejected.
+    await assertFails(
+      setDoc(scanRef, {
+        logId: "R98",
+        allowUnreviewed: true,
+        start: 48,
+        cursor: 96,
+        shopUpdatedAt: "2026-10-01T15:00:00.000Z",
+        legacySize: 100,
+      }),
+    );
+    // If legacy[0] (already migrated to logs/L0 above) is drained without changing updatedAt (size 101 -> 100),
+    // continuing the 101-sized cursor at start=48 is rejected, and a completed 101-sized cursor cannot satisfy legacyScannedTailOk on a 100-entry array.
+    await assertSucceeds(
+      putShopDoc(TECH, [forgedR, ...legacy.slice(1)], { updatedAt: "2026-10-01T15:00:00.000Z" }),
+    );
+    await assertFails(
+      setDoc(scanRef, {
+        logId: "R98",
+        allowUnreviewed: true,
+        start: 48,
+        cursor: 96,
+        shopUpdatedAt: "2026-10-01T15:00:00.000Z",
+        legacySize: 100,
+      }),
+    );
+    // A cursor completed for the 101-entry array must not authorize a create on the 100-entry array.
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "shops", SHOP, "legacyScan", "cursor"), {
+        logId: "FRESH",
+        allowUnreviewed: false,
+        start: 96,
+        cursor: 144,
+        shopUpdatedAt: "2026-10-01T15:00:00.000Z",
+        legacySize: 101,
+      });
+    });
+    await assertFails(putLog(TECH, makeLog("FRESH")));
+  });
+
+  it("#252: multi-write CAS transactions pass Firestore rule limits for a 48-entry legacy migration and a 499-log update", async () => {
+    // 1) 48-entry unreviewed legacy array: creating all 48 winners + updating shops/SHOP1 in a single runTransaction passes.
+    const legacy48 = Array.from({ length: 48 }, (_, i) => makeLog(`L${i}`));
+    await seedLegacy(legacy48);
+    const techDb = env.authenticatedContext(TECH).firestore();
+    await assertSucceeds(
+      runTransaction(techDb, async (tx) => {
+        await tx.get(doc(techDb, "shops", SHOP));
+        for (const l of legacy48) {
+          tx.set(doc(techDb, "shops", SHOP, "logs", l.id), l);
+        }
+        tx.set(doc(techDb, "shops", SHOP), shopDoc(legacy48, { updatedAt: "2026-10-02T15:00:00.000Z" }));
+      }),
+    );
+
+    // 2) 499-log update in a single runTransaction (with shops/SHOP1.logs = []) passes isShopMember + unreviewedEditOk across all 499 logs.
+    await env.clearFirestore();
+    const logs499 = Array.from({ length: 499 }, (_, i) => makeLog(`U${i}`));
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      await setDoc(doc(db, "shops", SHOP), shopDoc([]));
+      for (const l of logs499) {
+        await setDoc(doc(db, "shops", SHOP, "logs", l.id), l);
+      }
+    });
+    await assertSucceeds(
+      runTransaction(techDb, async (tx) => {
+        await tx.get(doc(techDb, "shops", SHOP));
+        for (const l of logs499) {
+          tx.set(doc(techDb, "shops", SHOP, "logs", l.id), { ...l, notes: "updated", revision: 1 });
+        }
+        tx.set(doc(techDb, "shops", SHOP), shopDoc([], { updatedAt: "2026-10-03T15:00:00.000Z" }));
+      }),
+    );
   });
 });
 
 describe("a stray logIds field neither blocks nor is required", () => {
-  it("normal saves without logIds, and with a stale one, pass on a doc that carries it", async () => {
-    const r = reviewed(makeLog("R"));
-    const logs = [r, makeLog("U")];
-    const seedWithIds = () =>
-      env.withSecurityRulesDisabled(async (ctx) => {
-        await setDoc(doc(ctx.firestore(), "shops", SHOP), { ...shopDoc(logs), logIds: ["R", "U"] });
-      });
-    await seedWithIds();
-    await assertSucceeds(put(TECH, [makeLog("N"), ...logs])); // omits logIds
-    await seedWithIds();
-    await assertSucceeds(put(TECH, [makeLog("N"), ...logs], { logIds: ["R", "U"] })); // stale
-    await seedWithIds();
-    await assertSucceeds(put(OFFICE, [correct(r, { serviceAddress: "9 Elm St" }), makeLog("U")], { logIds: ["junk"] }));
-    await seedWithIds();
-    await assertSucceeds(put(TECH, logs, { logIds: ["X"] })); // logs untouched, index changed
-  });
-
-  it("the review lock still applies on a doc with logIds", async () => {
+  it("normal shop updates without logIds, and with a stale one, pass on a doc that carries it", async () => {
     const r = reviewed(makeLog("R"));
     await env.withSecurityRulesDisabled(async (ctx) => {
-      await setDoc(doc(ctx.firestore(), "shops", SHOP), { ...shopDoc([r]), logIds: ["R"] });
+      const db = ctx.firestore();
+      await setDoc(doc(db, "shops", SHOP), { ...shopDoc([]), logIds: ["R", "U"] });
+      await setDoc(doc(db, "shops", SHOP, "logs", "R"), r);
     });
-    await assertFails(put(TECH, [{ ...r, serviceAddress: "Forged" }], { logIds: ["R"] }));
-  });
-
-  it("a member adding logIds doesn't block the next save", async () => {
-    await seed([makeLog("U")]);
-    await assertSucceeds(put(TECH, [makeLog("U")], { logIds: ["U"] }));
-    await assertSucceeds(put(TECH, [makeLog("N"), makeLog("U")]));
-  });
-});
-
-describe("per-write limits (measured)", () => {
-  it("17 unreviewed edits (5 when dateUsed changes), 3 corrections, 5 re-sends, 1 correction + 12 edits, 3 removals past hold and 9 held duplicate removals pass on a 100-log doc", async () => {
-    const rec = { reuploadedAt: "2026-10-02T08:00:00-05:00", reuploadedBy: "Ana Office", reason: "x" };
-    const base = Array.from({ length: 100 }, (_, i) => (i < 10 ? reviewed(makeLog(`L${i}`, { reuploads: [rec] })) : oldLog(`L${i}`)));
-    await seed(base);
-    await assertSucceeds(put(TECH, base.map((l, i) => (i >= 10 && i < 27 ? { ...l, targetPestOrPurpose: "Roaches" } : l))));
-    const withHold = base.map((l, i) => (i < 10 ? l : makeLog(l.id, { retainUntil: IN_THREE_YEARS })));
-    await seed(withHold);
-    await assertSucceeds(put(TECH, withHold.map((l, i) => (i >= 10 && i < 15 ? { ...l, dateUsed: THREE_YEARS_AGO, retainUntil: IN_FOUR_YEARS } : l))));
-    await seed(base);
-    await assertSucceeds(put(TECH, base.map((l, i) => (i < 3 ? correct(l, { serviceAddress: "9 Elm St" }) : l))));
-    await seed(base);
-    await assertSucceeds(put(TECH, base.map((l, i) => (i < 5 ? { ...l, reuploads: [rec, rec] } : l))));
-    await seed(base);
-    await assertSucceeds(put(TECH, base.map((l, i) => (i === 0 ? correct(l, { serviceAddress: "9 Elm St" }) : i >= 10 && i < 22 ? { ...l, targetPestOrPurpose: "Roaches" } : l))));
-    await seed(base);
-    await assertSucceeds(put(TECH, base.filter((l, i) => !(i >= 10 && i < 13))));
-    const held = base.map((l, i) => (i < 10 ? l : makeLog(l.id)));
-    const losers = held.slice(10, 19).map((l) => ({ ...l, serviceAddress: "Other St" }));
-    await seed([...held, ...losers]);
-    await assertSucceeds(put(TECH, held, { keptCopyAt: Object.fromEntries(held.slice(10, 19).map((l, k) => [l.id, 10 + k])) }));
+    await assertSucceeds(putShopDoc(TECH, [])); // omits logIds
+    await assertSucceeds(putShopDoc(TECH, [], { logIds: ["R", "U"] })); // keeps logIds
+    await assertSucceeds(putLog(OFFICE, correct(r, { serviceAddress: "9 Elm St" })));
   });
 });

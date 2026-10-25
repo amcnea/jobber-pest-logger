@@ -14,14 +14,18 @@ import { MemoryStorage } from "../test/memoryStorage";
 import type { ApplicationLog, Person } from "../types";
 import type { ShopDocument } from "./types";
 
-// #209. Firebase is replaced by an in-memory doc at the module boundary so the real
-// RemoteShopStore (read path + write plan) runs; storage, outbox, conflicts and export
-// code are real.
+// #209 / #215. Firebase is replaced by an in-memory shop doc + per-log subcollection at
+// the module boundary so the real RemoteShopStore (read path + write plan + legacy drain)
+// runs; storage, outbox, conflicts and export code are real.
 
 const fake = vi.hoisted(() => ({
   data: null as Record<string, unknown> | null,
+  subLogs: new Map<string, Record<string, unknown>>(),
   writes: [] as Record<string, unknown>[],
+  logWrites: [] as { id: string; data: Record<string, unknown> | null }[],
+  scanWrites: [] as Record<string, unknown>[],
   failWrite: null as Error | null,
+  onGetLogs: null as (() => void) | null,
   stamp: 0,
 }));
 
@@ -29,33 +33,93 @@ vi.mock("./firebaseAuth", () => ({ ensureAnonymousAuth: vi.fn(async () => ({ uid
 vi.mock("./resolveShopStore", () => ({ resolveShopStore: vi.fn() }));
 vi.mock("./firebaseApp", () => ({ getFirebaseApp: vi.fn(async () => ({})) }));
 vi.mock("firebase/firestore", () => {
-  const snap = () => ({ exists: () => fake.data !== null, data: () => JSON.parse(JSON.stringify(fake.data)) });
+  const snap = () => {
+    const captured = fake.data === null ? null : JSON.parse(JSON.stringify(fake.data));
+    return { exists: () => captured !== null, data: () => (captured === null ? null : JSON.parse(JSON.stringify(captured))) };
+  };
   return {
     getFirestore: () => ({}),
-    doc: () => ({}),
+    collection: (_db: unknown, ...segments: string[]) => ({ path: segments.join("/") }),
+    doc: (_db: unknown, ...segments: string[]) => ({
+      path: segments.join("/"),
+      id: segments[segments.length - 1] ?? "",
+    }),
     getDoc: async () => snap(),
-    setDoc: async () => {},
+    getDocs: async () => {
+      const docs = [...fake.subLogs.entries()].map(([id, d]) => ({
+        id,
+        data: () => JSON.parse(JSON.stringify(d)),
+      }));
+      fake.onGetLogs?.();
+      return { docs };
+    },
+    setDoc: async (ref: { path?: string; id?: string }, value: Record<string, unknown>) => {
+      if (fake.failWrite) throw fake.failWrite;
+      const cloned = JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+      if (ref.path?.includes("/logs/") && ref.id) {
+        fake.subLogs.set(ref.id, cloned);
+        fake.logWrites.push({ id: ref.id, data: cloned });
+      } else if (ref.path?.includes("/legacyScan/")) {
+        fake.scanWrites.push(cloned);
+      } else {
+        fake.data = cloned;
+      }
+    },
+    deleteDoc: async (ref: { path?: string; id?: string }) => {
+      if (fake.failWrite) throw fake.failWrite;
+      if (ref.id) {
+        fake.subLogs.delete(ref.id);
+        fake.logWrites.push({ id: ref.id, data: null });
+      }
+    },
     runTransaction: async (_db: unknown, fn: (t: unknown) => Promise<void>) => {
-      let staged: Record<string, unknown> | null = null;
+      let stagedShop: Record<string, unknown> | null = null;
+      const stagedLogs: { id: string; data: Record<string, unknown> | null }[] = [];
       await fn({
         get: async () => snap(),
-        set: (_ref: unknown, value: Record<string, unknown>) => {
-          staged = JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+        set: (ref: { path?: string; id?: string }, value: Record<string, unknown>) => {
+          const cloned = JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+          if (ref?.path?.includes("/logs/") && ref.id) {
+            stagedLogs.push({ id: ref.id, data: cloned });
+          } else {
+            stagedShop = cloned;
+          }
+        },
+        delete: (ref: { path?: string; id?: string }) => {
+          if (ref?.id) {
+            stagedLogs.push({ id: ref.id, data: null });
+          }
         },
         update: () => {},
       });
       if (fake.failWrite) throw fake.failWrite;
-      if (staged) {
-        fake.data = staged;
-        fake.writes.push(staged);
+      for (const op of stagedLogs) {
+        if (op.data === null) {
+          fake.subLogs.delete(op.id);
+        } else {
+          fake.subLogs.set(op.id, op.data);
+        }
+        fake.logWrites.push(op);
+      }
+      if (stagedShop) {
+        fake.data = stagedShop;
+        fake.writes.push(stagedShop);
       }
     },
   };
 });
 
-const { compareDuplicateCopies, dedupeLogsById, planDedupedWrite, setAsideDuplicateCopies, DUPLICATE_ID_SET_ASIDE_REASON, MAX_DEDUPE_CLEANUP_BATCH } =
-  await import("./dedupeLogs");
-const { RemoteShopStore } = await import("./RemoteShopStore");
+const {
+  compareDuplicateCopies,
+  dedupeLogsById,
+  planDedupedWrite,
+  canUpdateSubcollectionLog,
+  planLegacyDrain,
+  setAsideDuplicateCopies,
+  DUPLICATE_ID_SET_ASIDE_REASON,
+  MAX_DEDUPE_CLEANUP_BATCH,
+} = await import("./dedupeLogs");
+const { RemoteShopStore, MAX_LOG_WRITES_PER_TX } = await import("./RemoteShopStore");
 const { enqueueLogOutbox, flushLogOutbox, outboxEntriesForShop, syncLogToRemote } = await import("./logOutbox");
 const { REMOTE_COPY_KEPT_ERROR } = await import("./logOutbox");
 const { takeShopCopy } = await import("./conflicts");
@@ -82,8 +146,12 @@ beforeEach(() => {
     JSON.stringify({ shopId: SHOP, role: "office", verifiedAt: new Date().toISOString(), lastActiveAt: new Date().toISOString() }),
   );
   fake.data = null;
+  fake.subLogs.clear();
   fake.writes = [];
+  fake.logWrites = [];
+  fake.scanWrites = [];
   fake.failWrite = null;
+  fake.onGetLogs = null;
 });
 
 afterEach(() => {
@@ -122,7 +190,7 @@ function versions() {
   return { rev0, rev1, rev2, rev1Early, rev1Late, reviewedEarly, reviewedLate, reviewedRev0, reviewedRev1 };
 }
 
-function shopDoc(logs: ApplicationLog[], extra: Partial<ShopDocument> = {}): Record<string, unknown> {
+function shopDoc(logs: unknown[], extra: Partial<ShopDocument> = {}): Record<string, unknown> {
   return {
     version: "1",
     updatedAt: "2026-10-01T00:00:00.000Z",
@@ -262,6 +330,123 @@ describe("write plan (#208 compatible)", () => {
     }
     expect(plan.cleanup).toEqual(winners);
   });
+
+  it("#215: planLegacyDrain queues winners for subcollection creation and drains removable legacy entries in <=8 batches", () => {
+    const v = versions();
+    const other = makeLog({ id: "o" });
+    const legacy = [v.rev2, other, v.reviewedLate, clone(other), v.reviewedEarly];
+    const next = dedupeLogsById(legacy).logs;
+    const plan = planLegacyDrain(new Map(), legacy, legacy, next, true);
+    expect(plan.winnersToCreate.map((w) => w.log)).toEqual([v.reviewedLate, other]);
+    expect(plan.remainingLegacy).toEqual([v.reviewedEarly]);
+    expect(plan.drainBatches).toEqual([[v.reviewedEarly]]);
+  });
+
+  it("#215: planLegacyDrain preserves raw legacy entries without normalized defaults (e.g. history) in drainBatches and remainingLegacy", () => {
+    const v = versions();
+    const rawLate = clone(v.reviewedLate) as unknown as Record<string, unknown>;
+    const rawEarly = clone(v.reviewedEarly) as unknown as Record<string, unknown>;
+    delete rawLate.history;
+    delete rawEarly.history;
+    const legacy = [v.reviewedLate, v.reviewedEarly];
+    const rawLegacy = [rawLate, rawEarly];
+    const plan = planLegacyDrain(new Map(), legacy, rawLegacy, [v.reviewedLate], true);
+    expect(plan.winnersToCreate[0].raw).toEqual(rawLate);
+    expect("history" in (plan.winnersToCreate[0].raw as Record<string, unknown>)).toBe(false);
+    expect(plan.drainBatches).toEqual([[rawEarly as unknown as ApplicationLog]]);
+    expect(plan.remainingLegacy).toEqual([rawEarly as unknown as ApplicationLog]);
+    expect("history" in (plan.remainingLegacy[0] as unknown as Record<string, unknown>)).toBe(false);
+
+    // No-removals path (winner already in subLogs, only reviewed loser remains in legacyLogs):
+    const noRemovals = planLegacyDrain(
+      new Map([["L1", v.reviewedLate]]),
+      [v.reviewedEarly],
+      [rawEarly],
+      [v.reviewedLate],
+      true,
+    );
+    expect(noRemovals.drainBatches).toEqual([]);
+    expect(noRemovals.remainingLegacy).toEqual([rawEarly as unknown as ApplicationLog]);
+    expect("history" in (noRemovals.remainingLegacy[0] as unknown as Record<string, unknown>)).toBe(false);
+  });
+
+  it("#215: when subLogs holds an older copy and legacyLogs holds a permitted newer winner, planLegacyDrain queues the legacy winner for Step A and drains it in Step B", () => {
+    const v = versions();
+    // (1) Unreviewed subLogs copy -> newer unreviewed legacy winner (same hold date):
+    const planUnrev = planLegacyDrain(
+      new Map([["L1", v.rev1]]),
+      [v.rev2],
+      [v.rev2],
+      [v.rev2],
+      true,
+    );
+    expect(canUpdateSubcollectionLog(v.rev1, v.rev2)).toBe(true);
+    expect(planUnrev.winnersToCreate.map((w) => w.log)).toEqual([v.rev2]);
+    expect(planUnrev.drainBatches).toEqual([[]]);
+    expect(planUnrev.remainingLegacy).toEqual([]);
+
+    // (2) Unreviewed subLogs copy -> reviewed legacy winner:
+    const planRevOverUnrev = planLegacyDrain(
+      new Map([["L1", v.rev1]]),
+      [v.reviewedRev0],
+      [v.reviewedRev0],
+      [v.reviewedRev0],
+      true,
+    );
+    expect(canUpdateSubcollectionLog(v.rev1, v.reviewedRev0)).toBe(true);
+    expect(planRevOverUnrev.winnersToCreate.map((w) => w.log)).toEqual([v.reviewedRev0]);
+    expect(planRevOverUnrev.drainBatches).toEqual([[]]);
+    expect(planRevOverUnrev.remainingLegacy).toEqual([]);
+
+    // (3) Reviewed subLogs copy -> valid reviewed correction in legacyLogs:
+    saveLogs([v.reviewedRev0]);
+    const corrRes = applyCorrection("L1", { ...v.reviewedRev0, serviceAddress: "6 Corrected After Review St" }, { changedBy: "p-ana", reason: "fix after review", people: PEOPLE, now: NOW });
+    if (!corrRes.ok) throw new Error(corrRes.error);
+    const reviewedThenCorrected = corrRes.log;
+    storage.removeItem("jobber-pest-logger:logs:v1");
+    const planRevCorr = planLegacyDrain(
+      new Map([["L1", v.reviewedRev0]]),
+      [reviewedThenCorrected],
+      [reviewedThenCorrected],
+      [reviewedThenCorrected],
+      true,
+    );
+    expect(canUpdateSubcollectionLog(v.reviewedRev0, reviewedThenCorrected)).toBe(true);
+    expect(planRevCorr.winnersToCreate.map((w) => w.log)).toEqual([reviewedThenCorrected]);
+    expect(planRevCorr.drainBatches).toEqual([[]]);
+    expect(planRevCorr.remainingLegacy).toEqual([]);
+  });
+
+  it("#215: when subLogs holds a copy and legacyLogs holds a winner that cannot overwrite subLogs under firestore.rules, planLegacyDrain keeps the legacy entry in remainingLegacy", () => {
+    const v = versions();
+    // (1) Reviewed subLogs copy vs conflicting reviewed legacy winner (later reviewedAt at same revision):
+    const planConflictingRev = planLegacyDrain(
+      new Map([["L1", v.reviewedEarly]]),
+      [v.reviewedLate],
+      [v.reviewedLate],
+      [v.reviewedLate],
+      true,
+    );
+    expect(canUpdateSubcollectionLog(v.reviewedEarly, v.reviewedLate)).toBe(false);
+    expect(planConflictingRev.winnersToCreate).toEqual([]);
+    expect(planConflictingRev.drainBatches).toEqual([]);
+    expect(planConflictingRev.remainingLegacy).toEqual([v.reviewedLate]);
+
+    // (2) Unreviewed subLogs copy with later dateUsed vs unreviewed legacy winner with backdated dateUsed and no retainUntil:
+    const subLaterHold = makeLog({ id: "L1", revision: 0, dateUsed: "2026-08-15", createdAt: "2026-08-15T10:00:00.000Z" });
+    const legacyBackdatedWinner = makeLog({ id: "L1", revision: 1, dateUsed: "2026-06-01", createdAt: "2026-06-01T10:00:00.000Z" });
+    const planBackdated = planLegacyDrain(
+      new Map([["L1", subLaterHold]]),
+      [legacyBackdatedWinner],
+      [legacyBackdatedWinner],
+      [legacyBackdatedWinner],
+      true,
+    );
+    expect(canUpdateSubcollectionLog(subLaterHold, legacyBackdatedWinner)).toBe(false);
+    expect(planBackdated.winnersToCreate).toEqual([]);
+    expect(planBackdated.drainBatches).toEqual([]);
+    expect(planBackdated.remainingLegacy).toEqual([legacyBackdatedWinner]);
+  });
 });
 
 describe("RemoteShopStore read path", () => {
@@ -277,8 +462,22 @@ describe("RemoteShopStore read path", () => {
     expect(setAsideRows().map((r) => r.deviceCopy)).toEqual([v.rev2, v.rev1]);
     expect(buildBackup().setAside).toEqual(setAsideRows());
     expect(fake.writes).toEqual([]); // reading never writes
+    expect(fake.logWrites).toEqual([]);
     wipeAllDeviceData();
     expect(storage.getItem(SET_ASIDE_KEY)).toBeNull();
+  });
+
+  it("#215: getShop reads per-log subcollection docs when shops/{shopId}.logs is empty or omitted", async () => {
+    const v = versions();
+    const other = makeLog({ id: "o" });
+    const rawDoc = shopDoc([]);
+    delete rawDoc.logs;
+    fake.data = rawDoc;
+    fake.subLogs.set("L1", clone(v.reviewedRev0) as unknown as Record<string, unknown>);
+    fake.subLogs.set("o", clone(other) as unknown as Record<string, unknown>);
+    const store = new RemoteShopStore(CONFIG, SHOP);
+    const got = await store.getShop();
+    expect(got.ok && got.value.logs).toEqual([v.reviewedRev0, other]);
   });
 
   it("export (shared pull) and CSV use the reviewed winner, not the stray copy", async () => {
@@ -309,22 +508,57 @@ describe("RemoteShopStore read path", () => {
 });
 
 describe("RemoteShopStore write path", () => {
-  it("outbox flush merges over the winner; cleanup write first, then the change; reviewed loser untouched", async () => {
+  it("outbox flush migrates winner to per-log doc, drains legacy array first, then writes new log; reviewed loser stays in legacy array", async () => {
     const v = versions();
     fake.data = shopDoc([v.rev2, v.reviewedLate, v.reviewedEarly]);
     const store = new RemoteShopStore(CONFIG, SHOP);
+    const logN = makeLog({ id: "N" });
+    await enqueueLogOutbox(SHOP, logN);
+    expect(await flushLogOutbox(store, SHOP)).toEqual({ ok: true, flushed: 1, remaining: 0 });
+    // Winner migrated to shops/SHOP1/logs/L1 and new log written to shops/SHOP1/logs/N.
+    expect(fake.subLogs.get("L1")).toEqual(v.reviewedLate);
+    expect(fake.subLogs.get("N")).toEqual(logN);
+    // Shop doc writes: [0] Step A CAS migrates winner (keeps legacy array intact); [1] Step B drains rev2 + reviewedLate; [2] Step C commits the flush.
+    expect(fake.writes).toHaveLength(3);
+    expect(fake.writes[0].logs).toEqual([v.rev2, v.reviewedLate, v.reviewedEarly]);
+    expect(fake.writes[1].logs).toEqual([v.reviewedEarly]);
+    expect(fake.writes[2].logs).toEqual([v.reviewedEarly]);
+    expect(setAsideRows().map((r) => r.deviceCopy)).toEqual([v.rev2, v.reviewedEarly]);
+    // The next write reuses the written state: only writes M to shops/SHOP1/logs/M + 1 shop doc CAS update.
+    const logM = makeLog({ id: "M" });
+    await enqueueLogOutbox(SHOP, logM);
+    expect(await flushLogOutbox(store, SHOP)).toMatchObject({ ok: true, flushed: 1 });
+    expect(fake.subLogs.get("M")).toEqual(logM);
+    expect(fake.writes).toHaveLength(4);
+    expect(fake.writes[3].logs).toEqual([v.reviewedEarly]);
+    expect(setAsideRows()).toHaveLength(2);
+  });
+
+  it("#215: putShop preserves raw legacy entries without history across drain batches and subsequent writes", async () => {
+    const v = versions();
+    const rawLate = clone(v.reviewedLate) as unknown as Record<string, unknown>;
+    const rawEarly = clone(v.reviewedEarly) as unknown as Record<string, unknown>;
+    delete rawLate.history;
+    delete rawEarly.history;
+    fake.data = shopDoc([rawLate, rawEarly]);
+    const store = new RemoteShopStore(CONFIG, SHOP);
     await enqueueLogOutbox(SHOP, makeLog({ id: "N" }));
     expect(await flushLogOutbox(store, SHOP)).toEqual({ ok: true, flushed: 1, remaining: 0 });
-    expect(fake.writes).toHaveLength(2);
-    expect(fake.writes[0].logs).toEqual([v.reviewedLate, v.reviewedEarly]); // only the removal
-    expect(fake.writes[1].logs).toEqual([makeLog({ id: "N" }), v.reviewedLate, v.reviewedEarly]);
-    expect(setAsideRows().map((r) => r.deviceCopy)).toEqual([v.rev2, v.reviewedEarly]);
-    // The next write reuses the written doc: no cleanup again, no extra set-aside rows.
+    expect(fake.subLogs.get("L1")).toEqual(rawLate);
+    expect("history" in (fake.subLogs.get("L1") as Record<string, unknown>)).toBe(false);
+    expect(fake.writes[0].logs).toEqual([rawLate, rawEarly]);
+    expect("history" in ((fake.writes[0].logs as Record<string, unknown>[])[0])).toBe(false);
+    expect(fake.writes[1].logs).toEqual([rawEarly]);
+    expect("history" in ((fake.writes[1].logs as Record<string, unknown>[])[0])).toBe(false);
+    expect(fake.writes[2].logs).toEqual([rawEarly]);
+    expect("history" in ((fake.writes[2].logs as Record<string, unknown>[])[0])).toBe(false);
+
+    // Subsequent write reusing cached state also keeps rawEarly without history:
     await enqueueLogOutbox(SHOP, makeLog({ id: "M" }));
-    expect(await flushLogOutbox(store, SHOP)).toMatchObject({ ok: true, flushed: 1 });
-    expect(fake.writes).toHaveLength(3);
-    expect(fake.writes[2].logs).toEqual([makeLog({ id: "M" }), makeLog({ id: "N" }), v.reviewedLate, v.reviewedEarly]);
-    expect(setAsideRows()).toHaveLength(2);
+    expect(await flushLogOutbox(store, SHOP)).toEqual({ ok: true, flushed: 1, remaining: 0 });
+    expect(fake.writes[3].logs).toEqual([rawEarly]);
+    expect("history" in ((fake.writes[3].logs as Record<string, unknown>[])[0])).toBe(false);
+    expect(setAsideRows()).toHaveLength(1);
   });
 
   it("an unreviewed device copy is refused against the reviewed winner (conflict screen), not merged over the stray", async () => {
@@ -335,9 +569,10 @@ describe("RemoteShopStore write path", () => {
     expect(await flushLogOutbox(store, SHOP)).toMatchObject({ ok: false, error: REMOTE_COPY_KEPT_ERROR });
     expect(outboxEntriesForShop(SHOP)[0].lastError).toBe(REMOTE_COPY_KEPT_ERROR);
     expect(fake.writes).toEqual([]);
+    expect(fake.logWrites).toEqual([]);
   });
 
-  it("if the set-aside can't be saved, putShop leaves every copy in the shop doc", async () => {
+  it("if the set-aside can't be saved, putShop keeps the un-set-aside loser in the shop doc while migrating the winner", async () => {
     const v = versions();
     storage.setItem(SET_ASIDE_KEY, "{corrupt");
     fake.data = shopDoc([v.rev2, v.reviewedRev0]);
@@ -345,10 +580,12 @@ describe("RemoteShopStore write path", () => {
     const got = await store.getShop();
     if (!got.ok) throw new Error(got.error);
     expect(got.value.logs).toEqual([v.reviewedRev0]);
-    const put = await store.putShop({ ...got.value, logs: [makeLog({ id: "N" }), ...got.value.logs] });
+    const logN = makeLog({ id: "N" });
+    const put = await store.putShop({ ...got.value, logs: [logN, ...got.value.logs] });
     expect(put.ok).toBe(true);
-    expect(fake.writes).toHaveLength(1);
-    expect(fake.writes[0].logs).toEqual([makeLog({ id: "N" }), v.reviewedRev0, v.rev2]);
+    expect(fake.subLogs.get("L1")).toEqual(v.reviewedRev0);
+    expect(fake.subLogs.get("N")).toEqual(logN);
+    expect((fake.data as unknown as ShopDocument).logs).toEqual([v.rev2]);
   });
 
   it("putShop without a prior read re-reads the stored doc so nothing is dropped", async () => {
@@ -357,7 +594,8 @@ describe("RemoteShopStore write path", () => {
     const store = new RemoteShopStore(CONFIG, SHOP);
     const doc = shopDoc([v.reviewedRev0]) as unknown as ShopDocument;
     expect((await store.putShop(doc)).ok).toBe(true);
-    expect(fake.writes.map((w) => w.logs)).toEqual([[v.reviewedRev0], [v.reviewedRev0]]);
+    expect(fake.subLogs.get("L1")).toEqual(v.reviewedRev0);
+    expect(fake.writes.map((w) => w.logs)).toEqual([[v.rev2, v.reviewedRev0], [], []]);
     expect(setAsideRows().map((r) => r.deviceCopy)).toEqual([v.rev2]);
   });
 
@@ -367,9 +605,76 @@ describe("RemoteShopStore write path", () => {
     const res = await store.putShop(shopDoc([]) as unknown as ShopDocument);
     expect(res).toMatchObject({ ok: false, conflict: true });
     expect(fake.writes).toEqual([]);
+    expect(fake.logWrites).toEqual([]);
   });
 
-  it("#228: batches >9 (20) held differing duplicate removals into <=8-copy cleanup writes before saving", async () => {
+  it("#215: when remote updatedAt changes after getShop (cached state is stale), putShop conflicts inside CAS without overwriting or deleting any per-log doc", async () => {
+    const logA = makeLog({ id: "a", serviceAddress: "1 Original St" });
+    const logB = makeLog({ id: "b", serviceAddress: "2 Keep St" });
+    fake.data = shopDoc([]);
+    fake.subLogs.set("a", clone(logA) as unknown as Record<string, unknown>);
+    fake.subLogs.set("b", clone(logB) as unknown as Record<string, unknown>);
+
+    // Device A reads the shop and caches updatedAt = "2026-10-01T00:00:00.000Z".
+    const storeA = new RemoteShopStore(CONFIG, SHOP);
+    const gotA = await storeA.getShop();
+    if (!gotA.ok) throw new Error(gotA.error);
+
+    // Device B edits log "a" and commits, advancing remote updatedAt.
+    const logAByB = { ...logA, revision: 1, serviceAddress: "1 Edited By B St" };
+    fake.subLogs.set("a", clone(logAByB) as unknown as Record<string, unknown>);
+    fake.data = { ...fake.data, updatedAt: "2026-10-02T00:00:00.000Z" };
+
+    // Device A now attempts to overwrite "a" with its stale edit and delete "b".
+    const staleA = { ...logA, revision: 1, serviceAddress: "1 Stale Edit By A St" };
+    const res = await storeA.putShop({ ...gotA.value, logs: [staleA] });
+    expect(res).toMatchObject({ ok: false, conflict: true });
+    // Neither "a" nor "b" was overwritten or deleted in shops/{shopId}/logs/{logId}.
+    expect(fake.logWrites).toEqual([]);
+    expect(fake.writes).toEqual([]);
+    expect(fake.subLogs.get("a")).toEqual(logAByB);
+    expect(fake.subLogs.get("b")).toEqual(logB);
+  });
+
+  it("#215: when a legacy shop's remote updatedAt changes after getShop (cached state is stale), Step A conflicts inside CAS without writing any legacy winner to shops/{shopId}/logs/{logId}", async () => {
+    const legacyU = makeLog({ id: "U", revision: 0, serviceAddress: "1 Legacy St" });
+    fake.data = shopDoc([legacyU]);
+
+    // Device A reads the legacy shop and caches legacyU for Step A migration.
+    const storeA = new RemoteShopStore(CONFIG, SHOP);
+    const gotA = await storeA.getShop();
+    if (!gotA.ok) throw new Error(gotA.error);
+
+    // Device B migrates U to shops/SHOP1/logs/U, drains shops/SHOP1.logs, edits U, and advances updatedAt.
+    const uEditedByB = { ...legacyU, revision: 1, serviceAddress: "1 Edited By B St" };
+    fake.subLogs.set("U", clone(uEditedByB) as unknown as Record<string, unknown>);
+    fake.data = { ...fake.data, logs: [], updatedAt: "2026-10-02T00:00:00.000Z" };
+
+    // Device A calls putShop with its stale cached updatedAt, which would otherwise run Step A for legacyU.
+    const res = await storeA.putShop({ ...gotA.value, logs: [legacyU, makeLog({ id: "N" })] });
+    expect(res).toMatchObject({ ok: false, conflict: true });
+    expect(fake.logWrites).toEqual([]);
+    expect(fake.writes).toEqual([]);
+    expect(fake.subLogs.get("U")).toEqual(uEditedByB);
+  });
+
+  it("#215: chunks >499 per-log writes across CAS transactions of <=499 log writes + 1 shop write", async () => {
+    expect(MAX_LOG_WRITES_PER_TX).toBe(499);
+    fake.data = shopDoc([]);
+    const store = new RemoteShopStore(CONFIG, SHOP);
+    const got = await store.getShop();
+    if (!got.ok) throw new Error(got.error);
+
+    const manyLogs = Array.from({ length: 505 }, (_, i) => makeLog({ id: `L${i}`, serviceAddress: `${i} Bulk St` }));
+    const res = await store.putShop({ ...got.value, logs: manyLogs });
+    expect(res.ok).toBe(true);
+    expect(fake.subLogs.size).toBe(505);
+    // 505 log writes split across 2 CAS transactions (499 + 6), each updating the shop doc once.
+    expect(fake.writes).toHaveLength(2);
+    expect(fake.logWrites).toHaveLength(505);
+  });
+
+  it("#215 / #228: drains >8 (40) legacy entries in <=8-entry batches after writing winners to shops/{shopId}/logs/{logId}", async () => {
     const winners = Array.from({ length: 20 }, (_, i) => makeLog({ id: `L${i}`, revision: 1, serviceAddress: `${i} Winner St` }));
     const differingLosers = winners.map((w, i) => ({ ...w, revision: 0, serviceAddress: `${i} Stray St` }));
     fake.data = shopDoc([...differingLosers, ...winners]);
@@ -377,24 +682,48 @@ describe("RemoteShopStore write path", () => {
     const newLog = makeLog({ id: "N" });
     await enqueueLogOutbox(SHOP, newLog);
     expect(await flushLogOutbox(store, SHOP)).toEqual({ ok: true, flushed: 1, remaining: 0 });
-    // 3 cleanup batches (8, 8, 4) + 1 final write = 4 writes.
-    expect(fake.writes).toHaveLength(4);
-    expect((fake.writes[0].logs as ApplicationLog[]).length).toBe(32);
-    expect((fake.writes[1].logs as ApplicationLog[]).length).toBe(24);
-    expect((fake.writes[2].logs as ApplicationLog[]).length).toBe(20);
-    for (let b = 0; b < 3; b++) {
-      const batchLogs = fake.writes[b].logs as ApplicationLog[];
-      const kept = fake.writes[b].keptCopyAt as Record<string, number>;
-      expect(Object.keys(kept).length).toBe(b < 2 ? 8 : 4);
-      for (const [id, idx] of Object.entries(kept)) {
-        expect(batchLogs[idx].id).toBe(id);
-      }
+    // All 20 winners + newLog live in shops/SHOP1/logs/{logId}.
+    expect(fake.subLogs.size).toBe(21);
+    for (const w of winners) {
+      expect(fake.subLogs.get(w.id)).toEqual(w);
     }
-    // Final write carries the caller's new log and drops keptCopyAt.
-    expect(fake.writes[3].keptCopyAt).toBeUndefined();
-    expect(fake.writes[3].logs).toEqual([newLog, ...winners]);
-    // Set-aside recorded each of the 20 differing losers once (no duplicates across batches).
+    expect(fake.subLogs.get("N")).toEqual(newLog);
+    // 1 Step A winner-migration CAS write (40 entries) + 5 drain batches (32 -> 24 -> 16 -> 8 -> 0) + 1 final write = 7 writes.
+    expect(fake.writes).toHaveLength(7);
+    expect((fake.writes[0].logs as ApplicationLog[]).length).toBe(40);
+    expect((fake.writes[1].logs as ApplicationLog[]).length).toBe(32);
+    expect((fake.writes[2].logs as ApplicationLog[]).length).toBe(24);
+    expect((fake.writes[3].logs as ApplicationLog[]).length).toBe(16);
+    expect((fake.writes[4].logs as ApplicationLog[]).length).toBe(8);
+    expect((fake.writes[5].logs as ApplicationLog[]).length).toBe(0);
+    expect(fake.writes[6].logs).toEqual([]);
+    // Set-aside recorded each of the 20 differing losers once.
     expect(setAsideRows().map((r) => r.deviceCopy)).toEqual(differingLosers);
+  });
+
+  it("#215: per-log updates and deletions only write/delete changed docs in shops/{shopId}/logs/{logId}", async () => {
+    const a = makeLog({ id: "a", serviceAddress: "1 A St" });
+    const b = makeLog({ id: "b", serviceAddress: "2 B St" });
+    fake.data = shopDoc([]);
+    fake.subLogs.set("a", clone(a) as unknown as Record<string, unknown>);
+    fake.subLogs.set("b", clone(b) as unknown as Record<string, unknown>);
+    const store = new RemoteShopStore(CONFIG, SHOP);
+    const got = await store.getShop();
+    if (!got.ok) throw new Error(got.error);
+    expect(got.value.logs).toEqual([a, b]);
+
+    // Update "a" and delete "b" in one putShop call.
+    const aUpdated = { ...a, revision: 1, serviceAddress: "1 Updated St" };
+    const put = await store.putShop({ ...got.value, logs: [aUpdated] });
+    expect(put.ok).toBe(true);
+    expect(fake.subLogs.get("a")).toEqual(aUpdated);
+    expect(fake.subLogs.has("b")).toBe(false);
+    expect(fake.logWrites).toEqual([
+      { id: "a", data: aUpdated as unknown as Record<string, unknown> },
+      { id: "b", data: null },
+    ]);
+    expect(fake.writes).toHaveLength(1);
+    expect(fake.writes[0].logs).toEqual([]);
   });
 
   it("#228 (Lawgical): when a cleanup write is refused, every copy is kept and the blocked save stays queued with lastError", async () => {
@@ -405,7 +734,7 @@ describe("RemoteShopStore write path", () => {
     const store = new RemoteShopStore(CONFIG, SHOP);
     const saved = makeLog({ id: "N", serviceAddress: "99 Pending St" });
 
-    // 1) Direct save path (syncLogToRemote): queues first, cleanup is refused, entry stays queued with lastError.
+    // 1) Direct save path (syncLogToRemote): queues first, migration/cleanup is refused, entry stays queued with lastError.
     const sync = await syncLogToRemote(store, SHOP, saved);
     expect(sync).toEqual({
       ok: false,
@@ -413,6 +742,7 @@ describe("RemoteShopStore write path", () => {
       queued: true,
     });
     expect(fake.writes).toEqual([]);
+    expect(fake.subLogs.size).toBe(0);
     expect((fake.data as unknown as ShopDocument).logs).toEqual(initialLogs);
     expect(outboxEntriesForShop(SHOP)).toMatchObject([
       { shopId: SHOP, log: saved, lastError: "Missing or insufficient permissions." },
@@ -428,6 +758,7 @@ describe("RemoteShopStore write path", () => {
       error: "Missing or insufficient permissions.",
     });
     expect(fake.writes).toEqual([]);
+    expect(fake.subLogs.size).toBe(0);
     expect((fake.data as unknown as ShopDocument).logs).toEqual(initialLogs);
     expect(outboxEntriesForShop(SHOP)).toMatchObject([
       { shopId: SHOP, log: saved, lastError: "Missing or insufficient permissions." },
@@ -437,9 +768,208 @@ describe("RemoteShopStore write path", () => {
     fake.failWrite = null;
     expect(await flushLogOutbox(store, SHOP)).toEqual({ ok: true, flushed: 1, remaining: 0 });
     expect(outboxEntriesForShop(SHOP)).toEqual([]);
-    expect(fake.writes).toHaveLength(2);
-    expect(fake.writes[1].logs).toEqual([saved, v.reviewedRev0]);
+    expect(fake.subLogs.get("L1")).toEqual(v.reviewedRev0);
+    expect(fake.subLogs.get("N")).toEqual(saved);
+    expect(fake.writes).toHaveLength(3);
+    expect(fake.writes[2].logs).toEqual([]);
     expect(setAsideRows().map((r) => r.deviceCopy)).toEqual([v.rev2]);
+  });
+
+  it("#215: when subLogs has an older copy and legacyLogs has a newer permitted winner, putShop updates logs/{id} in Step A and drains the legacy entry in Step B", async () => {
+    const v = versions();
+    fake.data = shopDoc([v.rev2]);
+    fake.subLogs.set("L1", clone(v.rev1) as unknown as Record<string, unknown>);
+    const store = new RemoteShopStore(CONFIG, SHOP);
+    const logN = makeLog({ id: "N" });
+    await enqueueLogOutbox(SHOP, logN);
+    expect(await flushLogOutbox(store, SHOP)).toEqual({ ok: true, flushed: 1, remaining: 0 });
+    // Step A updated L1 from rev1 to rev2, Step B drained shops/SHOP1.logs, Step C created N.
+    expect(fake.subLogs.get("L1")).toEqual(v.rev2);
+    expect(fake.subLogs.get("N")).toEqual(logN);
+    expect((fake.data as unknown as ShopDocument).logs).toEqual([]);
+    expect(setAsideRows().map((r) => r.deviceCopy)).toEqual([v.rev1]);
+  });
+
+  it("#215: when subLogs has a reviewed copy and legacyLogs has a conflicting reviewed winner, putShop keeps the legacy entry in remainingLegacy and does not overwrite logs/{id}", async () => {
+    const v = versions();
+    fake.data = shopDoc([v.reviewedLate]);
+    fake.subLogs.set("L1", clone(v.reviewedEarly) as unknown as Record<string, unknown>);
+    const store = new RemoteShopStore(CONFIG, SHOP);
+    const logN = makeLog({ id: "N" });
+    await enqueueLogOutbox(SHOP, logN);
+    expect(await flushLogOutbox(store, SHOP)).toEqual({ ok: true, flushed: 1, remaining: 0 });
+    // L1 in subLogs stays reviewedEarly (not overwritten by conflicting reviewedLate), and reviewedLate stays in shops/SHOP1.logs.
+    expect(fake.subLogs.get("L1")).toEqual(v.reviewedEarly);
+    expect(fake.subLogs.get("N")).toEqual(logN);
+    expect((fake.data as unknown as ShopDocument).logs).toEqual([v.reviewedLate]);
+    expect(fake.logWrites).toEqual([{ id: "N", data: logN as unknown as Record<string, unknown> }]);
+
+    // A second write on the same store instance must still see L1 as reviewedEarly in its cached subLogs
+    // (not reviewedLate) and keep reviewedLate in remainingLegacy instead of draining it.
+    const logM = makeLog({ id: "M" });
+    await enqueueLogOutbox(SHOP, logM);
+    expect(await flushLogOutbox(store, SHOP)).toEqual({ ok: true, flushed: 1, remaining: 0 });
+    expect(fake.subLogs.get("L1")).toEqual(v.reviewedEarly);
+    expect(fake.subLogs.get("M")).toEqual(logM);
+    expect((fake.data as unknown as ShopDocument).logs).toEqual([v.reviewedLate]);
+  });
+
+  it("#215: when shops/{shopId}.logs has >96 entries, putShop caps unreviewed scan winners to 8 per save, advances shops/{shopId}/legacyScan/cursor with legacySize in 48-entry windows, and drains the rest across subsequent saves", async () => {
+    const legacy = Array.from({ length: 100 }, (_, i) => makeLog({ id: `L${i}` }));
+    fake.data = shopDoc(legacy);
+    const store = new RemoteShopStore(CONFIG, SHOP);
+    const logN = makeLog({ id: "N" });
+    await enqueueLogOutbox(SHOP, logN);
+    expect(await flushLogOutbox(store, SHOP)).toEqual({ ok: true, flushed: 1, remaining: 0 });
+    // First save migrates 8 unreviewed legacy winners + new log N (9 total in subLogs) and drains 8 entries from legacy (92 remain).
+    expect(fake.subLogs.size).toBe(9);
+    expect(fake.subLogs.get("L0")).toEqual(legacy[0]);
+    expect(fake.subLogs.get("L7")).toEqual(legacy[7]);
+    expect(fake.subLogs.has("L8")).toBe(false);
+    expect(fake.subLogs.get("N")).toEqual(logN);
+    expect((fake.data as unknown as ShopDocument).logs).toHaveLength(92);
+    expect(
+      fake.scanWrites.some(
+        (w) =>
+          w.logId === "L0" &&
+          w.allowUnreviewed === true &&
+          w.start === 96 &&
+          w.cursor === 144 &&
+          w.legacySize === 100,
+      ),
+    ).toBe(true);
+    expect(
+      fake.scanWrites.some(
+        (w) =>
+          w.logId === "N" &&
+          w.allowUnreviewed === false &&
+          w.start === 48 &&
+          w.cursor === 96 &&
+          w.legacySize === 92,
+      ),
+    ).toBe(true);
+
+    // Subsequent saves continue draining 8 unreviewed winners per save until <= 48 remain, then migrate the rest in one batch.
+    while (((fake.data as unknown as ShopDocument).logs ?? []).length > 0) {
+      const got = await store.getShop();
+      expect(got.ok).toBe(true);
+      if (!got.ok) break;
+      const put = await store.putShop(got.value);
+      expect(put.ok).toBe(true);
+    }
+    expect(fake.subLogs.size).toBe(101);
+    expect(fake.subLogs.get("L99")).toEqual(legacy[99]);
+    expect((fake.data as unknown as ShopDocument).logs).toEqual([]);
+  });
+
+  it("#215: when shops/{shopId}.logs has >48 entries, a caller-edited log at index >= 8 is prioritized into the 8 migrated winners and saved in a single flush", async () => {
+    const legacy = Array.from({ length: 60 }, (_, i) => makeLog({ id: `L${i}`, revision: 0 }));
+    fake.data = shopDoc(legacy);
+    const store = new RemoteShopStore(CONFIG, SHOP);
+    const editedL50 = makeLog({
+      id: "L50",
+      revision: 1,
+      serviceAddress: "50 Edited Legacy St",
+    });
+    await enqueueLogOutbox(SHOP, editedL50);
+    expect(await flushLogOutbox(store, SHOP)).toEqual({ ok: true, flushed: 1, remaining: 0 });
+    expect(fake.subLogs.get("L50")).toEqual(editedL50);
+    expect(outboxEntriesForShop(SHOP)).toEqual([]);
+    const got = await store.getShop();
+    expect(got.ok && got.value.logs.find((l) => l.id === "L50")).toEqual(editedL50);
+  });
+
+  it("#215: when >8 unmigrated legacy logs are edited in a single putShop while legacyLogs.length > 48, putShop migrates the first 8 and returns ok: false so the caller retries for the rest", async () => {
+    const legacy = Array.from({ length: 60 }, (_, i) => makeLog({ id: `L${i}`, revision: 0 }));
+    fake.data = shopDoc(legacy);
+    const store = new RemoteShopStore(CONFIG, SHOP);
+    const got1 = await store.getShop();
+    expect(got1.ok).toBe(true);
+    if (!got1.ok) return;
+
+    // Edit 10 legacy logs (L20..L29) in a single putShop call.
+    const editedLogs = got1.value.logs.map((l, idx) =>
+      idx >= 20 && idx < 30
+        ? { ...l, revision: 1, serviceAddress: `Edited ${l.id}`, updatedAt: "2026-10-17T18:00:00.000Z" }
+        : l,
+    );
+    const put1 = await store.putShop({ ...got1.value, logs: editedLogs });
+    expect(put1).toEqual({
+      ok: false,
+      error: "Log L28 is still being migrated; try again.",
+    });
+    // First 8 edited winners (L20..L27) were migrated to subLogs and drained from legacyLogs (52 remain).
+    expect(fake.subLogs.size).toBe(8);
+    expect(fake.subLogs.has("L20")).toBe(true);
+    expect(fake.subLogs.has("L27")).toBe(true);
+    expect(fake.subLogs.has("L28")).toBe(false);
+    expect((fake.data as unknown as ShopDocument).logs).toHaveLength(52);
+
+    // Retrying with the fresh snapshot migrates the remaining 2 edited winners (L28, L29) + 6 more and applies all 10 edits in Step C.
+    const got2 = await store.getShop();
+    expect(got2.ok).toBe(true);
+    if (!got2.ok) return;
+    const put2 = await store.putShop({ ...got2.value, logs: editedLogs });
+    expect(put2.ok).toBe(true);
+    for (let idx = 20; idx < 30; idx++) {
+      expect(fake.subLogs.get(`L${idx}`)).toEqual(editedLogs[idx]);
+    }
+  });
+
+  it("#215: putShop rejects a disallowed caller update to an existing subcollection log instead of silently dropping it", async () => {
+    const v = versions();
+    fake.data = shopDoc([]);
+    fake.subLogs.set("L1", clone(v.reviewedEarly) as unknown as Record<string, unknown>);
+    const store = new RemoteShopStore(CONFIG, SHOP);
+    const got = await store.getShop();
+    expect(got.ok).toBe(true);
+    if (!got.ok) return;
+
+    // Attempting to overwrite reviewedEarly with a same-revision tampered copy must return ok: false.
+    const res = await store.putShop({ ...got.value, logs: [v.reviewedLate] });
+    expect(res).toEqual({
+      ok: false,
+      error: "Log L1 can't be changed this way (review lock / retention hold).",
+    });
+    expect(fake.subLogs.get("L1")).toEqual(v.reviewedEarly);
+  });
+
+  it("#246: getShop and ensureStoredForWrite validate the shop doc and subcollection log reads as one snapshot", async () => {
+    const logA = makeLog({ id: "A" });
+    fake.data = shopDoc([]);
+    fake.subLogs.set("A", clone(logA) as unknown as Record<string, unknown>);
+    const store = new RemoteShopStore(CONFIG, SHOP);
+
+    // 1) If updatedAt changes on the shop doc while getLogs() is in flight, getShop returns a conflict.
+    fake.onGetLogs = () => {
+      if (fake.data) {
+        fake.data = { ...fake.data, updatedAt: "2026-10-17T12:05:00.000Z" };
+      }
+      fake.onGetLogs = null;
+    };
+    const r1 = await store.getShop();
+    expect(r1).toEqual({
+      ok: false,
+      error: "Shop was updated elsewhere; reload and try again.",
+      conflict: true,
+    });
+
+    // 2) If updatedAt changes while ensureStoredForWrite reads logs on cold cache, putShop returns a conflict without writing.
+    const baseline = shopDoc([]);
+    fake.data = baseline;
+    fake.onGetLogs = () => {
+      if (fake.data) {
+        fake.data = { ...fake.data, updatedAt: "2026-10-17T12:10:00.000Z" };
+      }
+      fake.onGetLogs = null;
+    };
+    const r2 = await store.putShop({ ...(baseline as unknown as ShopDocument), logs: [logA] });
+    expect(r2).toEqual({
+      ok: false,
+      error: "Shop was updated elsewhere; reload and try again.",
+      conflict: true,
+    });
+    expect(fake.writes).toEqual([]);
   });
 });
 
@@ -507,14 +1037,17 @@ describe("#212: reviewed copies that don't match (office note)", () => {
     expect(reviewedCopiesNoteFor("other")).toBeNull();
     expect(loadReviewedCopyConflicts("OTHERSHOP")).toEqual({});
 
-    // A write keeps the reviewed loser in the doc (#208): still flagged.
+    // A write migrates the winner to shops/SHOP1/logs/L1 and keeps the reviewed loser in shops/SHOP1.logs (#208): still flagged.
     const store = new RemoteShopStore(CONFIG, SHOP);
     await enqueueLogOutbox(SHOP, makeLog({ id: "N" }));
     expect(await flushLogOutbox(store, SHOP)).toMatchObject({ ok: true });
     expect(loadReviewedCopyConflicts(SHOP)).toEqual({ L1: "revision" });
 
     // The doc no longer holds the duplicate (e.g. fixed on the server): next read clears it.
-    fake.data = shopDoc([v.reviewedRev1, makeLog({ id: "N" })], { updatedAt: "2026-10-03T00:00:00.000Z" });
+    fake.data = shopDoc([], { updatedAt: "2026-10-03T00:00:00.000Z" });
+    fake.subLogs.clear();
+    fake.subLogs.set("L1", clone(v.reviewedRev1) as unknown as Record<string, unknown>);
+    fake.subLogs.set("N", clone(makeLog({ id: "N" })) as unknown as Record<string, unknown>);
     await new RemoteShopStore(CONFIG, SHOP).getShop();
     expect(loadReviewedCopyConflicts(SHOP)).toEqual({});
     expect(storage.getItem(REVIEWED_COPIES_KEY)).toBeNull();
