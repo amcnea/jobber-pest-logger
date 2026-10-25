@@ -428,18 +428,19 @@ describe("RemoteShopStore write path", () => {
     // Winner migrated to shops/SHOP1/logs/L1 and new log written to shops/SHOP1/logs/N.
     expect(fake.subLogs.get("L1")).toEqual(v.reviewedLate);
     expect(fake.subLogs.get("N")).toEqual(logN);
-    // Shop doc writes: [0] drains rev2 + reviewedLate, leaving only reviewedEarly; [1] commits the flush.
-    expect(fake.writes).toHaveLength(2);
-    expect(fake.writes[0].logs).toEqual([v.reviewedEarly]);
+    // Shop doc writes: [0] Step A CAS migrates winner (keeps legacy array intact); [1] Step B drains rev2 + reviewedLate; [2] Step C commits the flush.
+    expect(fake.writes).toHaveLength(3);
+    expect(fake.writes[0].logs).toEqual([v.rev2, v.reviewedLate, v.reviewedEarly]);
     expect(fake.writes[1].logs).toEqual([v.reviewedEarly]);
+    expect(fake.writes[2].logs).toEqual([v.reviewedEarly]);
     expect(setAsideRows().map((r) => r.deviceCopy)).toEqual([v.rev2, v.reviewedEarly]);
     // The next write reuses the written state: only writes M to shops/SHOP1/logs/M + 1 shop doc CAS update.
     const logM = makeLog({ id: "M" });
     await enqueueLogOutbox(SHOP, logM);
     expect(await flushLogOutbox(store, SHOP)).toMatchObject({ ok: true, flushed: 1 });
     expect(fake.subLogs.get("M")).toEqual(logM);
-    expect(fake.writes).toHaveLength(3);
-    expect(fake.writes[2].logs).toEqual([v.reviewedEarly]);
+    expect(fake.writes).toHaveLength(4);
+    expect(fake.writes[3].logs).toEqual([v.reviewedEarly]);
     expect(setAsideRows()).toHaveLength(2);
   });
 
@@ -455,16 +456,18 @@ describe("RemoteShopStore write path", () => {
     expect(await flushLogOutbox(store, SHOP)).toEqual({ ok: true, flushed: 1, remaining: 0 });
     expect(fake.subLogs.get("L1")).toEqual(rawLate);
     expect("history" in (fake.subLogs.get("L1") as Record<string, unknown>)).toBe(false);
-    expect(fake.writes[0].logs).toEqual([rawEarly]);
+    expect(fake.writes[0].logs).toEqual([rawLate, rawEarly]);
     expect("history" in ((fake.writes[0].logs as Record<string, unknown>[])[0])).toBe(false);
     expect(fake.writes[1].logs).toEqual([rawEarly]);
     expect("history" in ((fake.writes[1].logs as Record<string, unknown>[])[0])).toBe(false);
+    expect(fake.writes[2].logs).toEqual([rawEarly]);
+    expect("history" in ((fake.writes[2].logs as Record<string, unknown>[])[0])).toBe(false);
 
     // Subsequent write reusing cached state also keeps rawEarly without history:
     await enqueueLogOutbox(SHOP, makeLog({ id: "M" }));
     expect(await flushLogOutbox(store, SHOP)).toEqual({ ok: true, flushed: 1, remaining: 0 });
-    expect(fake.writes[2].logs).toEqual([rawEarly]);
-    expect("history" in ((fake.writes[2].logs as Record<string, unknown>[])[0])).toBe(false);
+    expect(fake.writes[3].logs).toEqual([rawEarly]);
+    expect("history" in ((fake.writes[3].logs as Record<string, unknown>[])[0])).toBe(false);
     expect(setAsideRows()).toHaveLength(1);
   });
 
@@ -502,7 +505,7 @@ describe("RemoteShopStore write path", () => {
     const doc = shopDoc([v.reviewedRev0]) as unknown as ShopDocument;
     expect((await store.putShop(doc)).ok).toBe(true);
     expect(fake.subLogs.get("L1")).toEqual(v.reviewedRev0);
-    expect(fake.writes.map((w) => w.logs)).toEqual([[], []]);
+    expect(fake.writes.map((w) => w.logs)).toEqual([[v.rev2, v.reviewedRev0], [], []]);
     expect(setAsideRows().map((r) => r.deviceCopy)).toEqual([v.rev2]);
   });
 
@@ -543,6 +546,28 @@ describe("RemoteShopStore write path", () => {
     expect(fake.subLogs.get("b")).toEqual(logB);
   });
 
+  it("#215: when a legacy shop's remote updatedAt changes after getShop (cached state is stale), Step A conflicts inside CAS without writing any legacy winner to shops/{shopId}/logs/{logId}", async () => {
+    const legacyU = makeLog({ id: "U", revision: 0, serviceAddress: "1 Legacy St" });
+    fake.data = shopDoc([legacyU]);
+
+    // Device A reads the legacy shop and caches legacyU for Step A migration.
+    const storeA = new RemoteShopStore(CONFIG, SHOP);
+    const gotA = await storeA.getShop();
+    if (!gotA.ok) throw new Error(gotA.error);
+
+    // Device B migrates U to shops/SHOP1/logs/U, drains shops/SHOP1.logs, edits U, and advances updatedAt.
+    const uEditedByB = { ...legacyU, revision: 1, serviceAddress: "1 Edited By B St" };
+    fake.subLogs.set("U", clone(uEditedByB) as unknown as Record<string, unknown>);
+    fake.data = { ...fake.data, logs: [], updatedAt: "2026-10-02T00:00:00.000Z" };
+
+    // Device A calls putShop with its stale cached updatedAt, which would otherwise run Step A for legacyU.
+    const res = await storeA.putShop({ ...gotA.value, logs: [legacyU, makeLog({ id: "N" })] });
+    expect(res).toMatchObject({ ok: false, conflict: true });
+    expect(fake.logWrites).toEqual([]);
+    expect(fake.writes).toEqual([]);
+    expect(fake.subLogs.get("U")).toEqual(uEditedByB);
+  });
+
   it("#215: chunks >499 per-log writes across CAS transactions of <=499 log writes + 1 shop write", async () => {
     expect(MAX_LOG_WRITES_PER_TX).toBe(499);
     fake.data = shopDoc([]);
@@ -573,14 +598,15 @@ describe("RemoteShopStore write path", () => {
       expect(fake.subLogs.get(w.id)).toEqual(w);
     }
     expect(fake.subLogs.get("N")).toEqual(newLog);
-    // 5 drain batches (removing 8 entries each from 40 -> 32 -> 24 -> 16 -> 8 -> 0) + 1 final write = 6 writes.
-    expect(fake.writes).toHaveLength(6);
-    expect((fake.writes[0].logs as ApplicationLog[]).length).toBe(32);
-    expect((fake.writes[1].logs as ApplicationLog[]).length).toBe(24);
-    expect((fake.writes[2].logs as ApplicationLog[]).length).toBe(16);
-    expect((fake.writes[3].logs as ApplicationLog[]).length).toBe(8);
-    expect((fake.writes[4].logs as ApplicationLog[]).length).toBe(0);
-    expect(fake.writes[5].logs).toEqual([]);
+    // 1 Step A winner-migration CAS write (40 entries) + 5 drain batches (32 -> 24 -> 16 -> 8 -> 0) + 1 final write = 7 writes.
+    expect(fake.writes).toHaveLength(7);
+    expect((fake.writes[0].logs as ApplicationLog[]).length).toBe(40);
+    expect((fake.writes[1].logs as ApplicationLog[]).length).toBe(32);
+    expect((fake.writes[2].logs as ApplicationLog[]).length).toBe(24);
+    expect((fake.writes[3].logs as ApplicationLog[]).length).toBe(16);
+    expect((fake.writes[4].logs as ApplicationLog[]).length).toBe(8);
+    expect((fake.writes[5].logs as ApplicationLog[]).length).toBe(0);
+    expect(fake.writes[6].logs).toEqual([]);
     // Set-aside recorded each of the 20 differing losers once.
     expect(setAsideRows().map((r) => r.deviceCopy)).toEqual(differingLosers);
   });
@@ -654,8 +680,8 @@ describe("RemoteShopStore write path", () => {
     expect(outboxEntriesForShop(SHOP)).toEqual([]);
     expect(fake.subLogs.get("L1")).toEqual(v.reviewedRev0);
     expect(fake.subLogs.get("N")).toEqual(saved);
-    expect(fake.writes).toHaveLength(2);
-    expect(fake.writes[1].logs).toEqual([]);
+    expect(fake.writes).toHaveLength(3);
+    expect(fake.writes[2].logs).toEqual([]);
     expect(setAsideRows().map((r) => r.deviceCopy)).toEqual([v.rev2]);
   });
 });

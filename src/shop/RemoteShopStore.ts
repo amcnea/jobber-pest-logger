@@ -40,10 +40,7 @@ type FirestoreLogDoc = { id: string; data: unknown };
 type FirestoreFns = {
   docRef: unknown;
   getDoc: (ref: unknown) => Promise<FirestoreSnap>;
-  setDoc: (ref: unknown, data: unknown) => Promise<void>;
   getLogs: () => Promise<FirestoreLogDoc[]>;
-  putLog: (logId: string, data: unknown) => Promise<void>;
-  deleteLog: (logId: string) => Promise<void>;
   /**
    * CAS commit: fails with ShopWriteConflictError if the remote doc's updatedAt
    * differs from expectedUpdatedAt (caller's snapshot). Atomically writes changed
@@ -198,8 +195,6 @@ async function loadFirestore(config: FirebaseClientConfig, shopId: string): Prom
     doc,
     getDoc,
     getDocs,
-    setDoc,
-    deleteDoc,
     runTransaction,
   } = await import("firebase/firestore");
 
@@ -209,28 +204,9 @@ async function loadFirestore(config: FirebaseClientConfig, shopId: string): Prom
   return {
     docRef,
     getDoc: getDoc as FirestoreFns["getDoc"],
-    setDoc: setDoc as FirestoreFns["setDoc"],
     getLogs: async () => {
       const snap = await getDocs(logsColRef);
       return snap.docs.map((d) => ({ id: d.id, data: d.data() }));
-    },
-    putLog: async (logId, data) => {
-      if (!isValidShopId(logId)) {
-        throw new Error(
-          'Cannot build shops/{shopId}/logs/{logId} path: logId must be non-empty, no "/", not ".", "..", or reserved __.*__, ≤1500 UTF-8 bytes',
-        );
-      }
-      const logRef = doc(db, SHOPS_COLLECTION, shopId, LOGS_SUBCOLLECTION, logId);
-      await setDoc(logRef, cleanFirestoreValue(data));
-    },
-    deleteLog: async (logId) => {
-      if (!isValidShopId(logId)) {
-        throw new Error(
-          'Cannot build shops/{shopId}/logs/{logId} path: logId must be non-empty, no "/", not ".", "..", or reserved __.*__, ≤1500 UTF-8 bytes',
-        );
-      }
-      const logRef = doc(db, SHOPS_COLLECTION, shopId, LOGS_SUBCOLLECTION, logId);
-      await deleteDoc(logRef);
     },
     commitWithCas: async (expectedUpdatedAt, payload, puts = [], deletes = []) => {
       type LogTxOp =
@@ -507,11 +483,18 @@ export class RemoteShopStore implements ShopStore {
       let expected = doc.updatedAt;
 
       // Step A: write unmigrated legacy winners to `shops/{shopId}/logs/{logId}` while they
-      // are still present in `shops/{shopId}.logs` (satisfies `canCreateLog` in firestore.rules).
+      // are still present in `shops/{shopId}.logs` (satisfies `canCreateLog` in firestore.rules),
+      // inside a CAS transaction so a stale cache never overwrites remote subcollection logs.
       const liveSubLogs = new Map(stored.subLogs);
-      for (const item of migration.winnersToCreate) {
-        await fs.putLog(item.id, item.raw);
-        liveSubLogs.set(item.id, item.log);
+      if (migration.winnersToCreate.length > 0) {
+        expected = await fs.commitWithCas(
+          expected,
+          { ...stored.doc, logs: stored.rawLegacyLogs as ApplicationLog[] },
+          migration.winnersToCreate.map((item) => ({ id: item.id, data: item.raw })),
+        );
+        for (const item of migration.winnersToCreate) {
+          liveSubLogs.set(item.id, item.log);
+        }
       }
 
       // Step B: drain removable entries from `shops/{shopId}.logs` in <= 8-entry batches.
