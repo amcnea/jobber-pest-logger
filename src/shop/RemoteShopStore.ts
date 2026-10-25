@@ -1,21 +1,29 @@
 /**
- * RemoteShopStore — Firestore shops/{shopId}.
+ * RemoteShopStore — Firestore shops/{shopId} + per-log subcollection shops/{shopId}/logs/{logId} (#215).
  * Only constructed when Firebase env is configured AND a shop session id exists.
  * Firebase SDK is lazy-imported so local-only builds do not need a project at runtime.
  * #5: every remote op signs in anonymously first so rules can check request.auth.uid.
  */
 
 import { parseShopSections } from "../storage";
-import { dedupeLogsById, planDedupedWrite, setAsideDuplicateCopies } from "./dedupeLogs";
+import type { ApplicationLog } from "../types";
+import { dedupeLogsById, planLegacyDrain, setAsideDuplicateCopies, stableJson } from "./dedupeLogs";
 import { ensureAnonymousAuth } from "./firebaseAuth";
-import { recordReviewedCopyConflicts } from "./reviewedCopies";
 import { getFirebaseApp } from "./firebaseApp";
 import type { FirebaseClientConfig } from "./firebaseConfig";
 import { isShopRole, parseShopPinAuth } from "./pinCrypto";
+import { recordReviewedCopyConflicts } from "./reviewedCopies";
 import { isValidShopId } from "./session";
 import type { ShopDocument, ShopMembers, ShopStore, ShopStoreResult } from "./types";
 
 const SHOPS_COLLECTION = "shops";
+const LOGS_SUBCOLLECTION = "logs";
+
+/**
+ * Firestore allows at most 500 writes per transaction; reserve 1 write for `shops/{shopId}`
+ * so each CAS transaction carries up to 499 per-log writes/deletes.
+ */
+export const MAX_LOG_WRITES_PER_TX = 499;
 
 /** Thrown inside a transaction when remote updatedAt !== caller's snapshot. */
 class ShopWriteConflictError extends Error {
@@ -27,18 +35,26 @@ class ShopWriteConflictError extends Error {
 }
 
 type FirestoreSnap = { exists: () => boolean; data: () => unknown };
+type FirestoreLogDoc = { id: string; data: unknown };
 
 type FirestoreFns = {
   docRef: unknown;
   getDoc: (ref: unknown) => Promise<FirestoreSnap>;
-  setDoc: (ref: unknown, data: unknown) => Promise<void>;
+  getLogs: () => Promise<FirestoreLogDoc[]>;
   /**
-   * CAS put: fails with ShopWriteConflictError if the remote doc's updatedAt
-   * differs from expectedUpdatedAt (caller's snapshot). Stamps a fresh updatedAt
-   * on the written payload after the check succeeds, and returns that committed stamp.
+   * CAS commit: fails with ShopWriteConflictError if the remote doc's updatedAt
+   * differs from expectedUpdatedAt (caller's snapshot). Atomically writes changed
+   * `shops/{shopId}/logs/{logId}` docs, deletes removed log docs, and stamps a fresh
+   * updatedAt on `shops/{shopId}` inside `runTransaction` (chunked at 499 log writes +
+   * 1 shop write when the change set exceeds Firestore's 500-write transaction limit).
    * When expectedUpdatedAt is "" and the doc is missing, create is allowed.
    */
-  putWithCas: (expectedUpdatedAt: string, payload: ShopDocument) => Promise<string>;
+  commitWithCas: (
+    expectedUpdatedAt: string,
+    payload: ShopDocument,
+    puts?: readonly { id: string; data: unknown }[],
+    deletes?: readonly string[],
+  ) => Promise<string>;
   /**
    * Membership-only update (join / legacy claim). Does not rewrite logs/catalog.
    * CAS on updatedAt; merges members (+ ownerUid when claiming legacy).
@@ -95,7 +111,7 @@ function coerceShopDocument(raw: unknown): ShopDocument | null {
   }
 
   const sectionsResult = parseShopSections({
-    logs: raw.logs,
+    logs: raw.logs === undefined ? [] : raw.logs,
     catalog: raw.catalog,
     people: raw.people,
     settings: raw.settings,
@@ -129,6 +145,26 @@ function coerceShopDocument(raw: unknown): ShopDocument | null {
   return doc;
 }
 
+/** Validate per-log documents from `shops/{shopId}/logs/{logId}` (#215). */
+function coerceSubcollectionLogs(
+  logDocs: readonly FirestoreLogDoc[],
+  fallbackSettings: ShopDocument["settings"],
+): ApplicationLog[] | null {
+  if (logDocs.length === 0) return [];
+  const rawLogs: unknown[] = [];
+  for (const item of logDocs) {
+    if (!isRecord(item.data) || item.data.id !== item.id) return null;
+    rawLogs.push(item.data);
+  }
+  const parsed = parseShopSections({
+    logs: rawLogs,
+    catalog: [],
+    people: [],
+    settings: fallbackSettings,
+  });
+  return parsed.ok ? parsed.sections.logs : null;
+}
+
 /** Strip client-only signals and undefined fields before Firestore writes. */
 function firestorePayload(doc: ShopDocument): Record<string, unknown> {
   const { authUnreadable: _drop, ...rest } = doc;
@@ -137,6 +173,10 @@ function firestorePayload(doc: ShopDocument): Record<string, unknown> {
     if (value !== undefined) payload[key] = value;
   }
   return payload;
+}
+
+function cleanFirestoreValue<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 async function loadFirestore(config: FirebaseClientConfig, shopId: string): Promise<FirestoreFns> {
@@ -149,32 +189,91 @@ async function loadFirestore(config: FirebaseClientConfig, shopId: string): Prom
   await ensureAnonymousAuth(config);
 
   const app = await getFirebaseApp(config);
-  const { getFirestore, doc, getDoc, setDoc, runTransaction } = await import("firebase/firestore");
+  const {
+    getFirestore,
+    collection,
+    doc,
+    getDoc,
+    getDocs,
+    runTransaction,
+  } = await import("firebase/firestore");
 
   const db = getFirestore(app);
   const docRef = doc(db, SHOPS_COLLECTION, shopId);
+  const logsColRef = collection(db, SHOPS_COLLECTION, shopId, LOGS_SUBCOLLECTION);
   return {
     docRef,
     getDoc: getDoc as FirestoreFns["getDoc"],
-    setDoc: setDoc as FirestoreFns["setDoc"],
-    putWithCas: async (expectedUpdatedAt, payload) => {
-      let committedUpdatedAt = "";
-      await runTransaction(db, async (transaction) => {
-        const snap = await transaction.get(docRef);
-        if (snap.exists()) {
-          const data = snap.data() as Record<string, unknown> | undefined;
-          const remoteUpdatedAt =
-            data && typeof data.updatedAt === "string" ? data.updatedAt : "";
-          if (remoteUpdatedAt !== expectedUpdatedAt) {
-            throw new ShopWriteConflictError();
-          }
+    getLogs: async () => {
+      const snap = await getDocs(logsColRef);
+      return snap.docs.map((d) => ({ id: d.id, data: d.data() }));
+    },
+    commitWithCas: async (expectedUpdatedAt, payload, puts = [], deletes = []) => {
+      type LogTxOp =
+        | { kind: "put"; ref: ReturnType<typeof doc>; data: unknown }
+        | { kind: "delete"; ref: ReturnType<typeof doc> };
+      const ops: LogTxOp[] = [];
+      for (const item of puts) {
+        if (!isValidShopId(item.id)) {
+          throw new Error(
+            'Cannot build shops/{shopId}/logs/{logId} path: logId must be non-empty, no "/", not ".", "..", or reserved __.*__, ≤1500 UTF-8 bytes',
+          );
         }
-        committedUpdatedAt = new Date().toISOString();
-        transaction.set(docRef, {
-          ...firestorePayload(payload),
-          updatedAt: committedUpdatedAt,
+        ops.push({
+          kind: "put",
+          ref: doc(db, SHOPS_COLLECTION, shopId, LOGS_SUBCOLLECTION, item.id),
+          data: cleanFirestoreValue(item.data),
         });
-      });
+      }
+      for (const logId of deletes) {
+        if (!isValidShopId(logId)) {
+          throw new Error(
+            'Cannot build shops/{shopId}/logs/{logId} path: logId must be non-empty, no "/", not ".", "..", or reserved __.*__, ≤1500 UTF-8 bytes',
+          );
+        }
+        ops.push({
+          kind: "delete",
+          ref: doc(db, SHOPS_COLLECTION, shopId, LOGS_SUBCOLLECTION, logId),
+        });
+      }
+
+      const chunks: LogTxOp[][] = [];
+      for (let i = 0; i < ops.length; i += MAX_LOG_WRITES_PER_TX) {
+        chunks.push(ops.slice(i, i + MAX_LOG_WRITES_PER_TX));
+      }
+      if (chunks.length === 0) {
+        chunks.push([]);
+      }
+
+      let currentExpected = expectedUpdatedAt;
+      let committedUpdatedAt = "";
+      const basePayload = firestorePayload(payload);
+      for (const chunk of chunks) {
+        await runTransaction(db, async (transaction) => {
+          const snap = await transaction.get(docRef);
+          if (snap.exists()) {
+            const data = snap.data() as Record<string, unknown> | undefined;
+            const remoteUpdatedAt =
+              data && typeof data.updatedAt === "string" ? data.updatedAt : "";
+            if (remoteUpdatedAt !== currentExpected) {
+              throw new ShopWriteConflictError();
+            }
+          }
+          for (const op of chunk) {
+            if (op.kind === "put") {
+              transaction.set(op.ref, op.data);
+            } else {
+              transaction.delete(op.ref);
+            }
+          }
+          committedUpdatedAt = new Date().toISOString();
+          transaction.set(docRef, {
+            ...basePayload,
+            updatedAt: committedUpdatedAt,
+          });
+        });
+        currentExpected = committedUpdatedAt;
+      }
       return committedUpdatedAt;
     },
     mergeMembership: async ({ expectedUpdatedAt, uid, role, claimOwnerIfMissing }) => {
@@ -216,13 +315,26 @@ async function loadFirestore(config: FirebaseClientConfig, shopId: string): Prom
   };
 }
 
+interface StoredShopState {
+  /** ShopDocument with de-duplicated winning logs across subcollection + legacy array. */
+  doc: ShopDocument;
+  /** Logs currently stored in `shops/{shopId}/logs/{logId}` (one per id). */
+  subLogs: Map<string, ApplicationLog>;
+  /** Unmigrated or kept logs currently stored in `shops/{shopId}.logs`. */
+  legacyLogs: ApplicationLog[];
+  /** Raw objects from `shops/{shopId}.logs` so migration writes the exact stored map. */
+  rawLegacyLogs: unknown[];
+  /** Whether non-identical duplicate losers were saved to SET_ASIDE_KEY. */
+  setAsideOk: boolean;
+}
+
 export class RemoteShopStore implements ShopStore {
   readonly mode = "shared" as const;
   private readonly config: FirebaseClientConfig;
   private readonly shopId: string;
   private firestore: FirestoreFns | null = null;
-  /** #209: last doc read or written, as stored (duplicates included), with whether its losers are set aside. */
-  private stored: { doc: ShopDocument; setAsideOk: boolean } | null = null;
+  /** #209 / #215: last shop state read or written, reused across sequential writes (#210). */
+  private stored: StoredShopState | null = null;
 
   constructor(config: FirebaseClientConfig, shopId: string) {
     this.config = config;
@@ -249,19 +361,22 @@ export class RemoteShopStore implements ShopStore {
 
   async getShop(): Promise<ShopStoreResult<ShopDocument>> {
     try {
-      const { docRef, getDoc } = await this.fs();
-      const snap = await getDoc(docRef);
+      const fs = await this.fs();
+      const [snap, logDocs] = await Promise.all([fs.getDoc(fs.docRef), fs.getLogs()]);
       if (!snap.exists()) {
         return {
           ok: false,
           error: `Shop "${this.shopId}" was not found in Firestore (shops/${this.shopId}).`,
         };
       }
-      const doc = coerceShopDocument(snap.data());
-      if (!doc) {
+      const rawShop = snap.data();
+      const doc = coerceShopDocument(rawShop);
+      const subLogs = doc ? coerceSubcollectionLogs(logDocs, doc.settings) : null;
+      if (!doc || !subLogs) {
         return { ok: false, error: "Remote shop document has an invalid shape." };
       }
-      return { ok: true, value: this.dedupeStored(doc) };
+      const rawLegacy = isRecord(rawShop) && Array.isArray(rawShop.logs) ? rawShop.logs : [];
+      return { ok: true, value: this.cacheStored(doc, subLogs, rawLegacy) };
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Could not load shop from Firestore.";
@@ -270,64 +385,151 @@ export class RemoteShopStore implements ShopStore {
   }
 
   /**
-   * #209: one copy per log id for every caller (pull, merge, conflicts, outbox, export);
-   * the other copies go to the set-aside store. Remembers the stored doc for putShop.
+   * #209 / #215: combine per-log subcollection docs (`subLogs`) with any unmigrated
+   * legacy `shops/{shopId}.logs` entries (`doc.logs`), keep one winner per log id, set
+   * aside losing copies, and record #212 conflicts.
    */
-  private dedupeStored(doc: ShopDocument): ShopDocument {
-    const { logs, losers } = dedupeLogsById(doc.logs);
+  private cacheStored(
+    doc: ShopDocument,
+    subLogs: readonly ApplicationLog[],
+    rawLegacyLogs: readonly unknown[],
+  ): ShopDocument {
+    const normalizedLegacy =
+      rawLegacyLogs.length === 0
+        ? []
+        : (coerceSubcollectionLogs(
+            rawLegacyLogs.map((data) => ({
+              id: isRecord(data) && typeof data.id === "string" ? data.id : "",
+              data,
+            })),
+            doc.settings,
+          ) ?? doc.logs);
+    const allLogs = [...subLogs, ...normalizedLegacy];
+    const { logs, losers } = dedupeLogsById(allLogs);
     const setAsideOk = setAsideDuplicateCopies(this.shopId, losers);
-    recordReviewedCopyConflicts(this.shopId, doc.logs); // #212 office note
-    this.stored = { doc, setAsideOk };
-    return losers.length ? { ...doc, logs } : doc;
+    recordReviewedCopyConflicts(this.shopId, allLogs); // #212 office note
+    const mergedDoc: ShopDocument = { ...doc, logs };
+    this.stored = {
+      doc: mergedDoc,
+      subLogs: new Map(subLogs.map((l) => [l.id, l])),
+      legacyLogs: normalizedLegacy,
+      rawLegacyLogs: [...rawLegacyLogs],
+      setAsideOk,
+    };
+    return mergedDoc;
   }
 
-  /**
-   * #209: write the de-duplicated logs. Stored copies that can be removed (exact copies,
-   * unreviewed losers already set aside) go in a cleanup write first, so the #208 rules
-   * see removals and the caller's change separately; reviewed losers stay unchanged.
-   */
-  private async planWrite(
-    doc: ShopDocument,
-    fs: FirestoreFns,
-  ): Promise<{ cleanups: ShopDocument[]; doc: ShopDocument } | null> {
-    const own = dedupeLogsById(doc.logs);
-    const ownOk = setAsideDuplicateCopies(this.shopId, own.losers);
-    const nextLogs = ownOk ? own.logs : doc.logs;
-    if (!this.stored || this.stored.doc.updatedAt !== doc.updatedAt) {
-      this.stored = null;
-      if (!doc.updatedAt) return { cleanups: [], doc: { ...doc, logs: nextLogs } };
-      const snap = await fs.getDoc(fs.docRef);
-      const current = snap.exists() ? coerceShopDocument(snap.data()) : null;
-      if (current && current.updatedAt !== doc.updatedAt) return null; // CAS would fail
-      if (current) this.dedupeStored(current);
-      else return { cleanups: [], doc: { ...doc, logs: nextLogs } };
+  private async ensureStoredForWrite(doc: ShopDocument, fs: FirestoreFns): Promise<boolean> {
+    if (this.stored && this.stored.doc.updatedAt === doc.updatedAt) {
+      return true;
     }
-    const { doc: storedDoc, setAsideOk } = this.stored!;
-    const plan = planDedupedWrite(storedDoc.logs, nextLogs, setAsideOk);
-    return {
-      // #221, #228: each cleanup batch carries keptCopyAt for that batch only; the next write drops it.
-      cleanups: (plan.cleanups ?? []).map((step) => ({
-        ...storedDoc,
-        logs: step.logs,
-        ...(step.keptCopyAt ? { keptCopyAt: step.keptCopyAt } : {}),
-      })),
-      doc: { ...doc, logs: plan.logs },
-    };
+    this.stored = null;
+    if (!doc.updatedAt) {
+      return true;
+    }
+    const [snap, logDocs] = await Promise.all([fs.getDoc(fs.docRef), fs.getLogs()]);
+    if (!snap.exists()) {
+      return true;
+    }
+    const rawShop = snap.data();
+    const current = coerceShopDocument(rawShop);
+    const subLogs = current ? coerceSubcollectionLogs(logDocs, current.settings) : null;
+    if (!current || !subLogs) {
+      throw new Error("Could not load shop from Firestore.");
+    }
+    if (current.updatedAt !== doc.updatedAt) {
+      return false; // CAS would fail
+    }
+    const rawLegacy = isRecord(rawShop) && Array.isArray(rawShop.logs) ? rawShop.logs : [];
+    this.cacheStored(current, subLogs, rawLegacy);
+    return true;
   }
 
   async putShop(doc: ShopDocument): Promise<ShopStoreResult<{ updatedAt: string }>> {
     try {
       const fs = await this.fs();
-      const plan = await this.planWrite(doc, fs);
-      if (!plan) throw new ShopWriteConflictError();
-      let expected = doc.updatedAt;
-      for (const cleanup of plan.cleanups) {
-        expected = await fs.putWithCas(expected, cleanup);
-        this.dedupeStored({ ...cleanup, updatedAt: expected });
+      const own = dedupeLogsById(doc.logs);
+      const ownOk = setAsideDuplicateCopies(this.shopId, own.losers);
+      const nextLogs = own.logs;
+
+      const ready = await this.ensureStoredForWrite(doc, fs);
+      if (!ready) throw new ShopWriteConflictError();
+
+      // Creating a brand-new shop document (`expectedUpdatedAt === ""`): create `shops/{shopId}`
+      // with `logs: []` first so `isMember(shopId)` passes when creating `shops/{shopId}/logs/{logId}`.
+      if (!this.stored) {
+        const unSavedLosers = ownOk ? [] : own.losers.filter((l) => !l.identical).map((l) => l.log);
+        let updatedAt = await fs.commitWithCas(doc.updatedAt, { ...doc, logs: unSavedLosers });
+        if (nextLogs.length > 0) {
+          updatedAt = await fs.commitWithCas(
+            updatedAt,
+            { ...doc, logs: unSavedLosers },
+            nextLogs.map((log) => ({ id: log.id, data: log })),
+          );
+        }
+        this.cacheStored({ ...doc, logs: unSavedLosers, updatedAt }, nextLogs, unSavedLosers);
+        return { ok: true, value: { updatedAt } };
       }
-      const updatedAt = await fs.putWithCas(expected, plan.doc);
-      // The written doc is the stored doc for the next write (no re-read; #210 reuses it).
-      this.dedupeStored({ ...plan.doc, updatedAt });
+
+      const stored = this.stored;
+      const migration = planLegacyDrain(
+        stored.subLogs,
+        stored.legacyLogs,
+        stored.rawLegacyLogs,
+        nextLogs,
+        stored.setAsideOk && ownOk,
+      );
+
+      let expected = doc.updatedAt;
+
+      // Step A: write unmigrated legacy winners to `shops/{shopId}/logs/{logId}` while they
+      // are still present in `shops/{shopId}.logs` (satisfies `canCreateLog` in firestore.rules),
+      // inside a CAS transaction so a stale cache never overwrites remote subcollection logs.
+      const liveSubLogs = new Map(stored.subLogs);
+      if (migration.winnersToCreate.length > 0) {
+        expected = await fs.commitWithCas(
+          expected,
+          { ...stored.doc, logs: stored.rawLegacyLogs as ApplicationLog[] },
+          migration.winnersToCreate.map((item) => ({ id: item.id, data: item.raw })),
+        );
+        for (const item of migration.winnersToCreate) {
+          liveSubLogs.set(item.id, item.log);
+        }
+      }
+
+      // Step B: drain removable entries from `shops/{shopId}.logs` in <= 8-entry batches.
+      for (const batchLogs of migration.drainBatches) {
+        expected = await fs.commitWithCas(expected, { ...stored.doc, logs: batchLogs });
+        this.cacheStored(
+          { ...stored.doc, logs: batchLogs, updatedAt: expected },
+          [...liveSubLogs.values()],
+          batchLogs,
+        );
+      }
+
+      // Step C + D: atomically verify `updatedAt`, write changed logs, delete removed logs,
+      // and update `shops/{shopId}` inside the CAS transaction.
+      const nextById = new Map(nextLogs.map((l) => [l.id, l]));
+      const puts = nextLogs
+        .filter((log) => {
+          const prev = liveSubLogs.get(log.id);
+          return !prev || stableJson(prev) !== stableJson(log);
+        })
+        .map((log) => ({ id: log.id, data: log }));
+      const deletes = [...liveSubLogs.keys()].filter((id) => !nextById.has(id));
+
+      const updatedAt = await fs.commitWithCas(
+        expected,
+        { ...doc, logs: migration.remainingLegacy },
+        puts,
+        deletes,
+      );
+      // The written state is cached for the next write (no re-read; #210 reuses it).
+      this.cacheStored(
+        { ...doc, logs: migration.remainingLegacy, updatedAt },
+        nextLogs,
+        migration.remainingLegacy,
+      );
       return { ok: true, value: { updatedAt } };
     } catch (err) {
       this.stored = null;

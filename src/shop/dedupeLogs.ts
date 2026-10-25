@@ -1,9 +1,8 @@
 /**
- * #209: de-duplicate log ids in the shared shop doc. Firestore rules can't loop over
- * `logs`, so they can't stop two entries with the same id (#208); the client reads
- * the first match by id, so a stray copy could otherwise stand in for the reviewed
- * record. Every remote read (RemoteShopStore.getShop) keeps one winner per id, and
- * every other copy goes to the set-aside store (backup JSON, cleared by wipe).
+ * #209 / #215: de-duplicate log ids across the shared shop's per-log subcollection
+ * (`shops/{shopId}/logs/{logId}`) and any unmigrated legacy `shops/{shopId}.logs` array.
+ * Every remote read (RemoteShopStore.getShop) keeps one winner per id, and every other
+ * copy goes to the set-aside store (backup JSON, cleared by wipe).
  *
  * Winner (Lawgical rule, then a documented tie-break), first rule that differs:
  *   1. reviewed beats unreviewed (isLogReviewed);
@@ -14,11 +13,11 @@
  * Unparseable timestamps sort earliest. Exact copies of the winner (same JSON, any key
  * order) are collapsed: nothing would be lost, so they are not set aside.
  *
- * Writing back (RemoteShopStore.putShop) stays inside the #208 review lock: unreviewed
- * losers and exact copies are removed in a cleanup write of their own (so the per-log
- * pairing in the rules is unaffected); a reviewed loser can't be deleted under #208, so
- * it is left in the doc unchanged. A loser whose set-aside copy can't be saved on this
- * device is also left in the doc, so no copy is ever lost.
+ * Writing back (RemoteShopStore.putShop) writes each winner to `shops/{shopId}/logs/{logId}`
+ * and drains removable entries from the legacy `shops/{shopId}.logs` array in batches of at
+ * most MAX_DEDUPE_CLEANUP_BATCH (8). A differing reviewed loser (#212) can't be deleted
+ * under #208, so it stays in `shops/{shopId}.logs` unchanged. A loser whose set-aside copy
+ * can't be saved on this device also stays in `shops/{shopId}.logs`, so no copy is ever lost.
  */
 
 import { localIsoWithOffset } from "../dates";
@@ -44,7 +43,7 @@ export interface DedupeResult {
   losers: DuplicateLoser[];
 }
 
-function stableJson(value: unknown): string {
+export function stableJson(value: unknown): string {
   const encode = (v: unknown): unknown => {
     if (Array.isArray(v)) return v.map(encode);
     if (typeof v === "object" && v !== null) {
@@ -122,12 +121,12 @@ function isOurRow(row: unknown, shopId: string, log: ApplicationLog, json: strin
 }
 
 /**
- * Append each non-identical loser to the set-aside store once (idempotent: a copy
- * already set aside for this shop is not added again). Rows match the sync-conflict
- * rows (id, logId, deviceCopy, setAsideAt, shopId) with `reason` in place of
- * `setAsideBy`, since no person chose this. Returns false (and writes nothing) when the
- * store is unreadable or can't be saved, so callers keep the loser in the shop doc.
- */
+  * Append each non-identical loser to the set-aside store once (idempotent: a copy
+  * already set aside for this shop is not added again). Rows match the sync-conflict
+  * rows (id, logId, deviceCopy, setAsideAt, shopId) with `reason` in place of
+  * `setAsideBy`, since no person chose this. Returns false (and writes nothing) when the
+  * store is unreadable or can't be saved, so callers keep the loser in the shop doc.
+  */
 export function setAsideDuplicateCopies(shopId: string, losers: readonly DuplicateLoser[], now: Date = new Date()): boolean {
   const pending = losers.filter((l) => !l.identical);
   if (pending.length === 0) return true;
@@ -159,16 +158,150 @@ export function setAsideDuplicateCopies(shopId: string, losers: readonly Duplica
     const check = JSON.parse(localStorage.getItem(SET_ASIDE_KEY) ?? "[]") as unknown[];
     return pending.every(({ log }) => check.some((row) => isOurRow(row, shopId, log, stableJson(log))));
   } catch {
-    return false; // the losers stay in the shop doc (planDedupedWrite)
+    return false; // the losers stay in the shop doc
   }
 }
 
 /**
- * #228: firestore.rules check up to 8 differing removals in shrinkLogsOk0 and stay under
- * the 1,000-expression limit up to 9 on a 100-log doc (#226). Remove at most 8 differing
- * copies per cleanup write so larger dedupe cleanups never trip the expression cap.
+ * #228 / #215: firestore.rules check up to 8 removed entries per shops/{shopId}.logs
+ * drain write (staying under Firestore's 10-getAfter and 1,000-expression limits).
  */
 export const MAX_DEDUPE_CLEANUP_BATCH = 8;
+
+export interface LegacyWinnerToMigrate {
+  id: string;
+  log: ApplicationLog;
+  raw: unknown;
+}
+
+export interface LegacyDrainPlan {
+  /** Legacy winners not yet in `shops/{shopId}/logs/{logId}` that must be written first. */
+  winnersToCreate: LegacyWinnerToMigrate[];
+  /**
+   * Sequential `shops/{shopId}.logs` arrays, each removing <= MAX_DEDUPE_CLEANUP_BATCH
+   * entries from the previous array, ending at `remainingLegacy`. Empty when nothing
+   * is removed from `shops/{shopId}.logs`.
+   */
+  drainBatches: ApplicationLog[][];
+  /** Entries that stay in `shops/{shopId}.logs` (e.g. #212 reviewed losers, or losers when !setAsideOk). */
+  remainingLegacy: ApplicationLog[];
+}
+
+/**
+ * #215: plan migrating winners from a legacy `shops/{shopId}.logs` array into
+ * `shops/{shopId}/logs/{logId}` and draining removable entries from `shops/{shopId}.logs`
+ * in batches of <= MAX_DEDUPE_CLEANUP_BATCH (8). Preserves the exact `rawLegacyLogs`
+ * objects for kept entries in `drainBatches` and `remainingLegacy` so Firestore rules
+ * (`before.removeAll(after)`) see unchanged raw maps even when `normalizeLog` added
+ * default fields like `history: []`.
+ */
+export function planLegacyDrain(
+  subLogs: ReadonlyMap<string, ApplicationLog>,
+  legacyLogs: readonly ApplicationLog[],
+  rawLegacyLogs: readonly unknown[],
+  nextLogs: readonly ApplicationLog[],
+  setAsideOk: boolean,
+): LegacyDrainPlan {
+  if (legacyLogs.length === 0) {
+    return { winnersToCreate: [], drainBatches: [], remainingLegacy: [] };
+  }
+
+  const allStored = [...subLogs.values(), ...legacyLogs];
+  const { logs: winners } = dedupeLogsById(allStored);
+  const winnerById = new Map<string, ApplicationLog>();
+  const winnerJsonById = new Map<string, string>();
+  for (const w of winners) {
+    winnerById.set(w.id, w);
+    winnerJsonById.set(w.id, stableJson(w));
+  }
+
+  const nextIds = new Set(nextLogs.map((l) => l.id));
+  const winnersToCreate: LegacyWinnerToMigrate[] = [];
+  const queuedWinnerIds = new Set<string>();
+
+  for (let i = 0; i < legacyLogs.length; i++) {
+    const id = legacyLogs[i].id;
+    if (subLogs.has(id) || queuedWinnerIds.has(id)) continue;
+    const w = winnerById.get(id)!;
+    // Migrate the winner unless the caller omitted an unreviewed log (expired hold deletion).
+    if (nextIds.has(id) || isLogReviewed(w)) {
+      queuedWinnerIds.add(id);
+      const rawIdx = legacyLogs.indexOf(w);
+      const raw = rawIdx >= 0 && rawIdx < rawLegacyLogs.length && rawLegacyLogs[rawIdx] !== undefined ? rawLegacyLogs[rawIdx] : w;
+      winnersToCreate.push({ id, log: w, raw });
+    }
+  }
+
+  const rawAt = (i: number): ApplicationLog =>
+    (i < rawLegacyLogs.length && rawLegacyLogs[i] !== undefined
+      ? rawLegacyLogs[i]
+      : legacyLogs[i]) as ApplicationLog;
+
+  const removableIndices: number[] = [];
+  const removableSet = new Set<number>();
+  for (let i = 0; i < legacyLogs.length; i++) {
+    const c = legacyLogs[i];
+    const isWinnerCopy = stableJson(c) === winnerJsonById.get(c.id);
+    if (isWinnerCopy || (setAsideOk && !isLogReviewed(c))) {
+      removableIndices.push(i);
+      removableSet.add(i);
+    }
+  }
+
+  const remainingLegacy: ApplicationLog[] = legacyLogs
+    .map((_, i) => i)
+    .filter((i) => !removableSet.has(i))
+    .map(rawAt);
+
+  if (removableIndices.length === 0) {
+    return { winnersToCreate, drainBatches: [], remainingLegacy };
+  }
+
+  // Group identical removable entries together so dropping a group removes all copies of that
+  // raw JSON value at once; each batch drops <= MAX_DEDUPE_CLEANUP_BATCH total indices.
+  const keptJsons = new Set(remainingLegacy.map((l) => stableJson(l)));
+  const zeroCostIndices: number[] = [];
+  const groupsByJson = new Map<string, number[]>();
+  for (const idx of removableIndices) {
+    const json = stableJson(rawAt(idx));
+    if (keptJsons.has(json)) {
+      zeroCostIndices.push(idx);
+    } else {
+      const g = groupsByJson.get(json);
+      if (g) g.push(idx);
+      else groupsByJson.set(json, [idx]);
+    }
+  }
+
+  const chunks: number[][] = [];
+  let currentChunk: number[] = [...zeroCostIndices];
+  let currentCost = 0;
+  for (const group of groupsByJson.values()) {
+    for (const idx of group) {
+      if (currentCost >= MAX_DEDUPE_CLEANUP_BATCH) {
+        chunks.push(currentChunk);
+        currentChunk = [];
+        currentCost = 0;
+      }
+      currentChunk.push(idx);
+      currentCost++;
+    }
+  }
+  if (currentChunk.length > 0) {
+    chunks.push(currentChunk);
+  }
+
+  const dropped = new Set<number>();
+  const drainBatches: ApplicationLog[][] = chunks.map((chunk) => {
+    for (const idx of chunk) dropped.add(idx);
+    return legacyLogs
+      .map((_, i) => i)
+      .filter((i) => !dropped.has(i))
+      .map(rawAt);
+  });
+
+  return { winnersToCreate, drainBatches, remainingLegacy };
+}
 
 export interface DedupeCleanupStep {
   /** Stored logs minus the copies removed through this batch, in stored order. */
@@ -192,8 +325,7 @@ export interface DedupedWritePlan {
   logs: ApplicationLog[];
   /**
    * #221: for each removed copy that differs from its kept copy, the kept copy's index in
-   * `cleanup` ({logId: index}). firestore.rules let the cleanup remove a copy still under
-   * its 2-year hold only when that index holds the same id. Undefined when not needed.
+   * `cleanup` ({logId: index}). Undefined when not needed.
    */
   keptCopyAt?: Record<string, number>;
 }
@@ -224,8 +356,6 @@ export function planDedupedWrite(
     return { cleanup: null, logs: [...next, ...keep] };
   }
 
-  // Exact copies aren't in firestore.rules' before.removeAll(after), so drop all of them in
-  // the first cleanup batch; split differing copies into <= MAX_DEDUPE_CLEANUP_BATCH chunks.
   const dropped = new Set<number>();
   for (const l of losers) {
     if (l.identical) dropped.add(l.index);
