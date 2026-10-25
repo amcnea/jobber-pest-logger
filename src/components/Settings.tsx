@@ -39,6 +39,7 @@ import {
   signOutShop,
   type ShopRole,
 } from "../shop";
+import { SetAsideViewer } from "./SetAsideViewer";
 import { ShopSessionGate } from "./ShopSessionGate";
 
 interface Props {
@@ -50,6 +51,8 @@ interface Props {
   onFlashConsumed?: () => void;
   /** Bumps when App / banner unlock changes shop session — sync local UI without tick loop. */
   sessionRevision?: number;
+  /** Bumps when sync-conflict or dedupe set-aside state changes in App. */
+  setAsideRevision?: number;
   /** Bump topbar / store status after create, join, or leave. */
   onShopSessionChange?: () => void;
   onSave: (settings: ShopSettings) => boolean;
@@ -88,6 +91,7 @@ export function Settings({
   flash = null,
   onFlashConsumed,
   sessionRevision = 0,
+  setAsideRevision = 0,
   onShopSessionChange,
   onSave,
   onRestored,
@@ -102,6 +106,7 @@ export function Settings({
   );
   const [backupError, setBackupError] = useState<string | null>(null);
   const [backupBusy, setBackupBusy] = useState(false);
+  const [setAsideTick, setSetAsideTick] = useState(0);
   const [demoMsg, setDemoMsg] = useState<string | null>(
     flash?.slot === "demo" ? flash.text : null,
   );
@@ -334,6 +339,7 @@ export function Settings({
       return;
     }
 
+    setSetAsideTick((t) => t + 1);
     onBackupStampChange(loadLastBackupAt());
     // #163: accurate when restore kept device logs that carry change history.
     const restoreFlash = restoreBannerText(result.backup, applied.history);
@@ -904,6 +910,8 @@ export function Settings({
       </div>
 
 
+      <SetAsideViewer refreshKey={sessionRevision + setAsideRevision + setAsideTick} />
+
       <h2>Demo / reset</h2>
       <p className="hint">
         Soft demo reset clears example catalog seeds and any logs that only used them. Real products,
@@ -918,6 +926,7 @@ export function Settings({
           onClick={() => {
             setDemoMsg(null);
             const result = onClearExamples();
+            setSetAsideTick((t) => t + 1);
             setDemoMsg(result.summary);
           }}
         >
@@ -963,6 +972,7 @@ export function Settings({
               return;
             }
             const result = onWipeAll();
+            setSetAsideTick((t) => t + 1);
             // Success remounts Settings; App passes flash. Keep failure banner here.
             if (!result.ok) setDemoMsg(result.summary);
           }}
